@@ -274,11 +274,16 @@ test('bytecode-budget diff QA MUTANT M-runs-wide ([1, 21]): --runs 1 and 21 now 
 function same(fn, l) { return { b: { [fn]: l }, a: { [fn]: l } }; }
 
 // =====================================================================================================
-// integer lengths at the wrap points: L | L -> SAME, L | L+1 -> DIFF, for L + 1 up to 2^53
-// (L = 2^53 | 2^53 + 1 is NOT a row: it reads SAME today -- an engine finding, reported, not pinned)
+// integer lengths: N has 1..9 digits (< 10^9: exact in awk doubles and bash (( )); real V8 lengths are far smaller),
+// so a longer N is an unknown format. L | L -> SAME, L | L+1 -> DIFF for L + 1
+// up to 999999999; a length of 10+ digits (2^30 up, 2^53 | 2^53 + 1 that awk doubles once read SAME, a 20-digit
+// one) is an unknown format: NO-VERDICT on its side only. Red on the a26e9f15 base and on M-no-cap (the
+// 686de5bf COUNT_AWK, which took any digit run as a length).
 // =====================================================================================================
-const LENS = [0, 1, 2 ** 30 - 1, 2 ** 30, 2 ** 31 - 1, 2 ** 31, 2 ** 32 - 1, 2 ** 32, 2 ** 53 - 2, 2 ** 53 - 1];
-diffRow(`length L | L -> 0 SAME and L | L+1 -> 1 DIFF at L = ${LENS.join(', ')}`, (script) => {
+const LENS = [0, 1, 99999999, 100000000, 999999998];
+const LONG = ['1000000000', String(2 ** 30), String(2 ** 31 - 1), String(2 ** 32), '9007199254740992', '9007199254740993', '99999999999999999999'];
+const unknown = (side) => `\n  mid: NO-VERDICT -- ${side}: 1 of 1 matched header(s) not followed by 'Bytecode length: N' in run 1 (unknown format)\n`;
+const lengthRow = (script) => {
     for (const L of LENS) {
         const s = diffRun(same('mid', [L]), 'mid', script);
         assert.equal(s.r.status, 0, `L=${L}: ` + s.r.stdout + s.r.stderr);
@@ -286,6 +291,27 @@ diffRow(`length L | L -> 0 SAME and L | L+1 -> 1 DIFF at L = ${LENS.join(', ')}`
         assert.equal(d.r.status, 1, `L=${L}: ` + d.r.stdout + d.r.stderr);
         assert.ok(d.r.stdout.includes(`\n    before=1 after=0  ${L}\n`) && d.r.stdout.includes(`\n    before=0 after=1  ${L + 1}\n`), `L=${L}: ` + d.r.stdout);
     }
+    for (const L of LONG) {
+        const s = diffRun(same('mid', [L]), 'mid', script);
+        assert.equal(s.r.status, 2, `L=${L}: ` + s.r.stdout + s.r.stderr);
+        assert.ok(s.r.stdout.includes(unknown('before')) && s.r.stdout.includes(unknown('after')), `L=${L}: ` + s.r.stdout);
+        assert.doesNotMatch(s.r.stdout, /: (SAME|DIFF) -- /, `L=${L}`);
+    }
+    const e = diffRun({ b: { mid: [999999999] }, a: { mid: ['1000000000'] } }, 'mid', script);
+    assert.equal(e.r.status, 2, e.r.stdout + e.r.stderr);
+    assert.ok(e.r.stdout.includes(unknown('after')) && !e.r.stdout.includes(' -- before: '), e.r.stdout);
+};
+diffRow(`length L | L -> 0 SAME and L | L+1 -> 1 DIFF at L = ${LENS.join(', ')}; 10+ digits (${LONG.join(', ')}) -> 2 NO-VERDICT unknown format`, lengthRow);
+test('bytecode-budget diff QA MUTANT M-no-cap (any digit run is a length, as 686de5bf): the length row goes red', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bbq-cap-'));
+    try {
+        const p = variant(dir, 'no-cap', ' && length($3) <= 9 {', ' {');
+        assert.throws(() => lengthRow(p), assert.AssertionError);
+        const s = diffRun({ b: { mid: ['9007199254740992'] }, a: { mid: ['9007199254740993'] } }, 'mid', p);
+        assert.equal(s.r.status, 0, s.r.stdout + s.r.stderr);   // the 686de5bf fail-open: 2^53 | 2^53 + 1 reads SAME
+        const g = diffRun({ b: { mid: ['9007199254740992'] }, a: { mid: ['9007199254740993'] } }, 'mid');
+        assert.equal(g.r.status, 2, g.r.stdout + g.r.stderr);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 // =====================================================================================================

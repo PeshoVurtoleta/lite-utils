@@ -14,7 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 42;         // self-test ok lines without --fixtures (B2 final 686de5bf; with --fixtures C + 24 = 66)
+const C = 45;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; with --fixtures C + 24 = 69)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
@@ -83,6 +83,10 @@ const MUTANTS = [
     ['null-control-off', 'if [[ "$line" != "$first" ]]; then JWHY="null control', 'if false; then JWHY="null control', 'null control: run 2 with a changed length'],
     ['fn-regex-allows-dot', "FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*(", "FN_RE='^[A-Za-z_$][A-Za-z0-9_$.]*(", 'fn names: '],
     ['worst-order-swapped', 'for a in NO-VERDICT OVER;', 'for a in OVER NO-VERDICT;', 'worst: NO-VERDICT > OVER > WITHIN'],
+    // F1-r2: the COUNT_AWK length cap (1..9 digits) is seen by the shipped --self-test, not only by the node rows below
+    ['cap-off', ' && length($3) <= 9 {', ' {', 'a length has 1..9 digits'],
+    ['cap-8', 'length($3) <= 9', 'length($3) <= 8', 'a length has 1..9 digits'],
+    ['cap-10', 'length($3) <= 9', 'length($3) <= 10', 'a length has 1..9 digits'],
 ];
 for (const [name, from, to, failing] of MUTANTS) {
     test(`bytecode-budget --self-test MUST FAIL on mutant ${name}`, { skip }, () => {
@@ -679,6 +683,10 @@ const ST_MUTANTS = [
     ['st-M3', 'judge "$fn" "" "${RA[@]}"; VA=$JV; WA=$JWHY', 'VA=$VB; WA=$WB', 'each side is judged'],
     ['st-M4', 'if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT', 'if [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF', 'worst() over fns'],
     ['st-F', 'FINAL=1; case "$VERDICT" in SAME)', 'case "$VERDICT" in SAME)', 'diff (fake node): mid 211 | 212 -> exit 1 DIFF'],
+    // F1-b: the diff M5 mutant (after side judged on run 1 only) now turns --self-test red too
+    ['st-M5', 'judge "$fn" "" "${RA[@]}"; VA=$JV', 'judge "$fn" "" "${RA[0]}"; VA=$JV', 'each side keeps its null control'],
+    // F1-r2: the mirror M6 mutant (before side judged on run 1 only)
+    ['st-M6', 'judge "$fn" "" "${RB[@]}"; VB=$JV', 'judge "$fn" "" "${RB[0]}"; VB=$JV', 'each side keeps its null control (before'],
 ];
 for (const [name, from, to, failing] of ST_MUTANTS) {
     test(`bytecode-budget --self-test MUST FAIL on mutant ${name}`, { skip }, () => {
@@ -710,3 +718,71 @@ test('bytecode-budget: an unreadable DRIVER (chmod 000) is refused, exit 2, 0 sp
         assert.equal(s.spawns().length, 0, s.spawns().join('\n'));
     } finally { try { chmodSync(s.B, 0o644); chmodSync(s.A, 0o644); } catch {} s.done(); }
 });
+
+// ---- F1-a: a Bytecode length of 10+ digits is an unknown format (NO-VERDICT), never a length. awk doubles lose
+// precision past 2^53 and bash (( )) wraps past 2^63, so the 686de5bf build read 2^53 | 2^53+1 as SAME and gated
+// 2^63 / 2^64+1 against max 6 as WITHIN. N has 1..9 digits (< 10^9: exact in awk doubles and bash (( )); real V8
+// lengths are far smaller), so a longer N is NO-VERDICT: 9 digits (999999999) are still a length.
+// Each row is red on 686de5bf (`git show 41720de:bytecode-budget.sh`, the last build without the cap) and on the
+// off-by-one mutants (<= 8 refuses 999999999, <= 10 accepts 1000000000).
+// =====================================================================================================
+const CAP_COMMIT = '41720de';
+const capSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', `${CAP_COMMIT}:bytecode-budget.sh`]);
+const haveCap = capSrc.status === 0 ? true : `git show ${CAP_COMMIT}:bytecode-budget.sh failed (shallow clone or no git)`;
+let CAP_BASE = null;
+if (haveCap === true) {
+    assert.equal(createHash('sha256').update(capSrc.stdout).digest('hex').slice(0, 8), '686de5bf', 'cap base is not 686de5bf');
+    const cd = mkdtempSync(join(tmpdir(), 'bb-capbase-'));
+    CAP_BASE = join(cd, 'bytecode-budget.sh');
+    writeFileSync(CAP_BASE, capSrc.stdout); chmodSync(CAP_BASE, 0o755);
+    after(() => rmSync(cd, { recursive: true, force: true }));
+}
+const UNKNOWN = (side) => new RegExp(`^  mid: NO-VERDICT -- ${side}1 of 1 matched header\\(s\\) not followed by 'Bytecode length: N' in run 1 \\(unknown format\\)$`, 'm');
+// report / gate run the BEFORE driver of a diffSetup tree (the probe cds there, so the fake node serves its capture)
+function capRun(script, mode, lens, extra = []) {
+    const spec = mode === 'diff' ? { before: { mid: lens[0] }, after: { mid: lens[1] } } : { before: { mid: lens } };
+    const s = diffSetup(spec);
+    try {
+        const args = mode === 'diff' ? ['--diff', '--fn', 'mid', s.B, s.A] : mode === 'gate' ? ['--max', extra[0], ...NV, s.B] : ['--fn', 'mid', s.B];
+        return run(script, ['--node', s.node, ...args]);
+    } finally { s.done(); }
+}
+const CAP_ROWS = [
+    ['report: 999999999 -> 0 REPORTED; 1000000000 and 2^53+1 -> 2 NO-VERDICT unknown format', (script) => {
+        let r = capRun(script, 'report', [999999999]);
+        assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^  mid: 1 match\(es\): 999999999$/m);
+        for (const L of ['1000000000', '9007199254740993']) {
+            r = capRun(script, 'report', [L]);
+            assert.equal(r.status, 2, `L=${L}: ` + r.stdout + r.stderr); assert.match(r.stdout, UNKNOWN('')); assert.match(r.stdout, /^VERDICT NO-VERDICT$/m);
+        }
+    }],
+    ['gate: 999999999 vs max 999999999 -> 0 WITHIN; 1000000000 vs 999999999, 2^63 and 2^64+1 vs 6 -> 2 NO-VERDICT unknown format', (script) => {
+        let r = capRun(script, 'gate', [999999999], ['mid=999999999']);
+        assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^VERDICT WITHIN$/m);
+        for (const [L, max] of [['1000000000', 'mid=999999999'], ['9223372036854775808', 'mid=6'], ['18446744073709551617', 'mid=6']]) {
+            r = capRun(script, 'gate', [L], [max]);
+            assert.equal(r.status, 2, `L=${L}: ` + r.stdout + r.stderr); assert.match(r.stdout, UNKNOWN('')); assert.match(r.stdout, /^VERDICT NO-VERDICT$/m);
+        }
+    }],
+    ['diff: 999999998|999999999 -> 1 DIFF; 999999999|1000000000 -> 2 after only; 2^53|2^53+1 -> 2 both sides', (script) => {
+        let r = capRun(script, 'diff', [[999999998], [999999999]]);
+        assert.equal(r.status, 1, r.stdout + r.stderr); assert.match(r.stdout, /^    before=0 after=1  999999999$/m);
+        r = capRun(script, 'diff', [[999999999], ['1000000000']]);
+        assert.equal(r.status, 2, r.stdout + r.stderr); assert.match(r.stdout, UNKNOWN('after: ')); assert.doesNotMatch(r.stdout, / -- before: /);
+        r = capRun(script, 'diff', [['9007199254740992'], ['9007199254740993']]);
+        assert.equal(r.status, 2, r.stdout + r.stderr); assert.match(r.stdout, UNKNOWN('before: ')); assert.match(r.stdout, UNKNOWN('after: '));
+    }],
+];
+for (const [name, body] of CAP_ROWS) {
+    test(`bytecode-budget length cap ${name}`, { skip }, () => body(SCRIPT));
+    test(`bytecode-budget length cap teeth: [${name}] is red on the 686de5bf build (no cap)`, { skip: skip || (haveCap === true ? false : haveCap) }, () => {
+        assert.throws(() => body(CAP_BASE), assert.AssertionError);
+    });
+    for (const [mname, to] of [['cap-8', 'length($3) <= 8'], ['cap-10', 'length($3) <= 10']]) {
+        test(`bytecode-budget length cap MUTANT ${mname}: [${name}] goes red`, { skip }, () => {
+            const dir = mkdtempSync(join(tmpdir(), `bb-${mname}-`));
+            try { const p = variant(dir, mname, 'length($3) <= 9', to); assert.throws(() => body(p), assert.AssertionError); }
+            finally { rmSync(dir, { recursive: true, force: true }); }
+        });
+    }
+}
