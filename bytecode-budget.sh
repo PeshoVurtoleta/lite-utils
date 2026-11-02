@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # bytecode-budget.sh -- the bytecode LENGTH of NAMED functions on one node binary: a REPORT, or a GATE
 # against per-function maxima recorded on a known node version.
+# Or a DIFF (--diff): the same functions in two DRIVERs on that binary, their length multisets compared.
 #
 #   bytecode-budget.sh [opts] --fn LIST DRIVER                                   # report
 #   bytecode-budget.sh [opts] --max fn=N[,fn=N] --node-version vX.Y.Z DRIVER     # gate
+#   bytecode-budget.sh [opts] --diff --fn LIST DRIVER_BEFORE DRIVER_AFTER          # diff
 #
 #   e.g. bytecode-budget.sh --max add=6,mid=211 --node-version v26.8.2 test/fixtures/bytecode-budget/node-26.8.2/driver.mjs
 #
 # Options
 #   --fn LIST              report mode: function names, comma separated
+#                          (diff mode: the same, with --diff; --max is refused there)
 #   --max fn=N[,fn=N]      gate mode: every function named fn must have a bytecode length <= N (1..9 digits)
 #   --node-version vX.Y.Z  gate mode (required): the node version the maxima were taken on; report mode
 #                          (optional): the node version expected. Must equal `<node> --version` exactly, else
 #                          NO-VERDICT before any probe.
+#                          Diff mode (optional): as in report mode.
 #   --runs N               probes per function, 2..20 (default 2). Run 1 vs runs 2..N is the null control.
 #   --node BIN             node binary (default: $NODE, else node)
 #   --v8-flags STR         extra V8 flags for every probe, split on spaces (flags only; any *print-bytecode* flag
@@ -21,6 +25,9 @@
 #   --out DIR              keep DIR/report.txt and DIR/raw/<fn>.<k>.txt (raw output of run k, 0x addresses kept;
 #                          a space in fn becomes -). DIR/raw must be absent or empty. Without --out nothing is
 #                          written to disk.
+#                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
+#   --diff                 diff mode: probe DRIVER_BEFORE and DRIVER_AFTER (run k of each side, k = 1..N, in turn)
+#                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs.
 #   --self-test            canned checks, then exit 0 (all ok) or 1 (a FAIL line per failed check)
 #   --fixtures DIR         with --self-test: also check the real-trace captures in DIR (the node-26.8.2 set)
 #   -h, --help             this text (exit 2)
@@ -28,8 +35,10 @@
 #   --fn / --max / --v8-flags take no newline and --fn / --max no empty entry (stray comma). --self-test takes
 #   only --fixtures. --self-test / --help take no =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
+#   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
 #
-# DRIVER: exactly one existing file, run as `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
+# DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
+#   `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
 #   with cwd = its directory and NODE_OPTIONS stripped. V8 prints a function only once it is compiled.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. read, get value). Never
 #   qualified: Store.read prints nothing on node 26, so it is refused. A repeated fn is refused.
@@ -45,6 +54,14 @@
 #   Limits are this binary's (one `--v8-options` read, then --v8-flags overrides; a NOTE lists any node 26
 #   default ASSUMED), with inlining-budget-diff's operators: TurboFan small <=, small where a HeapNumber may
 #   cross the call <=, single-inline <=; Maglev eager (greedy small) <, small <=, single-inline <.
+# Diff lines (after "before  <path>  sha256/8 <x>" and "after   <path>  sha256/8 <x>" in the head; run 1 of each side):
+#   "  <fn>: before <count> match(es): <l1,..>" and "  <fn>: after  <count> match(es): <l1,..>"
+#   "    <len> bytes: ..." (each distinct length of either side, as in report mode), then one of
+#   "  <fn>: SAME -- identical length multiset (<before lengths> | <after lengths>)"
+#   "  <fn>: DIFF -- length multiset differs (before <lengths> | after <lengths>)", then per length whose count
+#     differs (ascending): "    before=<n> after=<m>  <len>"
+#   "  <fn>: NO-VERDICT -- <before|after>: <reason>" (one line per side that has a NO-VERDICT reason below)
+#   The multiset is order-free and counts duplicates: 6,19 equals 19,6; 6 differs from 6,6.
 # NO-VERDICT reasons, one line per fn ("  <fn>: NO-VERDICT -- <reason>"):
 #   node version mismatch: <bin> --version is <v>, the maxima are for <v>     (gate mode)
 #   node version mismatch: <bin> --version is <v>, --node-version is <v>      (report mode)
@@ -57,11 +74,15 @@
 #   spawned; a --node BIN whose --version fails, or a V8 flag node rejects (NO-VERDICT: driver exited <rc>),
 #   exits 2 after its spawn(s) (a rejected V8 flag still runs every probe). Spawns: one --version, one
 #   --v8-options, then fn x runs probes.
+# Diff verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. Spawns: one --version,
+#   one --v8-options, then fn x runs x 2 probes. --diff with --max, or not exactly two DRIVERs, exits 2 before any spawn.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
 #   one driver, the gate is pinned to that node version (--node-version) and any run-to-run change is
 #   NO-VERDICT, never OVER -- and --self-test (canned text; with --fixtures, the recorded node v26.8.2
 #   captures). REPORTED: the limit values both modes print are this binary's (its --v8-options, then
 #   --v8-flags), a measurement of that binary, not a law.
+# Tier (diff mode): DETERMINISTIC on the same terms: both DRIVERs on one node binary, and any run-to-run change
+#   on either side is NO-VERDICT, never DIFF.
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
 set -euo pipefail
@@ -95,6 +116,16 @@ BYTECODE_AWK='
 }
 want && /^Bytecode length: [0-9]+/ { v = $3 + 0; if (!(v in seen)) { seen[v] = 1; ord[++nv] = v }; want = 0 }
 END { out = ""; for (i = 1; i <= nv; i++) out = out (out == "" ? "" : ",") ord[i]; print out }   # first-seen order
+'
+
+# two `uniq -c` files -> lines whose counts differ: "before=N after=M  [unit] line"
+# shellcheck disable=SC2016
+MSDIFF_AWK='
+function key(s) { sub(/^ *[0-9]+ /, "", s); return s }
+function show(k,   u, l) { u = k; sub(/\t.*/, "", u); l = k; sub(/^[^\t]*\t/, "", l); return (u == "*") ? l : "[" u "] " l }
+FILENAME == ARGV[1] { k = key($0); b[k] = $1 + 0; all[k] = 1; next }   # not FNR == NR: an empty first file breaks it
+{ k = key($0); a[k] = $1 + 0; all[k] = 1 }
+END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\n", b[k], a[k], show(k) }
 '
 
 # --print-bytecode output -> "<count> <bad> <lengths>" for the functions named EXACTLY fn (see the header).
@@ -169,6 +200,8 @@ LINE_RE='^0 [0-9]+ [0-9]+ (-|[0-9]+(,[0-9]+)*)$'   # a probe line "<driver exit>
 vworst() { local a; for a in NO-VERDICT OVER; do if [[ $1 == "$a" || $2 == "$a" ]]; then echo "$a"; return 0; fi; done; echo "$1"; }
 
 distinct() { printf '%s\n' "$1" | tr ',' '\n' | awk '!seen[$0]++'; }   # "l1,l2,.." -> distinct values, first-seen order
+# "l1,l2,.." -> its length multiset as MSDIFF_AWK input ("<count> *<TAB><len>", unit * = none), order-free
+lens_ms() { printf '%s\n' "$1" | tr ',' '\n' | awk '{ print "*\t" $0 }' | multiset; }
 
 # judge FN MAX LINE1 .. LINER: LINEk = "<driver exit> <count> <bad> <lengths>" of run k; MAX empty = report mode.
 # Sets JV (WITHIN OVER REPORTED NO-VERDICT) and JWHY (the reason).
@@ -209,12 +242,42 @@ over_limits() {
   if [[ -z "$o" ]]; then echo "within every limit"; else echo "over ${o#, }"; fi
 }
 
+# diff_fn FN: one fn of diff mode, from RB[@] / RA[@] (the before / after probe lines, run k at index k-1): judge()
+# each side, then compare the run-1 length multisets. Prints the fn's lines, sets FV (SAME DIFF NO-VERDICT) and
+# folds it into VERDICT with worst(). The diff branch and --self-test both run it (one code path).
+diff_fn() {
+  local fn="$1" VB VA WB WA LB LA LS MSB MSA n l
+  judge "$fn" "" "${RB[@]}"; VB=$JV; WB=$JWHY
+  judge "$fn" "" "${RA[@]}"; VA=$JV; WA=$JWHY
+  LB=-; LA=-
+  if [[ "${RB[0]}" =~ $LINE_RE ]]; then read -r _ n _ LB <<<"${RB[0]}"; say "  $fn: before $n match(es): $LB"; fi
+  if [[ "${RA[0]}" =~ $LINE_RE ]]; then read -r _ n _ LA <<<"${RA[0]}"; say "  $fn: after  $n match(es): $LA"; fi
+  LS="$LB,$LA"; LS="${LS//-/}"; LS="${LS#,}"; LS="${LS%,}"
+  if [[ -n "$LS" ]]; then
+    while IFS= read -r l; do say "    $l bytes: $(over_limits "$l")"; done < <(distinct "$LS")
+  fi
+  if [[ $VB == NO-VERDICT || $VA == NO-VERDICT ]]; then
+    FV=NO-VERDICT
+    if [[ $VB == NO-VERDICT ]]; then say "  $fn: NO-VERDICT -- before: $WB"; fi
+    if [[ $VA == NO-VERDICT ]]; then say "  $fn: NO-VERDICT -- after: $WA"; fi
+  else
+    MSB=$(lens_ms "$LB"); MSA=$(lens_ms "$LA")
+    if [[ "$MSB" == "$MSA" ]]; then
+      FV=SAME; say "  $fn: SAME -- identical length multiset ($LB | $LA)"
+    else
+      FV=DIFF; say "  $fn: DIFF -- length multiset differs (before $LB | after $LA)"
+      while IFS= read -r l; do say "  $l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$MSB") <(printf '%s\n' "$MSA") | sort -k3,3n)
+    fi
+  fi
+  VERDICT=$(worst "$VERDICT" "$FV")
+}
+
 # ---------------------------------------------------------------------------------------------
 # --self-test: canned text through the same awk / judge code, then this script with a fake node
 # ---------------------------------------------------------------------------------------------
 self_test() {
   local d; d=$(mktemp -d)
-  local fails=0
+  local fails=0 REPORT=/dev/null
   check() { if [[ "$2" == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1"; echo "     want: $3"; echo "     got:  $2"; fails=$((fails + 1)); fi; }
   hdr() { printf '[generated bytecode for function: %s (0x%s <SharedFunctionInfo %s>)]\n' "$1" "$2" "$1"; }
   { hdr add 0a1b2c3d4e5f; printf '%s\n' 'Bytecode length: 6' 'Parameter count 3'; } >"$d/add"
@@ -269,6 +332,31 @@ self_test() {
     "$(over_limits 27)|$(over_limits 30)|$(over_limits 100)|$(over_limits 461)" \
     "within every limit|over Maglev eager (greedy small) (<30), Maglev small (<=27)|over TurboFan small (<=30), TurboFan small where a HeapNumber may cross the call (<=75), Maglev eager (greedy small) (<30), Maglev small (<=27), Maglev single-inline (<100)|over TurboFan small (<=30), TurboFan small where a HeapNumber may cross the call (<=75), TurboFan single-inline (<=460), Maglev eager (greedy small) (<30), Maglev small (<=27), Maglev single-inline (<100)"
 
+  # --- diff mode, canned probe lines through diff_fn (the diff branch's judge / multiset / worst code) ---
+  local VERDICT FV; local -a RB RA
+  dj() { IFS=';' read -r -a RB <<<"$2"; IFS=';' read -r -a RA <<<"$3"; diff_fn "$1" >"$d/dj.out"; }   # FN "B1;B2" "A1;A2"
+  djhas() { grep -c -F -x -e "$1" "$d/dj.out" || true; }
+  VERDICT=SAME; dj dup "0 2 0 6,19;0 2 0 6,19" "0 2 0 19,6;0 2 0 19,6"
+  check "diff: a length multiset is order-free (6,19 | 19,6 -> SAME)" \
+    "$FV|$VERDICT|$(djhas '  dup: SAME -- identical length multiset (6,19 | 19,6)')" "SAME|SAME|1"
+  VERDICT=SAME; dj f "0 1 0 6;0 1 0 6" "0 2 0 6,6;0 2 0 6,6"
+  check "diff: a length multiset counts duplicates (6 | 6,6 -> DIFF, before=1 after=2)" \
+    "$FV|$VERDICT|$(djhas '    before=1 after=2  6')" "DIFF|DIFF|1"
+  VERDICT=SAME; dj f "0 1 0 6;0 1 0 6" "0 0 0 -;0 0 0 -"
+  check "diff: each side is judged (after count 0 -> NO-VERDICT naming after)" \
+    "$FV|$VERDICT|$(djhas "  f: NO-VERDICT -- after: no function named 'f' in run 1 (not compiled: never called / lazy, or no such name)")|$(grep -c -e ' -- before: ' "$d/dj.out" || true)" \
+    "NO-VERDICT|NO-VERDICT|1|0"
+  VERDICT=SAME; got=""
+  for x in mid lazy - lazy mid; do
+    case "$x" in
+      -) VERDICT=SAME; got="$got |" ;;
+      mid) dj mid "0 1 0 211;0 1 0 211" "0 1 0 212;0 1 0 212"; got="$got $FV>$VERDICT" ;;
+      lazy) dj lazy "0 0 0 -;0 0 0 -" "0 0 0 -;0 0 0 -"; got="$got $FV>$VERDICT" ;;
+    esac
+  done
+  check "diff: worst() over fns, NO-VERDICT > DIFF > SAME (mid DIFF + lazy NO-VERDICT -> NO-VERDICT, either order)" \
+    "$got" " DIFF>DIFF NO-VERDICT>NO-VERDICT | NO-VERDICT>NO-VERDICT DIFF>NO-VERDICT"
+
   # --- this script end to end, with a fake node (logs argv, prints a version, cats a capture per filter) ---
   local fk="$d/fk" drv="$d/drv/driver.mjs" rc out
   mkdir -p "$fk" "$d/drv" "$d/tmp" "$d/cwd"; : >"$drv"
@@ -277,6 +365,7 @@ self_test() {
     'f=""; for a; do case "$a" in --print-bytecode-filter=*) f="${a#--print-bytecode-filter=}" ;; esac; done' \
     'n=$(( $(cat "$d/$f.n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$d/$f.n"' \
     'src="$d/$f.txt"; [ -f "$d/$f.$n.txt" ] && src="$d/$f.$n.txt"' \
+    '[ -f "./$f.txt" ] && src="./$f.txt"' \
     '[ -f "$src" ] && sed "s/(0x/(0x$n/" "$src"' 'exit "${FAKE_RC:-0}"' >"$fk/node"
   chmod +x "$fk/node"
   cp "$d/add" "$fk/add.txt"; : >"$fk/lazy.txt"
@@ -334,6 +423,41 @@ self_test() {
   check "refused before any spawn (exit 2, 0 spawns): repeated fn, runs 1 / 21, --fn with --max, *print-bytecode* / non-flag v8 flag, no --node-version, bad N, bad version, unknown option; then a valid --fn add runs; no DRIVER, two DRIVERs" \
     "$got" "2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 0:4 2:0 2:0"
 
+  # --- diff mode end to end: the fake node cats <fn>.txt beside the driver (cwd) when there, so the sides differ ---
+  local drva="$d/drva/driver.mjs"
+  mkdir -p "$d/drva"; : >"$drva"
+  { hdr mid 1; echo 'Bytecode length: 212'; } >"$d/drva/mid.txt"
+  { hdr dup 1; echo 'Bytecode length: 19'; hdr dup 2; echo 'Bytecode length: 6'; } >"$d/drva/dup.txt"
+  { hdr add 1; echo 'Bytecode length: 6'; hdr add 2; echo 'Bytecode length: 6'; } >"$d/drva/add.txt"
+  : >"$d/drva/read.txt"
+  check "diff (fake node): one DRIVER on both sides -> exit 0 SAME; 6 spawns (--version, --v8-options, 1 fn x 2 runs x 2 sides); nothing on disk" \
+    "$(spawn - --diff --fn mid "$drv" "$drv")|$(has '^  mid: SAME -- identical length multiset (211 | 211)$')|$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" \
+    "0|VERDICT SAME|6|1|0"
+  check "diff (fake node): mid 211 | 212 -> exit 1 DIFF (FINAL=1 keeps the planned exit), one count line per length" \
+    "$(spawn - --diff --fn mid "$drv" "$drva")|$(has '^    before=1 after=0  211$')|$(has '^    before=0 after=1  212$')" "1|VERDICT DIFF|6|1|1"
+  check "diff (fake node): dup 6,19 | 19,6 -> exit 0 SAME (order-free)" \
+    "$(spawn - --diff --fn dup "$drv" "$drva")" "0|VERDICT SAME|6"
+  check "diff (fake node): add 6 | 6,6 -> exit 1 DIFF (multiplicity)" \
+    "$(spawn - --diff --fn add "$drv" "$drva")|$(has '^    before=1 after=2  6$')" "1|VERDICT DIFF|6|1"
+  check "diff (fake node): read 4 matches | none -> exit 2 NO-VERDICT naming after" \
+    "$(spawn - --diff --fn read "$drv" "$drva")|$(has "^  read: NO-VERDICT -- after: no function named 'read' in run 1 ")" "2|VERDICT NO-VERDICT|6|1"
+  check "diff (fake node): mid DIFF + lazy NO-VERDICT -> exit 2 NO-VERDICT (worst over fns)" \
+    "$(spawn - --diff --fn mid,lazy "$drv" "$drva")" "2|VERDICT NO-VERDICT|10"
+  check "diff --out (fake node): 3 fns x 2 runs -> 14 spawns, report.txt, raw/before and raw/after 6 files each" \
+    "$(spawn - --out "$d/od" --diff --fn add,mid,dup "$drv" "$drva")|$(grep -c '^VERDICT DIFF$' "$d/od/report.txt" || true)|$(find "$d/od/raw/before" -type f | wc -l | tr -d ' ')|$(find "$d/od/raw/after" -type f | wc -l | tr -d ' ')" \
+    "1|VERDICT DIFF|14|1|6|6"
+  check "diff (fake node): node version mismatch -> exit 2 before any probe (1 spawn), report-mode wording" \
+    "$(spawn FAKE_VER=v26.8.1 --diff --fn mid --node-version v26.8.2 "$drv" "$drva")|$(has '^  mid: NO-VERDICT -- node version mismatch: .*, --node-version is v26.8.2$')" \
+    "2|VERDICT NO-VERDICT|1|1"
+  got=""
+  for x in "--diff --max mid=1 --node-version v26.8.2 $drv $drva" "--diff --fn mid $drv" "--diff --fn mid $drv $drv $drva" \
+    "--diff=x --fn mid $drv $drva" "--diff --diff --fn mid $drv $drva" "--diff $drv $drva" "--diff --fn mid $drv $d/drva/nosuch.mjs"; do
+    # shellcheck disable=SC2086
+    out=$(spawn - $x); got="$got${out%%|*}:${out##*|} "
+  done
+  check "diff refusals before any spawn (exit 2, 0 spawns): --diff with --max, 1 DRIVER, 3 DRIVERs, --diff=x, --diff twice, no --fn, a missing DRIVER_AFTER" \
+    "$got" "2:0 2:0 2:0 2:0 2:0 2:0 2:0 "
+
   if [[ -n "$FIXTURES" ]]; then
     # TASK 0 census (grep -A1 over the captures, no script awk): every matched header has its length line.
     local row file fn want pairs="" mis=""
@@ -388,8 +512,8 @@ EOF
 # options (every check below runs before any node is spawned)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; MAXLIST=""; WANT_VER=""; RUNS=2; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""
-SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "
-OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fixtures --help"
+SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; DIFFMODE=0
+OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fixtures --help --diff"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 need() { # value from --opt=value (returns 0) or from the next argument (returns 1: caller shifts)
   if [[ -n "$v" ]]; then return 0; fi
@@ -402,6 +526,10 @@ while [[ $# -gt 0 ]]; do
   case "$a" in
     -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
+    --diff)
+      [[ $EQ -eq 0 ]] || die "$a takes no value"
+      [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice"
+      GOTOPT="$GOTOPT $a "; DIFFMODE=1 ;;
     --fn|--max|--node-version|--runs|--node|--v8-flags|--out|--fixtures)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
       GOTOPT="$GOTOPT $a "
@@ -425,6 +553,7 @@ if [[ $SELFTEST == 1 ]]; then
 fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
+[[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
 
 [[ -n "$FNLIST$MAXLIST" ]] || die "need --fn LIST (report) or --max fn=N[,fn=N] (gate) (see --help)"
 [[ -z "$FNLIST" || -z "$MAXLIST" ]] || die "--fn (report) and --max (gate) are exclusive: give one"
@@ -467,15 +596,25 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       [[ "$f" =~ ^--[^=]+=[0-9]{1,9}(\.[0-9]{1,9})?$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =X (a decimal number, e.g. 1.2)" ;;
   esac
 done
-[[ ${#POS[@]} -eq 1 ]] || die "need exactly one DRIVER file, got ${#POS[@]} (see --help)"
-[[ -f "${POS[0]}" ]] || die "DRIVER not found (or not a file): ${POS[0]}"
-DRV_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_BASE=$(basename "${POS[0]}")
+if [[ $DIFFMODE == 1 ]]; then
+  [[ ${#POS[@]} -eq 2 ]] || die "--diff needs exactly two DRIVER files (BEFORE AFTER), got ${#POS[@]} (see --help)"
+  [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
+  [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
+  DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
+  DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
+  SHA_B=$(sha8 "$DRV_B_DIR/$DRV_B_BASE"); SHA_A=$(sha8 "$DRV_A_DIR/$DRV_A_BASE")
+else
+  [[ ${#POS[@]} -eq 1 ]] || die "need exactly one DRIVER file, got ${#POS[@]} (see --help)"
+  [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER not found (or not a readable file): ${POS[0]}"
+  DRV_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_BASE=$(basename "${POS[0]}")
+fi
 command -v "$NODE_BIN" >/dev/null 2>&1 || die "node binary not found: $NODE_BIN"
 if [[ "$NODE_BIN" == */* ]]; then NODE_BIN="$(cd "$(dirname "$NODE_BIN")" && pwd)/$(basename "$NODE_BIN")"; fi
 if [[ -n "$OUT" ]]; then
   mkdir -p "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
   OUT=$(cd "$OUT" && pwd)
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  if [[ $DIFFMODE == 1 ]]; then mkdir "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"; fi
   REPORT="$OUT/report.txt"; : >"$REPORT"
 else
   REPORT=/dev/null   # nothing is written to disk without --out
@@ -485,9 +624,14 @@ fi
 # node version (S-6): checked before any probe
 # ---------------------------------------------------------------------------------------------
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
-if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; else MODE="report"; fi
+if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; elif [[ $DIFFMODE == 1 ]]; then MODE="diff"; else MODE="report"; fi
 say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
-say "driver  $DRV_DIR/$DRV_BASE"
+if [[ $DIFFMODE == 1 ]]; then
+  say "before  $DRV_B_DIR/$DRV_B_BASE  sha256/8 $SHA_B"
+  say "after   $DRV_A_DIR/$DRV_A_BASE  sha256/8 $SHA_A"
+else
+  say "driver  $DRV_DIR/$DRV_BASE"
+fi
 say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--print-bytecode --print-bytecode-filter=<fn>"
 if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 if [[ -n "$WANT_VER" && "$GOT_VER" != "$WANT_VER" ]]; then
@@ -536,17 +680,35 @@ say ""
 # ---------------------------------------------------------------------------------------------
 # probe: fn x runs, each reduced to "<driver exit> <count> <bad> <lengths>"
 # ---------------------------------------------------------------------------------------------
-probe() { # fn k
+probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the raw output goes to $OUT/raw/<rawrel>
   local rc=0 line
   if [[ -n "$OUT" ]]; then
-    line=$( (cd "$DRV_DIR" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "$DRV_BASE" 2>&1) | tee "$OUT/raw/${1// /-}.$2.txt" | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+    line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
+      --print-bytecode-filter="$1" "$4" 2>&1) | tee "$OUT/raw/$5" | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   else
-    line=$( (cd "$DRV_DIR" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "$DRV_BASE" 2>&1) | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+    line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
+      --print-bytecode-filter="$1" "$4" 2>&1) | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   fi
   printf '%s %s\n' "$rc" "$line"
 }
+
+# ---------------------------------------------------------------------------------------------
+# diff mode: per fn, runs k = 1..R alternate before / after; judge() each side, then the length multisets
+# ---------------------------------------------------------------------------------------------
+if [[ $DIFFMODE == 1 ]]; then
+  VERDICT=SAME
+  for fn in "${TARGETS[@]}"; do
+    r="${fn// /-}"; RB=(); RA=()
+    for k in $(seq 1 "$RUNS"); do
+      RB+=("$(probe "$fn" "$k" "$DRV_B_DIR" "$DRV_B_BASE" "before/$r.$k.txt")")
+      RA+=("$(probe "$fn" "$k" "$DRV_A_DIR" "$DRV_A_BASE" "after/$r.$k.txt")")
+    done
+    diff_fn "$fn"
+  done
+  say ""
+  say "VERDICT $VERDICT"
+  FINAL=1; case "$VERDICT" in SAME) exit 0 ;; DIFF) exit 1 ;; *) exit 2 ;; esac
+fi
 
 if [[ -n "$MAXLIST" ]]; then VERDICT=WITHIN; else VERDICT=REPORTED; fi
 i=0
@@ -554,7 +716,7 @@ for fn in "${TARGETS[@]}"; do
   max=""; [[ -z "$MAXLIST" ]] || max="${MAXES[$i]}"
   i=$((i + 1))
   RL=()
-  for k in $(seq 1 "$RUNS"); do RL+=("$(probe "$fn" "$k")"); done
+  for k in $(seq 1 "$RUNS"); do RL+=("$(probe "$fn" "$k" "$DRV_DIR" "$DRV_BASE" "${fn// /-}.$k.txt")"); done
   judge "$fn" "$max" "${RL[@]}"
   if [[ "${RL[0]}" =~ $LINE_RE ]]; then
     read -r _ n _ lens <<<"${RL[0]}"
