@@ -182,53 +182,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   node binary: per fn, the multiset of its deopt records (code tier, kind, reason) compared across
   the two drivers. Usage: `deopt-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER`. Flags: `--fn`
   (required, comma list of short V8 names, `add` or `get value`, never `Store.add`, no repeat, no
-  stray comma; matching is exact on the name between `<JSFunction ` and ` (sfi = `), `--runs N` (2..20,
-  default 3; run 1 vs runs 2..N is the null control), `--node BIN` (default `$NODE`, else `node`),
-  `--v8-flags STR` (flags only, split on spaces; refused, `_` read as `-`: any `*trace-deopt*`,
-  `*trace-opt*` or `*concurrent-recompilation*` flag, which the script sets, and any
-  `*trace-file-names*` flag, which changes the text the records are read from), `--out DIR` (keeps
-  `report.txt` and `raw/{before,after}/run.<k>.txt`, addresses and NUL kept; `DIR/raw` must be absent
-  or empty; without `--out` nothing is written to disk), `--self-test`, `-h` (exit 2). Each driver
-  runs as `node [v8 flags] --trace-deopt-verbose --trace-opt --no-concurrent-recompilation DRIVER`
-  with cwd = its directory, NODE_OPTIONS stripped, stderr merged, through `tee | tr | awk`; one run
-  per side per k serves every fn, sides alternate. Records, from trace lines that start with `[`
-  only: `E <fn>@<tier>[-OSR]` (a `[completed compiling` line),
-  `D <fn>@<tier><TAB><kind> (<reason>)` (a `[bailout` line; reason cut at the first
-  `): begin. deoptimizing `), `X <why>` (a line naming fn that cannot be read, or trace text glued
-  after other output; a NUL byte counts as output). Never
-  part of a record: addresses, sfi, opt id, bytecode offset, deopt exit, deltas, pc, timings, paths.
-  Verdict per fn on the run-1 D multisets (never `sort -u`), worst over fns (NO-VERDICT > DIFF >
-  SAME): exit 0 SAME, 1 DIFF (with `before=<n> after=<m>` per differing record), 2 NO-VERDICT.
-  NO-VERDICT, per side: `cannot read driver output in run <k> (<tee|tr|awk> exited <rc>)` (first
-  failure in the order awk > tr > tee > driver exit), `driver exited <rc> in run <k>`, an X record
-  (unparseable line, or a NUL / glued `[bailout` that BSD awk would have cut), a null-control
-  difference in E or D records, and no E and no D record in run 1. Every refused argument exits 2
-  before any spawn and before anything is written; spawns are one `node --version` plus 2 x runs.
-  Maintainer decisions: the bytecode offset is not in the key; the null control covers E and D; a
-  deopt counts only for the JSFunction on the bailout line (an inlinee's deopt counts for its
-  caller); a dependency invalidation of code not on the stack (no bailout line) and a driver that
-  itself prints `[bailout` / `[completed compiling ` at line start (read as V8 trace output) are
-  Not detected;
-  `--runs` default 3. Tier: `--self-test` is DETERMINISTIC (canned trace text and a fake node
-  that counts spawns); a verdict on a user driver is STATISTICAL (deopts follow tier-up timing; run
-  it under the host quiet lock). Gated in `npm test` by `test/deopt-diff.test.mjs` (83 tests): the
-  exact self-test count (53), an unmodified copy outside the repo, 36 mutants of the script, each of
-  which must turn its own self-test row red (and each with a revert row: the kill assertion fails on
-  the unmutated run), 2 controls that must survive (an awk crash the old records helper swallowed),
-  `-h`, and 3 end-to-end rows on a fake node with their revert rows (a glued `[completed compiling`
-  line, `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
-  `test/deopt-diff-boundary.test.mjs` (87 tests) adds outside rows, each with a mutant row that
-  must turn it red: retention over 3 cycles of SAME / DIFF / NO-VERDICT without `--out` (cwd,
-  TMPDIR and a logging mktemp shim stay empty; 7 spawns each), the self-test leaving 0 dirs (also
-  when killed by SIGTERM mid-run), `--runs` 2 / 20 / 08 / 09 (5 / 41 / 17 / 19 spawns, before /
-  after alternating, exact argv), 26 refused `--runs` values, 11 further refusals and 7 `--out`
-  refusals (exit 2, 0 spawns, OUT unchanged), and A4 parity of bytecode-budget.sh 99790884 /
-  inlining-budget-diff.sh 740da13b. REPORTED (not gated; one PRELIMINARY run under the quiet lock,
-  2026-11-02 20:43 EET, Darwin arm64, node v26.8.2, deopt-diff.sh 221ff2ec, load1 3.63 before /
-  3.50 after vs baseline 2.21, no other node >= 10% CPU, 5 invocations per pair with the default
-  `--runs 3`, `--v8-flags --allow-natives-syntax --fn add` and an `--out` dir, on the
-  maintainer-side probe drivers): deopt | mono DIFF 5/5 (`before=1 after=0  [add@TURBOFAN_JS]
-  deopt-eager (not a Smi)`), mono | mono SAME 5/5, deopt | deopt SAME 5/5.
+  stray comma; matching is exact on the name between `<JSFunction ` and ` (sfi = `), `--runs N`
+  (2..20, default 3; run 1 vs runs 2..N is the null control), `--node BIN` (default `$NODE`, else
+  `node`), `--v8-flags STR` (flags only, split on spaces; refused, `_` read as `-`: any
+  `*trace-deopt*`, `*trace-opt*` or `*concurrent-recompilation*` flag, which the script sets, and
+  any `*trace-file-names*` flag, which changes the text the records are read from), `--out DIR`
+  (keeps `report.txt` and `raw/{before,after}/run.<k>.txt`, addresses and NUL kept; `DIR/raw` must
+  be absent or empty; without `--out` nothing is written to disk), `--self-test`, `-h` (exit 2).
+  Each driver runs as `node [v8 flags] --trace-deopt-verbose --trace-opt
+  --no-concurrent-recompilation DRIVER` with cwd = its directory, NODE_OPTIONS stripped, stderr
+  merged, through `tee | tr | awk`; one run per side per k serves every fn, sides alternate.
+  Records, from trace lines that start with `[` only: `E <fn>@<tier>[-OSR]` (a `[completed
+  compiling` line), `D <fn>@<tier><TAB><kind> (<reason>)` (a `[bailout` line; reason cut at the
+  first `): begin. deoptimizing `), `X <why>` (a line naming fn that cannot be read, or trace text
+  glued after other output; a NUL byte counts as output). Never part of a record: addresses, sfi,
+  opt id, bytecode offset, deopt exit, deltas, pc, timings, paths. Verdict per fn on the run-1 D
+  multisets (never `sort -u`), worst over fns (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF (with
+  `before=<n> after=<m>` per differing record), 2 NO-VERDICT. NO-VERDICT, per side: `cannot read
+  driver output in run <k> (<tee|tr|awk> exited <rc>)` (first failure in the order awk > tr > tee >
+  driver exit), `driver exited <rc> in run <k>`, an X record (unparseable line, or a NUL / glued
+  `[bailout` that BSD awk would have cut), a null-control difference in E or D records, and no E and
+  no D record in run 1. Every refused argument exits 2 before any spawn and before anything is
+  written; spawns are one `node --version` plus 2 x runs. Maintainer decisions: the bytecode offset
+  is not in the key; the null control covers E and D; a deopt counts only for the JSFunction on the
+  bailout line (an inlinee's deopt counts for its caller); a dependency invalidation of code not on
+  the stack (no bailout line) and a driver that itself prints `[bailout` / `[completed compiling `
+  at line start (read as V8 trace output) are Not detected; `--runs` default 3. Tier: `--self-test`
+  is DETERMINISTIC (canned trace text and a fake node that counts spawns); a verdict on a user
+  driver is STATISTICAL (deopts follow tier-up timing; run it under the host quiet lock). Gated in
+  `npm test` by `test/deopt-diff.test.mjs` (83 tests): the exact self-test count (71), an unmodified
+  copy outside the repo, 36 mutants of the script, each of which must turn its own self-test row red
+  (and each with a revert row: the kill assertion fails on the unmutated run), 2 controls that must
+  survive (an awk crash the old records helper swallowed), `-h`, and 3 end-to-end rows on a fake
+  node with their revert rows (a glued `[completed compiling` line, `abc<CR>[bailout`, a CRLF
+  bailout line: each NO-VERDICT with its own reason). `test/deopt-diff-boundary.test.mjs` (87 tests)
+  adds outside rows, each with a mutant row that must turn it red: retention over 3 cycles of SAME /
+  DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a logging mktemp shim stay empty; 7 spawns
+  each), the self-test leaving 0 dirs (also when killed by SIGTERM mid-run), `--runs` 2 / 20 / 08 /
+  09 (5 / 41 / 17 / 19 spawns, before / after alternating, exact argv), 26 refused `--runs` values,
+  11 further refusals and 7 `--out` refusals (exit 2, 0 spawns, OUT unchanged), and A4 parity of
+  bytecode-budget.sh 99790884 / inlining-budget-diff.sh 740da13b. REPORTED (not gated; one
+  PRELIMINARY run under the quiet lock, 2026-11-02 20:43 EET, Darwin arm64, node v26.8.2,
+  deopt-diff.sh 221ff2ec, load1 3.63 before / 3.50 after vs baseline 2.21, no other node >= 10% CPU,
+  5 invocations per pair with the default `--runs 3`, `--v8-flags --allow-natives-syntax --fn add`
+  and an `--out` dir, on the maintainer-side probe drivers): deopt | mono DIFF 5/5
+  (`before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)`), mono | mono SAME 5/5,
+  deopt | deopt SAME 5/5.
+- `deopt-diff.sh` ref and file mode (Phase 3 group 2): the same verdict, but each side is ONE module
+  file staged by the script beside a copy of ONE driver, instead of two DRIVER paths, with the
+  option names of `bytecode-budget.sh --diff` and the same `lib/stage.sh`. Ref mode: `--fn LIST
+  --out DIR --driver FILE --before-ref REF --after-ref REF --module REL [--repo DIR]` (each side is
+  `git cat-file blob <sha>:REL`: plumbing, no textconv, frozen by construction). File mode: `--fn
+  LIST --out DIR --driver FILE --before FROZEN --after FILE` (each side is a `cp`, so an edit of the
+  live file after staging cannot leak in; the before file must be a frozen copy, not git-tracked and
+  not the same file as `--after`). `--out DIR` is required and `DIR/stage` must be absent or an
+  empty directory (a regular file or a symlink to a file at `DIR/stage` is refused:
+  `--out: DIR/stage exists and is not a directory`; a DANGLING symlink there is refused by the
+  lib's `--out: DIR/stage is not empty` line instead, exit 2, 0 spawns, nothing written); after the
+  `node --version` spawn, `DIR/stage/before` and `DIR/stage/after` each get the module as NAME
+  plus a copy of the driver, and each side runs from there (the driver must
+  import `./NAME`; a module with relative imports of its own fails closed: NO-VERDICT). Nothing is
+  written before `node --version` succeeds. The head gains a `driver  <abs>  sha256/8 x` line (x =
+  the staged copy's) and the mode line reads `diff (ref)` or `diff (file)`. When the two staged
+  modules are byte-identical a NOTE line says the run is a null control (expect SAME), and a DIFF
+  then becomes NO-VERDICT (exit 2, "the DIFF is run-to-run noise"; SAME and NO-VERDICT stay as they
+  are; maintainer decision MD-16). New refusals, each exit 2 with 0 spawns and nothing written:
+  `--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after` (MD-17
+  covers the `DIR/stage` one above), a mixed or half-given pair, and the further stage / git checks
+  of `bytecode-budget.sh --diff`. Driver-mode output is unchanged: 43 golden-vector files (7 runs,
+  an `--out` report and 3 refusals: exit code, stdout, stderr and spawn log) of the pre-group build
+  221ff2ec equal those of the new build. `-h` documents both modes and the known gaps as Not
+  detected (a tracked symlink `--module` stages the link text, `refs/replace` swaps the staged blob,
+  a leading-dash path value exits 2 only through the EXIT trap, an unreadable or symlinked
+  `DIR/stage`). Tier: a verdict on a user driver is STATISTICAL, as in driver mode (run it under the
+  host quiet lock); the staging, the refusals and the byte-identical NO-VERDICT are DETERMINISTIC.
+  `--self-test` gains 18 ref / file rows on a temp git repo with a fake node (S1-S4: ref r1 | r2
+  DIFF, r1 | r1 SAME with the NOTE, file mode frozen | live with the live file rewritten mid-run,
+  byte-identical DIFF -> NO-VERDICT; R1-R14: refusals, each with its own die line), 53 -> 71 checks;
+  with no git on PATH, or a failed repo set-up, the 18 rows are ONE FAIL line. Its git calls are
+  isolated (no editor, global or system config, hooks or signing; the six `GIT_*` variables unset).
+  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin 71) and
+  `test/deopt-diff-stage.test.mjs` (65 tests: 22 verdict / refusal rows, each with a twin that must
+  exit 2 `unknown option` and go red on the pre-group build; 11 exact-once mutants; 2 retention
+  rows, 20 staged runs = 140 spawns and 11 files per OUT; 8 self-test rows: env, no git, two control
+  mutants, the pre-group count) and `test/deopt-diff-stage-boundary.test.mjs` (95 tests: 40
+  boundary rows of the ref / file modes -- 35 new behaviour, 2 pre-existing --runs refusals, 3
+  KNOWN GAP pins -- each with a twin on the pre-group build; 1 parity row + twin; retention over 3
+  cycles of SAME / DIFF / NO-VERDICT / refusal and a SIGTERM mid-run, each row + twin + mutant; 7
+  row mutants, 9 mutant tests from 7 distinct edits).
 
 ### Changed
 

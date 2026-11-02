@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # deopt-diff.sh -- the DEOPTIMIZATIONS of NAMED functions, DRIVER_BEFORE vs DRIVER_AFTER, on one node binary:
 # per fn, the multiset of its deopt records (code tier, kind, reason) compared across the two drivers.
+# Ref / file mode: ONE module file per side (two git refs, or a frozen copy and the live file), each staged beside a
+# copy of ONE driver.
 #
 #   deopt-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER     driver mode: two drivers, one verdict
+#   deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before-ref REF --after-ref REF --module REL   ref mode
+#   deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before FILE --after FILE                     file mode
 #   deopt-diff.sh --self-test                                       canned checks, no real node
 #   deopt-diff.sh -h | --help                                       this text
 #
@@ -19,14 +23,31 @@
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
 #                      output of run k, addresses kept). DIR/raw must be absent or empty. Without --out nothing
 #                      is written to disk.
+#                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
+#   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
+#                      sha; never starting with -). Goes with --after-ref.
+#   --after-ref REF    ref mode: the after side, the same way. Both refs are required.
+#   --module REL       ref mode (required): the module's path from the repo root (e.g. src/Thing.js): relative, no
+#                      empty, . or .. segment; at each ref it must be a blob (`git cat-file -t`).
+#   --before FILE      file mode: the before module, a FROZEN copy (see Frozen "before" below). Goes with --after;
+#                      never with --before-ref / --after-ref, never with --module.
+#   --after FILE       file mode: the after module (the live working-tree file may be given); NAME = its file name.
+#   --driver FILE      ref / file mode (required): ONE driver that imports the module as './NAME' or "./NAME" (NAME =
+#                      the file name of --module, or of --after); its own file name must differ from NAME.
+#   --repo DIR         the git repo. Ref mode: the refs and --module are read there (default: the repo around the
+#                      current directory). File mode: one more <top> for the Frozen "before" check below.
 #   --self-test        canned checks (trace text through the record awk, judge and diff_fn, then this script end to
-#                      end with a fake node that counts spawns): one "ok <label>" or "FAIL <label>: <got>" line per
-#                      check, then "self-test: <C> check(s) ok" (exit 0) or "self-test: <n> check(s) FAILED" (exit 1)
+#                      end with a fake node that counts spawns, then the ref / file modes on a temp git repo): one
+#                      "ok <label>" or "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0)
+#                      or "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
 #   Each value option is given at most once and never empty; --fn / --v8-flags / --out take no newline and --fn
 #   no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value.
+#   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
+#   ref / file values take no newline.
 #
-# DRIVER: exactly two existing readable files, each run as
+# DRIVER (driver mode): exactly two existing readable files (ref / file mode: no DRIVER path; each side runs its
+#   staged copy of --driver), each run as
 #   `node [v8 flags] --trace-deopt-verbose --trace-opt --no-concurrent-recompilation DRIVER`
 #   with cwd = its directory, NODE_OPTIONS stripped, stderr merged into stdout, piped through tee (to the --out raw
 #   file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and awk (keeps the trace
@@ -47,7 +68,8 @@
 #                                    no space after the prefix"); `[bailout` / `[completed compiling` text after
 #                                    other output on the same line ("trace text not at line start"; a NUL byte
 #                                    counts as other output: `abc<NUL>[bailout` and `<NUL>[bailout` are X too)
-# Report lines (after "before  <abs path>  sha256/8 <x>" and "after   <abs path>  sha256/8 <x>"; run 1):
+# Report lines (after "before  <abs path>  sha256/8 <x>" and "after   <abs path>  sha256/8 <x>"; ref / file mode: the
+#   head in Ref / file mode below; run 1):
 #   "  <fn>: before <e> optimized compile(s) [<unit> x<n>, ..], <d> deopt(s)" (the same for after; no [..] when e
 #   is 0; not printed for a side whose run 1 did not finish cleanly)
 #   "  <fn>: SAME -- identical deopt multiset (before <d> | after <d>)"
@@ -64,16 +86,57 @@
 #   null control: run <k> differs from run 1 (<n> record(s) differ, first: run 1 x<a> | run <k> x<b>  [<unit>] <line>)
 #                                    (E and D records of runs 2..N each compared with run 1)
 #   no optimized compile of '<fn>' in run 1 (no E and no D record: never optimized, inlined only, or no such name)
+# NO-VERDICT over every fn (ref / file mode; one line after the fn lines):
+#   "  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise"
+#                                    (the NOTE case below with a DIFF verdict: both sides are the same program, so
+#                                    the DIFF becomes NO-VERDICT, exit 2; SAME and NO-VERDICT stay as they are)
 # Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. If both sides pass, the run-1
 #   D multisets are compared. Every refused argument exits 2 before any node is spawned and before anything is
 #   written to disk. Spawns: one `node --version` (a failing one exits 2 before anything is written), then
 #   2 x runs driver runs.
+# Ref / file mode: --out DIR is required; DIR/stage must be absent or an empty directory (a DIR/stage that is not a
+#   directory exits 2 "--out: DIR/stage exists and is not a directory"). After the --version spawn, DIR/stage/before
+#   and DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
+#   textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each side's
+#   driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its own
+#   fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
+#   or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
+#   "driver  <abs --driver>  sha256/8 <x>", and when the two staged modules are byte-identical
+#   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
+#   The mode line says "diff (ref)" or "diff (file)". Spawns, lines and verdict as in driver mode, plus the
+#   byte-identical NO-VERDICT above; DIR holds report.txt, raw/ and stage/ (2 x runs + 5 files). Every ref / file
+#   refusal exits 2 before any spawn and before anything is written to DIR.
+# Frozen "before" (file mode): --before must be a FROZEN copy. It is refused with NO-VERDICT when it, or the end of
+#   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js or
+#   <top>/<same name>, <top> = the repo around the current directory, around --after, around --before and its link
+#   target, and --repo; or when it is the same file as --after (-ef: a hard link or symlink, anywhere). Ref and file
+#   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+#   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
+#   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
 # Not detected: a deopt of an inlined function counts only for the JSFunction named on the bailout line (its
 #   caller); a dependency invalidation of code that is not on the stack (`[marking dependent code ...]`, no
 #   bailout line) is not a deopt record; a driver that itself prints trace-like text (`[bailout` /
 #   `[completed compiling `) at line start is read as V8 trace output.
+# Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
+#   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
+#   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
+#   reads as untracked, so a tracked --before behind such an error is not refused. Known gaps, as in
+#   bytecode-budget: a TRACKED SYMLINK --module is a blob (mode 120000), so ref mode stages its target TEXT as the
+#   module (the driver then fails: NO-VERDICT, never a verdict on the link target); refs/replace swaps the staged
+#   blob (a `git replace` of a ref's blob stages the replacement, and the head's sha256/8 is the replacement's); a
+#   path value starting with '-' (e.g. --before -b.js) is read as an option by dirname / basename / stat and exits 2
+#   only through the EXIT trap ("unexpected error (exit 1)", 0 spawns, nothing written). The stage checks
+#   (lib/stage.sh): an unreadable (mode 000) DIR/stage passes the emptiness test, even when it is not empty, so the
+#   run spends its --version spawn and writes DIR/raw/before, DIR/raw/after and an empty DIR/report.txt before it
+#   dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a symlink to an empty
+#   directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already gets the raw
+#   files in driver mode).
 # Tier: on a user driver the verdict is STATISTICAL (deopts follow tier-up timing; run it under the host quiet
 #   lock); --self-test is DETERMINISTIC (canned text and a fake node).
+# Tier (ref / file mode): STATISTICAL on the same terms (each staged side is a user driver; its null control stays),
+#   while the staging, the refusals and the byte-identical NO-VERDICT are DETERMINISTIC, gated in npm test by the
+#   --self-test ref / file rows (a temp git repo and a fake node; with no git on PATH they are one FAIL line and
+#   --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
 # @include lib/prologue.sh
@@ -143,6 +206,8 @@ substr($0, 1, 21) == "[completed compiling " {
 '
 
 # @include lib/common.sh
+
+# @include lib/stage.sh
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 TRACE_FLAGS=(--trace-deopt-verbose --trace-opt --no-concurrent-recompilation)
@@ -390,7 +455,8 @@ EOF
     " NO-VERDICT>NO-VERDICT DIFF>NO-VERDICT | DIFF>DIFF NO-VERDICT>NO-VERDICT | DIFF>DIFF SAME>DIFF | SAME>SAME DIFF>DIFF"
 
   # --- this script end to end: a fake node (bash) logs argv, prints a version, cats ./trace.<n>.txt or ./trace.txt
-  # from cwd (n = its run count in that driver dir), exits with ./rc or 0, and exits 7 if NODE_OPTIONS reached it ---
+  # from cwd (n = its run count in that driver dir), in a cwd ending in /after also cats $FAKE_AFTER_EXTRA (when set),
+  # exits with ./rc or 0, and exits 7 if NODE_OPTIONS reached it ---
   local fk="$d/fk" D1 D2 out
   mkdir -p "$fk" "$d/cwd" "$d/tmp"
   printf '%s\n' "#!$BASH" 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
@@ -398,6 +464,7 @@ EOF
     'case "$1" in --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac' \
     'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"' \
     'if [ -f "./trace.$n.txt" ]; then cat "./trace.$n.txt"; elif [ -f ./trace.txt ]; then cat ./trace.txt; fi' \
+    'case "$PWD" in */after) if [ -n "${FAKE_AFTER_EXTRA:-}" ]; then cat "$FAKE_AFTER_EXTRA"; fi ;; esac' \
     'if [ -f ./rc ]; then exit "$(cat ./rc)"; fi' 'exit 0' >"$fk/node"
   chmod +x "$fk/node"
   # shim dirs put first on PATH: DIR/tee fails (exit 1) on the files under OUT/raw/ only (say() keeps the real tee);
@@ -496,6 +563,98 @@ EOF
   rf "a trace-file-names flag in --v8-flags" "--v8-flags must not set --trace_file_names: it changes the <JSFunction NAME" \
     --fn add --v8-flags=--trace_file_names "$D1" "$D2"
 
+  # --- ref / file modes end to end (lib/stage.sh): a temp git repo $d/st/R (m/trace.txt: r1 = T_MONO, r2 = T_DEOPT; a
+  # driver.js importing './trace.txt'); the fake node cats ./trace.txt from cwd = OUT/stage/<side>. tg isolates every
+  # git call (no editor, no global / system config, no hooks, no signing, the six GIT_* vars stage_check refuses
+  # unset) and sspawn runs this script with those six unset too, so the rows also run from inside a git hook. With no
+  # git on PATH, or a failed repo set-up, the 18 rows (S1-S4, R1-R14) are ONE FAIL line ---
+  local g="$d/st" R="$d/st/R" frz="$d/st/frz/trace.txt" top="" sr=0
+  local -a RR
+  tg() { env -u GIT_EDITOR -u EDITOR -u VISUAL -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_COMMON_DIR -u GIT_CEILING_DIRECTORIES GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    git -c core.hooksPath=/dev/null -c core.editor=false -c commit.gpgSign=false -c tag.gpgSign=false \
+    -c user.name=self-test -c user.email=self-test@example.invalid "$@"; }
+  sspawn() { ( unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; spawn "$@" ); }
+  if command -v git >/dev/null 2>&1; then
+    mkdir -p "$R/m" "$g/frz" "$g/hl" "$g/sd" "$g/shim4"
+    printf '%s\n' "import './trace.txt';" >"$R/driver.js"; printf '%s\n' '// imports nothing' >"$g/sd/noimp.js"
+    printf '%s\n' "$T_MONO" >"$R/m/trace.txt"; cp "$R/m/trace.txt" "$frz"; printf '%s\n' "$D10" >"$g/extra.txt"
+    { tg init -q "$R" && tg -C "$R" add driver.js m/trace.txt && tg -C "$R" commit -q -m r1 && tg -C "$R" tag r1 \
+      && printf '%s\n' "$T_DEOPT" >"$R/m/trace.txt" && tg -C "$R" commit -q -a -m r2 && tg -C "$R" tag r2 \
+      && ln "$R/m/trace.txt" "$g/hl/trace.txt" && top=$(tg -C "$R" rev-parse --show-toplevel); } >"$g/git.log" 2>&1 || sr=$?
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    check "ref / file modes: git on PATH (the 18 staged rows S1-S4, R1-R14 need git; no git fails closed)" "git not found on PATH" "git found"
+  elif [[ $sr != 0 ]]; then
+    check "ref / file modes: temp git repo set up (init, commits r1 r2, tags r1 r2)" "git exited $sr: $(tail -n 1 "$g/git.log")" "ok"
+  else
+    RR=(--module m/trace.txt --driver "$R/driver.js" --repo "$R")
+    check "S1 ref mode (temp git repo): --before-ref r1 --after-ref r2 -> exit 1 DIFF, 7 spawns, the before=0 after=1 line, 'mode    diff (ref)  runs 3', no NOTE" \
+      "$(sspawn - --out "$g/s1" --fn add --before-ref r1 --after-ref r2 "${RR[@]}")|$(has '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)')|$(has 'mode    diff (ref)  runs 3  v8 flags --trace-deopt-verbose --trace-opt --no-concurrent-recompilation')|$(grep -c -e '^NOTE ' "$d/sp.out" || true)" \
+      "1|VERDICT DIFF|7|1|1|0"
+    check "S2 ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the exact null-control NOTE" \
+      "$(sspawn - --out "$g/s2" --fn add --before-ref r1 --after-ref r1 "${RR[@]}")|$(has 'NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)')" \
+      "0|VERDICT SAME|7|1"
+    # a tee shim rewrites the live --after to the r1 text while before run 2 (driver run 3) runs: after runs 2 and 3
+    # still read the staged r2 copy, so a stage that aliased the live file would fail the after null control
+    printf '%s\n' "#!$BASH" "for a; do case \"\$a\" in */raw/before/run.2.txt) cp $(printf '%q' "$frz") $(printf '%q' "$R/m/trace.txt") || exit 9 ;; esac; done" \
+      "exec $(command -v tee) \"\$@\"" >"$g/shim4/tee"
+    chmod +x "$g/shim4/tee"
+    check "S3 file mode: --before a FROZEN r1 copy, --after the live tracked r2 file (rewritten to r1 at driver run 3) -> exit 1 DIFF; OUT holds exactly 11 files" \
+      "$(sspawn "PATH=$g/shim4:$PATH" --out "$g/s3" --fn add --before "$frz" --after "$R/m/trace.txt" --driver "$R/driver.js")|$(find "$g/s3" -type f | wc -l | tr -d ' ')|$(cmp -s "$frz" "$R/m/trace.txt" && echo rewritten || echo kept)" \
+      "1|VERDICT DIFF|7|11|rewritten"
+    printf '%s\n' "$T_DEOPT" >"$R/m/trace.txt"
+    check "S4 ref mode (MD-16): --before-ref r1 --after-ref r1 plus an after-only deopt -> exit 2, the DIFF line, then the byte-identical NO-VERDICT line" \
+      "$(sspawn "FAKE_AFTER_EXTRA=$g/extra.txt" --out "$g/s4" --fn add --before-ref r1 --after-ref r1 "${RR[@]}")|$(has '  add: DIFF -- deopt multiset differs (before 0 | after 1)')|$(has '  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise')" \
+      "2|VERDICT NO-VERDICT|7|1|1"
+    srf() { # LABEL DIE-TEXT OUT|- ENV|- args...: exit 2, 0 spawns, 'deopt-diff: DIE-TEXT' once and no other die line;
+      # OUT not created (an OUT that exists before the run is left as it was); '-' (no --out): cwd stays empty
+      local l="$1" f="$2" o="$3" pre="" s w t; shift 3
+      if [[ $o == - ]]; then t="nothing written"; w="cwd 0"
+      elif [[ -e $o ]]; then t="OUT left as it was"; w="OUT unchanged"; pre=$(find "$o" | sort; find "$o" -type f -exec cksum {} + | sort)
+      else t="no OUT"; w="no OUT"; fi
+      s=$(sspawn "$@")
+      s="$s|$(has "deopt-diff: $f")|$(grep -c -e '^deopt-diff: ' "$d/sp.out" || true)"
+      if [[ $o == - ]]; then s="$s|cwd $(ls -A "$d/cwd" | wc -l | tr -d ' ')"
+      elif [[ -n $pre ]]; then s="$s|OUT $([[ "$(find "$o" | sort; find "$o" -type f -exec cksum {} + | sort)" == "$pre" ]] && echo unchanged || echo changed)"
+      elif [[ -e $o ]]; then s="$s|OUT created"; else s="$s|no OUT"; fi
+      check "staged refusal $l -> exit 2, 0 spawns, its own die line once, $t" "$s" "2|VERDICT NO-VERDICT|0|1|1|$w"
+    }
+    srf "R1: --before-ref alone" "--before-ref and --after-ref go together" "$g/r1" - --out "$g/r1" --fn add --before-ref r1 "${RR[@]}"
+    srf "R2: --before alone" "--before and --after go together" "$g/r2" - --out "$g/r2" --fn add --before "$frz" --driver "$R/driver.js"
+    srf "R3: a ref pair and a file pair together" \
+      "--before-ref/--after-ref (ref mode) and --before/--after (file mode) are exclusive: give one pair" \
+      "$g/r3" - --out "$g/r3" --fn add --before-ref r1 --after-ref r2 "${RR[@]}" --before "$frz" --after "$R/m/trace.txt"
+    srf "R4: a positional DRIVER in ref mode" "ref mode takes no DRIVER paths (give --driver FILE), got 1" \
+      "$g/r4" - --out "$g/r4" --fn add --before-ref r1 --after-ref r2 "${RR[@]}" "$R/driver.js"
+    srf "R5: ref mode without --out" "ref mode needs --out DIR (the staged copies are written to DIR/stage)" \
+      - - --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+    srf "R6: --driver in driver mode" "--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after" \
+      "$g/r6" - --out "$g/r6" --fn add --driver "$R/driver.js" "$D1" "$D2"
+    srf "R7: a driver without the './trace.txt' import" "--driver must import './trace.txt' (the staged module beside it): $g/sd/noimp.js" \
+      "$g/r7" - --out "$g/r7" --fn add --before-ref r1 --after-ref r2 --module m/trace.txt --driver "$g/sd/noimp.js" --repo "$R"
+    srf "R8: a bad ref" "--before-ref: 'nosuch' is not a commit in $top (git fetch?)" \
+      "$g/r8" - --out "$g/r8" --fn add --before-ref nosuch --after-ref r2 "${RR[@]}"
+    srf "R9: a '..' --module" "--module must not have an empty, '.' or '..' segment, got 'm/../m/trace.txt'" \
+      "$g/r9" - --out "$g/r9" --fn add --before-ref r1 --after-ref r2 --module m/../m/trace.txt --driver "$R/driver.js" --repo "$R"
+    srf "R10: a git-tracked --before" \
+      "--before is a git-tracked working-tree file ($R/m/trace.txt): use a FROZEN copy (untracked) or --before-ref" \
+      "$g/r10" - --out "$g/r10" --fn add --before "$R/m/trace.txt" --after "$frz" --driver "$R/driver.js"
+    srf "R11: --before a hard link of --after" \
+      "--before and --after are the same file (hard link / symlink): --before must be a FROZEN copy" \
+      "$g/r11" - --out "$g/r11" --fn add --before "$g/hl/trace.txt" --after "$R/m/trace.txt" --driver "$R/driver.js"
+    srf "R12: GIT_DIR set" \
+      "GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES is set: unset it (ref mode finds each repo from its path)" \
+      "$g/r12" "GIT_DIR=$g/no-such.git" --out "$g/r12" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+    mkdir -p "$g/r13/stage/x"
+    srf "R13: a non-empty OUT/stage" "--out: $g/r13/stage is not empty (give a new or empty DIR)" \
+      "$g/r13" - --out "$g/r13" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+    mkdir -p "$g/r14"; printf 'x\n' >"$g/r14/stage"
+    srf "R14: OUT/stage a regular file" "--out: $g/r14/stage exists and is not a directory" \
+      "$g/r14" - --out "$g/r14" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+  fi
+
   rm -rf "$d"
   if [[ -n "$old" ]]; then trap -- "$old" EXIT; else trap - EXIT; fi
   echo
@@ -507,7 +666,8 @@ EOF
 # options (every check below runs before any node is spawned and before any disk write)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null
-OPTS="--fn --runs --node --v8-flags --out --self-test --help"
+BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; STAGE_SAME=0
+OPTS="--fn --runs --node --v8-flags --out --self-test --help --before-ref --after-ref --before --after --module --driver --repo"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 # @include lib/args.sh
 while [[ $# -gt 0 ]]; do
@@ -516,13 +676,15 @@ while [[ $# -gt 0 ]]; do
   case "$a" in
     -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
-    --fn|--runs|--node|--v8-flags|--out)
+    --fn|--runs|--node|--v8-flags|--out|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
       GOTOPT="$GOTOPT $a "
       if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
       [[ -n "$v" ]] || die "$a needs a non-empty value"
       case "$a" in
         --fn) FNLIST="$v" ;; --runs) RUNS="$v" ;; --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;;
+        --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;; --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
+        --module) MODULE="$v" ;; --driver) DRIVER="$v" ;; --repo) REPO="$v" ;;
       esac ;;
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
@@ -534,6 +696,8 @@ if [[ $SELFTEST == 1 ]]; then
   [[ -z "${GOTOPT// /}" && ${#POS[@]} -eq 0 ]] || die "--self-test takes no other argument"
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
+if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
+[[ $STAGED == 1 || -z "$DRIVER$MODULE$REPO" ]] || die "--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after"
 [[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--fn / --v8-flags / --out / --node: a newline is not allowed"
 [[ -n "$FNLIST" ]] || die "need --fn LIST (see --help)"
 [[ "$FNLIST" != ,* && "$FNLIST" != *, && "$FNLIST" != *,,* ]] || die "--fn: empty entry (stray comma)"
@@ -558,10 +722,15 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       die "--v8-flags must not set $f: it changes the <JSFunction NAME (sfi = ...)> text the records are read from" ;;
   esac
 done
-[[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
-[[ "${POS[0]}${POS[1]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
-[[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
-[[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
+if [[ $STAGED == 1 ]]; then
+  [[ -z $OUT || ! -e $OUT/stage || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
+  stage_check   # lib/stage.sh: every ref / file refusal, before any disk write (--out is required)
+else
+  [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
+  [[ "${POS[0]}${POS[1]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
+  [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
+  [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
+fi
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
@@ -569,10 +738,12 @@ if [[ -n "$OUT" ]]; then
 fi
 command -v "$NODE_BIN" >/dev/null 2>&1 || die "node binary not found: $NODE_BIN"
 if [[ "$NODE_BIN" == */* ]]; then NODE_BIN="$(cd "$(dirname "$NODE_BIN")" && pwd)/$(basename "$NODE_BIN")"; fi
-DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
-DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
-DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
-DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
+if [[ $STAGED == 0 ]]; then
+  DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
+  DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
+  DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
+  DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
+fi
 
 # --- every refusal is above this line; spawns start here: --version, then disk writes (--out only), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
@@ -581,10 +752,21 @@ if [[ -n "$OUT" ]]; then
   OUT=$(cd "$OUT" && pwd)
   REPORT="$OUT/report.txt"; : >"$REPORT"
 fi
+MODE=diff
+if [[ $STAGED == 1 ]]; then
+  stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver
+  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")
+  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
+  MODE="diff ($STAGE_MODE)"
+fi
 say "deopt-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
 say "before  $DESC_B"
 say "after   $DESC_A"
-say "mode    diff  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }${TRACE_FLAGS[*]}"
+if [[ $STAGED == 1 ]]; then
+  say "driver  $DESC_D"
+  if [[ $STAGE_SAME == 1 ]]; then say "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)"; fi
+fi
+say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }${TRACE_FLAGS[*]}"
 if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 say ""
 
@@ -614,6 +796,10 @@ done
 
 VERDICT=SAME
 for fn in "${TARGETS[@]}"; do diff_fn "$fn"; done
+if [[ $STAGED == 1 && $STAGE_SAME == 1 && $VERDICT == DIFF ]]; then   # MD-16: both sides are the same program
+  say "  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise"
+  VERDICT=NO-VERDICT
+fi
 say ""
 say "VERDICT $VERDICT"
 FINAL=1; case "$VERDICT" in SAME) exit 0 ;; DIFF) exit 1 ;; *) exit 2 ;; esac

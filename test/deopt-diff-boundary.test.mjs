@@ -203,13 +203,13 @@ function assertNoDirs(r) {
     assert.deepEqual(r.cwd, [], 'cwd holds entries');
     assert.deepEqual(r.tmpdir, [], 'TMPDIR holds entries');
 }
-test('A5: --self-test under a logging mktemp shim -> 53 ok, every logged dir gone, cwd and TMPDIR empty', { skip }, async () => {
+test('A5: --self-test under a logging mktemp shim -> all checks ok, every logged dir gone, cwd and TMPDIR empty', { skip }, async () => {
     const r = await selfTestRun(SCRIPT);
     assert.equal(r.status, 0, r.out);
     assert.match(r.out, /^self-test: \d+ check\(s\) ok$/m);
     assertNoDirs(r);
 });
-test('A5 teeth: mutant final-rm-dropped -> the self-test still passes 53/53 but its logged dir survives (red)', { skip }, async () => {
+test('A5 teeth: mutant final-rm-dropped -> the self-test still passes (every check ok) but its logged dir survives (red)', { skip }, async () => {
     const dir = tmp('dd-stm-');
     try {
         const r = await selfTestRun(variant(dir, 'no_final_rm', [['  rm -rf "$d"\n  if [[ -n "$old" ]]; then trap', '  if [[ -n "$old" ]]; then trap']]));
