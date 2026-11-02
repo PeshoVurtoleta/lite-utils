@@ -2,10 +2,14 @@
 # bytecode-budget.sh -- the bytecode LENGTH of NAMED functions on one node binary: a REPORT, or a GATE
 # against per-function maxima recorded on a known node version.
 # Or a DIFF (--diff): the same functions in two DRIVERs on that binary, their length multisets compared.
+# Ref / file mode of the diff: ONE module file per side (two git refs, or a frozen copy and the live file), each
+# staged beside a copy of ONE driver.
 #
 #   bytecode-budget.sh [opts] --fn LIST DRIVER                                   # report
 #   bytecode-budget.sh [opts] --max fn=N[,fn=N] --node-version vX.Y.Z DRIVER     # gate
 #   bytecode-budget.sh [opts] --diff --fn LIST DRIVER_BEFORE DRIVER_AFTER          # diff
+#   bytecode-budget.sh [opts] --diff --fn LIST --out DIR --driver FILE --before-ref REF --after-ref REF --module REL  # diff (ref)
+#   bytecode-budget.sh [opts] --diff --fn LIST --out DIR --driver FILE --before FILE --after FILE      # diff (file)
 #
 #   e.g. bytecode-budget.sh --max add=6,mid=211 --node-version v26.8.2 test/fixtures/bytecode-budget/node-26.8.2/driver.mjs
 #
@@ -27,7 +31,20 @@
 #                          written to disk.
 #                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
 #   --diff                 diff mode: probe DRIVER_BEFORE and DRIVER_AFTER (run k of each side, k = 1..N, in turn)
-#                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs.
+#                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs, or a
+#                          ref / file pair below (then no DRIVER: --driver FILE and --out DIR).
+#   --before-ref REF       ref mode (with --diff): the before side is --module as committed at REF (a commit-ish,
+#                          resolved to its full sha; never starting with -). Goes with --after-ref.
+#   --after-ref REF        ref mode: the after side, the same way. Both refs are required.
+#   --module REL           ref mode (required): the module's path from the repo root (e.g. src/Thing.js): relative,
+#                          no empty, . or .. segment; at each ref it must be a blob (`git cat-file -t`).
+#   --before FILE          file mode (with --diff): the before module, a FROZEN copy (see Frozen "before" below).
+#                          Goes with --after; never with --before-ref / --after-ref, never with --module.
+#   --after FILE           file mode: the after module (the live working-tree file may be given); NAME = its file name.
+#   --driver FILE          ref / file mode (required): ONE driver that imports the module as './NAME' or "./NAME"
+#                          (NAME = the file name of --module, or of --after); its own file name must differ from NAME.
+#   --repo DIR             the git repo. Ref mode: the refs and --module are read there (default: the repo around the
+#                          current directory). File mode: one more <top> for the Frozen "before" check below.
 #   --self-test            canned checks, then exit 0 (all ok) or 1 (a FAIL line per failed check)
 #   --fixtures DIR         with --self-test: also check the real-trace captures in DIR (the node-26.8.2 set)
 #   -h, --help             this text (exit 2)
@@ -36,6 +53,8 @@
 #   only --fixtures. --self-test / --help take no =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
+#   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; their values take
+#   no newline.
 #
 # DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
 #   `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
@@ -81,6 +100,28 @@
 #   --v8-options, then fn x runs probes.
 # Diff verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. Spawns: one --version,
 #   one --v8-options, then fn x runs x 2 probes. --diff with --max, or not exactly two DRIVERs, exits 2 before any spawn.
+#   (Ref / file mode: no DRIVER; any DRIVER path exits 2 before any spawn.)
+# Ref / file mode: --out DIR is required and DIR/stage must be absent or empty. Before any probe, DIR/stage/before and
+#   DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
+#   textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each side's
+#   driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its own
+#   fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
+#   or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
+#   "driver  <abs --driver>  sha256/8 <x>", and when the two staged modules are byte-identical
+#   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
+#   The mode line says "diff (ref)" or "diff (file)". Spawns, lines and verdict as in diff mode; DIR holds report.txt,
+#   raw/ and stage/. Every ref / file refusal exits 2 before any spawn and before anything is written to DIR.
+# Frozen "before" (file mode): --before must be a FROZEN copy. It is refused with NO-VERDICT when it, or the end of
+#   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js or
+#   <top>/<same name>, <top> = the repo around the current directory, around --after, around --before and its link
+#   target, and --repo; or when it is the same file as --after (-ef: a hard link or symlink, anywhere). Ref and file
+#   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+#   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
+#   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
+# Not detected: a driver that reaches the live module by another path (an absolute path, or a package
+#   self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
+#   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
+#   reads as untracked, so a tracked --before behind such an error is not refused.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
 #   one driver, the gate is pinned to that node version (--node-version) and any run-to-run change is
 #   NO-VERDICT, never OVER -- and --self-test (canned text; with --fixtures, the recorded node v26.8.2
@@ -88,6 +129,9 @@
 #   --v8-flags), a measurement of that binary, not a law.
 # Tier (diff mode): DETERMINISTIC on the same terms: both DRIVERs on one node binary, and any run-to-run change
 #   on either side is NO-VERDICT, never DIFF.
+# Tier (ref / file mode): DETERMINISTIC on the same terms (one node binary; each staged side keeps its null control),
+#   gated in npm test by the --self-test ref / file rows (a temp git repo and a fake node; with no git on PATH they
+#   are one FAIL line and --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
 set -euo pipefail
@@ -560,6 +604,58 @@ self_test() {
   done
   check "diff refusals before any spawn (exit 2, 0 spawns): --diff with --max, 1 DRIVER, 3 DRIVERs, --diff=x, --diff twice, no --fn, a missing DRIVER_AFTER" \
     "$got" "2:0 2:0 2:0 2:0 2:0 2:0 2:0 "
+
+  # --- ref / file modes end to end (lib/stage.sh): a temp git repo (m/mid.txt: r1 = 211, r2 = 212), every git call
+  # isolated (no global / system config, no hooks, no signing); the fake node cats ./mid.txt from cwd = the stage dir.
+  # The six GIT_* vars stage_check refuses are unset for these rows, so they also run from inside a git hook.
+  if command -v git >/dev/null 2>&1; then
+    local R="$d/repo" sd="$d/sdrv/driver.mjs" frz="$d/frz/mid.txt" sr=0
+    local -a RR
+    tg() { (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t \
+        -c commit.gpgsign=false "$@"); }
+    sspawn() { (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; spawn "$@"); }
+    rf() { out=$(sspawn "$@"); got="$got${out%%|*}:${out##*|} "; }
+    mkdir -p "$R/m" "$d/sdrv" "$d/frz/deep"
+    printf '%s\n' "import './mid.txt';" >"$sd"; printf '%s\n' '// imports nothing' >"$d/sdrv/noimp.mjs"
+    { hdr mid 1; echo 'Bytecode length: 211'; } >"$R/m/mid.txt"
+    { tg init -q "$R" && tg -C "$R" add m/mid.txt && tg -C "$R" commit -q -m r1 && tg -C "$R" tag r1 \
+      && { hdr mid 1; echo 'Bytecode length: 212'; } >"$R/m/mid.txt" && tg -C "$R" commit -q -a -m r2 && tg -C "$R" tag r2 \
+      && tg -C "$R" cat-file blob r1:m/mid.txt >"$frz" && ln "$R/m/mid.txt" "$d/frz/deep/renamed.txt" \
+      && tg init -q "$d/other"; } >"$d/git.log" 2>&1 || sr=$?
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    check "ref / file modes: git on PATH (their rows need git; MD-7: no git fails closed)" "git not found on PATH" "git found"
+  elif [[ $sr != 0 ]]; then
+    check "ref / file modes: temp git repo set up (init, commits r1 r2, tags)" "git exited $sr: $(tail -n 1 "$d/git.log")" "ok"
+  else
+    check "ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 6 spawns, before=1 after=0  211" \
+      "$(sspawn - --out "$d/sr1" --diff --fn mid --before-ref r1 --after-ref r2 --module m/mid.txt --driver "$sd" --repo "$R")|$(has '^    before=1 after=0  211$')" \
+      "1|VERDICT DIFF|6|1"
+    check "ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the null-control NOTE" \
+      "$(sspawn - --out "$d/sr2" --diff --fn mid --before-ref r1 --after-ref r1 --module m/mid.txt --driver "$sd" --repo "$R")|$(has '^NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)$')" \
+      "0|VERDICT SAME|6|1"
+    check "file mode: --before a FROZEN copy (r1, 211) --after the live tracked m/mid.txt (212) -> exit 1 DIFF; OUT holds 9 files (report.txt, raw 2 + 2, stage 2 + 2)" \
+      "$(sspawn - --out "$d/sf" --diff --fn mid --before "$frz" --after "$R/m/mid.txt" --driver "$sd")|$(find "$d/sf" -type f | wc -l | tr -d ' ')" \
+      "1|VERDICT DIFF|6|9"
+    got=""; RR=(--before-ref r1 --after-ref r2 --module m/mid.txt --driver "$sd" --repo "$R")
+    rf - --diff --fn mid --out "$d/rf1" --before-ref r1 --module m/mid.txt --driver "$sd" --repo "$R"; got="${got% }+$(has '^bytecode-budget: --before-ref and --after-ref go together$') "
+    rf - --fn mid --out "$d/rf2" "${RR[@]}"; got="${got% }+$(has '^bytecode-budget: --before-ref/--after-ref and --before/--after need --diff ') "
+    rf - --diff --fn mid "${RR[@]}"; got="${got% }+$(has '^bytecode-budget: ref mode needs --out DIR') "
+    rf - --diff --fn mid --out "$d/rf3" --before-ref r1 --after-ref r2 --module m/mid.txt --driver "$d/sdrv/noimp.mjs" --repo "$R"
+    rf - --diff --fn mid --out "$d/rf4" --before-ref nosuch --after-ref r2 --module m/mid.txt --driver "$sd" --repo "$R"
+    rf - --diff --fn mid --out "$d/rf5" --before-ref r1 --after-ref r2 --module m/../m/mid.txt --driver "$sd" --repo "$R"; got="${got% }+$(has "^bytecode-budget: --module must not have an empty, '.' or '..' segment, got 'm/../m/mid.txt'$") "
+    rf - --diff --fn mid --out "$d/rf6" "${RR[@]}" --before "$frz" --after "$R/m/mid.txt"
+    rf - --diff --fn mid --out "$d/rf7" --before "$R/m/mid.txt" --after "$frz" --driver "$sd"
+    rf - --diff --fn mid --out "$d/rf8" --before "$d/frz/deep/renamed.txt" --after "$R/m/mid.txt" --driver "$sd"
+    rf GIT_DIR="$d/other/.git" --diff --fn mid --out "$d/rf9" --before "$R/m/mid.txt" --after "$frz" --driver "$sd"
+    rf GIT_INDEX_FILE="$d/noindex" --diff --fn mid --out "$d/rf10" --before "$R/m/mid.txt" --after "$frz" --driver "$sd"
+    mkdir -p "$d/sne/stage/x"; rf - --diff --fn mid --out "$d/sne" "${RR[@]}"
+    check "ref / file refusals before any spawn (exit 2, 0 spawns, no OUT dir): --before-ref alone, no --diff, no --out (+1: its line says 'needs --out'), a driver without './mid.txt', a bad ref, a '..' --module, ref + file pairs, a tracked --before, --before a hard link of --after, GIT_DIR / GIT_INDEX_FILE set + a tracked --before, a non-empty OUT/stage (left as it was)" \
+      "$got|$(find "$d" -maxdepth 1 -name 'rf*' | wc -l | tr -d ' ')|$(ls -A "$d/sne")" \
+      "2:0+1 2:0+1 2:0+1 2:0 2:0 2:0+1 2:0 2:0 2:0 2:0 2:0 2:0 |0|stage"
+  fi
 
   if [[ -n "$FIXTURES" ]]; then
     # TASK 0 census (grep -A1 over the captures, no script awk): every matched header has its length line.
