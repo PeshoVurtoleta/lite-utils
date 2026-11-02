@@ -44,6 +44,28 @@ function variantAll(dir, name, from, to) {
     return p;
 }
 
+// Env for the retention rows: the harness editor / node options stripped, TMPDIR pinned.
+function cleanEnv(extra = {}) {
+    const e = { ...process.env, ...extra };
+    for (const k of ['GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS']) delete e[k];
+    return e;
+}
+
+// A logging mktemp shim first on PATH. macOS /usr/bin/mktemp ignores TMPDIR when called bare, so a private
+// TMPDIR cannot see a leaked bare `mktemp -d`; the shim logs "args<TAB>created path" and execs the real one.
+// The shim only sees a mktemp found through PATH (an absolute /usr/bin/mktemp or `command -p mktemp` call would bypass it).
+function mktempShim(dir) {
+    const real = spawnSync('bash', ['-c', 'command -v mktemp'], { encoding: 'utf8' }).stdout.trim();
+    assert.ok(real, 'no real mktemp on PATH');
+    const bin = join(dir, 'shim-bin');
+    mkdirSync(bin);
+    const log = join(dir, 'mktemp.log');
+    writeFileSync(log, '');
+    writeFileSync(join(bin, 'mktemp'), `#!/bin/bash\np=$('${real}' "$@") || exit $?\nprintf '%s\\t%s\\n' "$*" "$p" >>'${log}'\nprintf '%s\\n' "$p"\n`);
+    chmodSync(join(bin, 'mktemp'), 0o755);
+    return { real, env: { PATH: bin + ':' + process.env.PATH }, paths: () => readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t')[1]) };
+}
+
 // ---- A2: self-test ----
 test('bytecode-budget --self-test: exactly C ok, none failed', { skip }, () => {
     const r = run(SCRIPT, ['--self-test']);
@@ -365,17 +387,36 @@ test('bytecode-budget: an invalid fn spawns nothing', { skip }, () => {
     assert.equal(spawns.length, 0, spawns.join('\n'));
 });
 
-test('bytecode-budget: 20 runs without --out leave a private TMPDIR empty', { skip }, () => {
+// bytecode-budget.sh calls mktemp only in --self-test, so a gate run must log ZERO shim calls (retention proof).
+test('bytecode-budget: 20 runs without --out leave a private TMPDIR empty and call no mktemp', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-fake-'));
     const tmp = mkdtempSync(join(tmpdir(), 'bb-tmpdir-'));
     try {
         const f = fakeNode(dir);
+        const sh = mktempShim(dir);
         for (let i = 0; i < 20; i++) {
-            const r = run(SCRIPT, ['--node', f.path, '--max', 'add=6', ...NV, DRIVER], { env: { ...process.env, TMPDIR: tmp } });
+            const r = run(SCRIPT, ['--node', f.path, '--max', 'add=6', ...NV, DRIVER], { env: cleanEnv({ TMPDIR: tmp, ...sh.env }) });
             assert.equal(r.status, 0, r.stdout + r.stderr);
         }
         assert.deepEqual(readdirSync(tmp), []);
+        assert.deepEqual(sh.paths(), []);
     } finally { rmSync(dir, { recursive: true, force: true }); rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// Teeth: a bare `mktemp -d` that is never removed. The shim sees it; (on macOS) the private TMPDIR does not.
+test('bytecode-budget: mutant with a leaked bare mktemp -d is caught by the shim (TMPDIR is blind on macOS)', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-fake-'));
+    const tmp = mkdtempSync(join(tmpdir(), 'bb-tmpdir-'));
+    let sh = { paths: () => [] };
+    try {
+        sh = mktempShim(dir);
+        const f = fakeNode(dir);
+        const p = variant(dir, 'leak-mktemp', "trap 'rc=$?; if [[ -z $FINAL", "mktemp -d >/dev/null\ntrap 'rc=$?; if [[ -z $FINAL");
+        const r = run(p, ['--node', f.path, '--max', 'add=6', ...NV, DRIVER], { env: cleanEnv({ TMPDIR: tmp, ...sh.env }) });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.ok(sh.paths().filter((x) => existsSync(x)).length >= 1, 'shim saw no leaked path');
+        if (process.platform === 'darwin' && sh.real === '/usr/bin/mktemp') assert.deepEqual(readdirSync(tmp), []);
+    } finally { for (const x of sh.paths()) rmSync(x, { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }); rmSync(tmp, { recursive: true, force: true }); }
 });
 
 test('bytecode-budget --out DIR: report.txt + raw/ with exactly 6 files (3 fns x 2 runs)', { skip }, () => {
@@ -576,18 +617,36 @@ test('bytecode-budget diff MUTANT: deleting the --diff/--max exclusion check let
 });
 
 // ---- A4: retention ----
-test('bytecode-budget diff: 20 runs without --out leave 0 new entries in a private TMPDIR and cwd', { skip }, () => {
+// The diff path never calls mktemp either (only --self-test does): the shim log must stay empty.
+test('bytecode-budget diff: 20 runs without --out leave 0 new entries in a private TMPDIR and cwd, no mktemp', { skip }, () => {
     const s = diffSetup(same('add', [6]));
     const tmp = mkdtempSync(join(tmpdir(), 'bb-dtmp-'));
     const cwd = mkdtempSync(join(tmpdir(), 'bb-dcwd-'));
+    const shd = mkdtempSync(join(tmpdir(), 'bb-dshim-'));   // shim files live outside TMPDIR and cwd
     try {
+        const sh = mktempShim(shd);
         for (let i = 0; i < 20; i++) {
-            const r = run(SCRIPT, ['--diff', '--node', s.node, '--fn', 'add', s.B, s.A], { env: { ...process.env, TMPDIR: tmp }, cwd });
+            const r = run(SCRIPT, ['--diff', '--node', s.node, '--fn', 'add', s.B, s.A], { env: cleanEnv({ TMPDIR: tmp, ...sh.env }), cwd });
             assert.equal(r.status, 0, r.stdout + r.stderr);
         }
         assert.deepEqual(readdirSync(tmp), []);
         assert.deepEqual(readdirSync(cwd), []);
-    } finally { s.done(); rmSync(tmp, { recursive: true, force: true }); rmSync(cwd, { recursive: true, force: true }); }
+        assert.deepEqual(sh.paths(), []);
+    } finally { s.done(); rmSync(tmp, { recursive: true, force: true }); rmSync(cwd, { recursive: true, force: true }); rmSync(shd, { recursive: true, force: true }); }
+});
+test('bytecode-budget diff: mutant with a leaked bare mktemp -d is caught by the shim (TMPDIR is blind on macOS)', { skip }, () => {
+    const s = diffSetup(same('add', [6]));
+    const tmp = mkdtempSync(join(tmpdir(), 'bb-dtmp-'));
+    const dir = mkdtempSync(join(tmpdir(), 'bb-fake-'));
+    let sh = { paths: () => [] };
+    try {
+        sh = mktempShim(dir);
+        const p = variant(dir, 'diff-leak-mktemp', "trap 'rc=$?; if [[ -z $FINAL", "mktemp -d >/dev/null\ntrap 'rc=$?; if [[ -z $FINAL");
+        const r = run(p, ['--diff', '--node', s.node, '--fn', 'add', s.B, s.A], { env: cleanEnv({ TMPDIR: tmp, ...sh.env }) });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.ok(sh.paths().filter((x) => existsSync(x)).length >= 1, 'shim saw no leaked path');
+        if (process.platform === 'darwin' && sh.real === '/usr/bin/mktemp') assert.deepEqual(readdirSync(tmp), []);
+    } finally { for (const x of sh.paths()) rmSync(x, { recursive: true, force: true }); s.done(); rmSync(dir, { recursive: true, force: true }); rmSync(tmp, { recursive: true, force: true }); }
 });
 test('bytecode-budget diff --out: report.txt + raw/before 6 files + raw/after 6 files (3 fns x 2 runs)', { skip }, () => {
     const l = { add: [6], mid: [211], dup: [6, 19] };
