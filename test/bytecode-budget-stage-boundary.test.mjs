@@ -1,0 +1,447 @@
+// test/bytecode-budget-stage-boundary.test.mjs -- QA boundary rows for ../bytecode-budget.sh ref + file staging
+// (P2G2 group 2b, lib/stage.sh). Oracle: PLAN-phase2-g2b.md ASSERTIONS A1-A5 + ADDENDA A1-A4, not the code.
+// Helpers copied from bytecode-budget-stage.test.mjs (this file does not import or edit it).
+// Teeth: every row of NEW (group 2b) behaviour also runs on the pre-staging build (`git show 6835177:bytecode-budget.sh`,
+// sha256/8 9173830d), where it must exit 2 "unknown option --before(-ref)" AND its own check must go red. Rows that
+// pin a KNOWN GAP or a pre-existing behaviour say so, and each has a named one-edit mutant of a copy (exact-once
+// string edit, abort otherwise) that the row must be red on (row 2 has none: its fix is the deferred ls-tree mode FILLER).
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, lstatSync, symlinkSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
+const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
+const GITVARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES'];
+const gv = spawnSync('git', ['--version'], { encoding: 'utf8' });
+const haveGit = gv.status === 0;
+const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : (haveGit ? false : 'git not available');
+const GITC = ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgSign=false'];
+const GITVER = haveGit ? (gv.stdout.match(/(\d+)\.(\d+)/) || []).slice(1).map(Number) : [];
+
+function cleanEnv() {
+    const e = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    for (const k of GITVARS) delete e[k];
+    return e;
+}
+function git(cwd, ...a) {
+    const r = spawnSync('git', [...GITC, ...a], { cwd, encoding: 'utf8', env: cleanEnv() });
+    assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+}
+const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const S211 = sha8('211\n'), S212 = sha8('212\n'), S213 = sha8('213\n');
+
+// ---- shared fixtures. REPO: src/mod.js r1 = 211, r2 = 212 (+ a tracked symlink src/link.js -> mod.js), tags r1 / r2,
+// annotated tag ar1 (-> r1), branches at r1 / r2 with odd but legal names. AMB: as REPO plus a BRANCH r1 at r2.
+// REP: as REPO with `git replace` of r1's mod.js blob (211) by a 213 blob.
+const ROOT = mkdtempSync(join(tmpdir(), 'bbsb-root-'));
+after(() => rmSync(ROOT, { recursive: true, force: true }));
+const REPO = join(ROOT, 'repo'), AMB = join(ROOT, 'amb'), REP = join(ROOT, 'rep');
+const DRV = join(ROOT, 'drv', 'driver.mjs');            // imports './mod.js'
+const DRV_LINK = join(ROOT, 'drv', 'ld.mjs');           // imports './link.js'
+const DRV_DASH = join(ROOT, 'drv', 'dm.mjs');           // imports './-mod.js'
+const DRV_MY = join(ROOT, 'drv', 'mymod.js');           // file name CONTAINS mod.js, imports './mod.js'
+const DRV_SUF = join(ROOT, 'drv', 'mod.js.driver.mjs'); // file name STARTS with mod.js, imports './mod.js'
+const FROZEN = join(ROOT, 'frozen', 'mod.js');          // untracked, 211
+const ODD_B = "a'b\"$c;d", ODD_A = 'x#y@z!%\u00fc';      // legal ref names with shell-active / non-ASCII bytes
+const SHA = {};
+function mkRepo(dir) {
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    git(dir, 'init', '-q');
+    writeFileSync(join(dir, 'src', 'mod.js'), '211\n'); symlinkSync('mod.js', join(dir, 'src', 'link.js'));
+    git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'r1'); git(dir, 'tag', 'r1'); git(dir, 'tag', '-a', '-m', 'ann', 'ar1');
+    writeFileSync(join(dir, 'src', 'mod.js'), '212\n'); git(dir, 'commit', '-q', '-a', '-m', 'r2'); git(dir, 'tag', 'r2');
+}
+if (!skip) try {
+    for (const d of ['drv', 'frozen']) mkdirSync(join(ROOT, d));
+    mkRepo(REPO); mkRepo(AMB); mkRepo(REP);
+    SHA.r1 = git(REPO, 'rev-parse', 'r1^{commit}'); SHA.r2 = git(REPO, 'rev-parse', 'r2^{commit}'); SHA.ar1obj = git(REPO, 'rev-parse', 'ar1');
+    git(REPO, 'branch', 'b1', 'r1'); git(REPO, 'branch', '--', ODD_B, 'r1'); git(REPO, 'branch', '--', ODD_A, 'r2');
+    git(AMB, 'branch', 'r1', 'r2');                     // tag r1 (211) and branch r1 (212): ambiguous short name
+    SHA.ambR1 = git(AMB, 'rev-parse', 'refs/tags/r1^{commit}');
+    SHA.repR1 = git(REP, 'rev-parse', 'r1^{commit}');
+    const blob = git(REP, 'rev-parse', 'r1:src/mod.js');
+    const r = spawnSync('git', [...GITC, 'hash-object', '-w', '--stdin'], { cwd: REP, input: '213\n', encoding: 'utf8', env: cleanEnv() });
+    git(REP, 'replace', blob, r.stdout.trim());
+    for (const [p, imp] of [[DRV, 'mod.js'], [DRV_LINK, 'link.js'], [DRV_DASH, '-mod.js'], [DRV_MY, 'mod.js'], [DRV_SUF, 'mod.js']]) writeFileSync(p, `import './${imp}';\n`);
+    writeFileSync(FROZEN, '211\n');
+} catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
+
+// ---- the pre-staging build (teeth) ----
+const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '6835177:bytecode-budget.sh'], { env: cleanEnv() });
+const haveBase = baseSrc.status === 0 ? true : 'git show 6835177:bytecode-budget.sh failed (shallow clone or no git history)';
+let BASE = null;
+if (haveBase === true) {
+    if (sha8(baseSrc.stdout) !== '9173830d') { rmSync(ROOT, { recursive: true, force: true }); assert.fail('pre-staging base is not 9173830d'); }
+    BASE = join(ROOT, 'base-9173830d.sh');
+    writeFileSync(BASE, baseSrc.stdout); chmodSync(BASE, 0o755);
+}
+const baseSkip = skip || (haveBase === true ? false : haveBase);
+
+// ---- mutants: exact-once edits of a copy of the built script ----
+function variant(name, edits) {
+    let src = readFileSync(SCRIPT, 'utf8');
+    for (const [from, to] of edits) {
+        const n = src.split(from).length - 1;
+        assert.equal(n, 1, `mutant ${name}: anchor must match exactly once, matched ${n}: ${from}`);
+        src = src.replace(from, () => to);
+    }
+    const p = join(ROOT, `${name}.sh`);
+    writeFileSync(p, src); chmodSync(p, 0o755);
+    return p;
+}
+
+// ---- one case = one fresh dir. The fake node counts spawns and prints ./$FAKE_MOD (default mod.js) as the length;
+// a non-numeric module (e.g. a staged symlink's target text) makes it exit 1 like a driver that fails to load.
+function mkCase() {
+    const dir = mkdtempSync(join(ROOT, 'c-'));
+    const log = join(dir, 'argv.log');
+    const node = join(dir, 'node');
+    writeFileSync(node, `#!/bin/sh
+echo "$*" >> ${JSON.stringify(log)}
+case "$1" in
+  --version) echo v26.8.2; exit 0 ;;
+  --v8-options) cat ${JSON.stringify(join(FIX, 'v8-options-excerpt.txt'))}; exit 0 ;;
+esac
+fn=
+for a in "$@"; do case "$a" in --print-bytecode-filter=*) fn="\${a#--print-bytecode-filter=}" ;; esac; done
+len=$(tr -d ' \\n' < "./\${FAKE_MOD:-mod.js}")
+case "$len" in ''|*[!0-9]*) echo "SyntaxError: cannot load module: $len" >&2; exit 1 ;; esac
+printf '[generated bytecode for function: %s (0x1 <SharedFunctionInfo %s>)]\\nBytecode length: %s\\nParameter count 1\\n' "$fn" "$fn" "$len"
+`);
+    chmodSync(node, 0o755);
+    const c = { dir, node, cwd: join(dir, 'cwd'), tmp: join(dir, 'tmp'), live: join(dir, 'live', 'mod.js'), out: join(dir, 'out') };
+    mkdirSync(c.cwd); mkdirSync(c.tmp); mkdirSync(join(dir, 'live'));
+    writeFileSync(c.live, '212\n');
+    c.spawns = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
+    return c;
+}
+function runOn(script, cs) {
+    const c = mkCase();
+    if (cs.prep) cs.prep(c);
+    const env = { ...cleanEnv(), TMPDIR: c.tmp, ...(cs.env ? cs.env(c) : {}) };
+    const r = spawnSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', timeout: 120000, cwd: c.cwd, env });
+    return { c, r };
+}
+function flat(o) { const a = []; for (const [k, v] of Object.entries(o)) if (v !== null) a.push(k, v); return a; }
+const COMMON = (c, fn = 'mid') => ['--diff', '--node', c.node, '--fn', fn, '--runs', '2'];
+// the staged option comes FIRST in argv, so the pre-staging build dies on it
+const refO = (c, over = {}, fn) => [...flat({ '--before-ref': 'r1', '--after-ref': 'r2', '--module': 'src/mod.js', '--driver': DRV, '--repo': REPO, '--out': c.out, ...over }), ...COMMON(c, fn)];
+const fileO = (c, over = {}, fn) => [...flat({ '--before': FROZEN, '--after': c.live, '--driver': DRV, '--out': c.out, ...over }), ...COMMON(c, fn)];
+const msg = (r) => `rc=${r.status} sig=${r.signal}\n${r.stdout}${r.stderr}`;
+function walk(d) { return readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? [join(d, e.name) + '/', ...walk(join(d, e.name))] : [join(d, e.name)])); }
+const files = (d) => walk(d).filter((f) => !f.endsWith('/')).map((f) => f.slice(d.length + 1)).sort();
+const snap = (d) => walk(d).sort().map((f) => (f.endsWith('/') ? f.slice(d.length) : `${f.slice(d.length)}=${readFileSync(f, 'utf8')}`)).join('|');
+
+const TWIN = /^bytecode-budget: unknown option --before(-ref)? \(see --help\)\nVERDICT NO-VERDICT$/m;
+function row(name, cs) {
+    test(`stage boundary: ${name}`, { skip }, () => { const { c, r } = runOn(SCRIPT, cs); cs.check(c, r); });
+    test(`stage boundary teeth: [${name}] exits 2 'unknown option --before(-ref)' on 9173830d and its check goes red`, { skip: baseSkip }, () => {
+        const { c, r } = runOn(BASE, cs);
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stderr, TWIN);
+        assert.throws(() => cs.check(c, r), assert.AssertionError, 'the row check must be red on the pre-staging build');
+    });
+    return cs;
+}
+function mutant(name, desc, edits, cs, observe) {
+    test(`stage boundary MUTANT ${name} (${desc}): its row goes red`, { skip }, (t) => {
+        const { c, r } = runOn(variant(name, edits), cs);
+        t.diagnostic(`${name}: rc=${r.status} stderr=${JSON.stringify(r.stderr.trim().slice(0, 200))}`);
+        assert.throws(() => cs.check(c, r), assert.AssertionError, `${name}: the row still passes on the mutant`);
+        if (observe) observe(c, r);
+    });
+}
+// A3-style refusal: exit 2, the anchored die line, VERDICT NO-VERDICT, 0 node spawns, OUT not created
+function refuses(lineFn) {
+    return (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stderr, new RegExp(`^bytecode-budget: ${lineFn(c)}\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
+        assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+        assert.ok(!existsSync(c.out), 'OUT was created');
+    };
+}
+const verdict = (rc, v) => (r) => { assert.equal(r.status, rc, msg(r)); assert.match(r.stdout, new RegExp(`^VERDICT ${v}$`, 'm'), msg(r)); };
+const descB = (ref, sha, s8) => new RegExp(`^before  ${reEsc(ref)} @ ${sha.slice(0, 12)}  src/mod\\.js  sha256/8 ${s8}$`, 'm');
+const descA = (ref, sha, s8) => new RegExp(`^after   ${reEsc(ref)} @ ${sha.slice(0, 12)}  src/mod\\.js  sha256/8 ${s8}$`, 'm');
+const CNT_B211 = '\n    before=1 after=0  211\n';
+
+// =====================================================================================================
+// 1. ref spellings: tag, branch, full 40-hex sha, abbreviated sha, annotated tag -> the same DIFF; DESC = commit sha/12
+// =====================================================================================================
+const spell = (label, ref) => row(`1 ref spelling: --before-ref ${label} -> exit 1 DIFF, before=1 after=0 211, DESC "<ref> @ <r1 commit sha/12>"`, {
+    args: (c) => refO(c, { '--before-ref': ref() }),
+    check: (c, r) => {
+        verdict(1, 'DIFF')(r);
+        assert.ok(r.stdout.includes(CNT_B211), msg(r));
+        assert.match(r.stdout, descB(ref(), SHA.r1, S211), msg(r));
+        assert.match(r.stdout, descA('r2', SHA.r2, S212), msg(r));
+        assert.equal(c.spawns().length, 6);
+    },
+});
+spell('tag r1', () => 'r1');
+spell('branch b1', () => 'b1');
+spell('full 40-hex sha', () => SHA.r1);
+spell('abbreviated 7-hex sha', () => SHA.r1.slice(0, 7));
+const CS_ANN = spell('annotated tag ar1 (DESC must carry the PEELED commit, not the tag object)', () => 'ar1');
+mutant('M-no-peel', '"$ref^{commit}" -> "$ref"', [['"$ref^{commit}"', '"$ref"']], CS_ANN,
+    (c, r) => { assert.match(r.stdout, new RegExp(`^before  ar1 @ ${SHA.ar1obj.slice(0, 12)} `, 'm'), msg(r)); });
+row('1 odd-byte ref names (quote, $, ;, #, @, !, %, non-ASCII) reach git verbatim: DESC carries each name and its sha', {
+    args: (c) => refO(c, { '--before-ref': ODD_B, '--after-ref': ODD_A }),
+    check: (c, r) => {
+        verdict(1, 'DIFF')(r);
+        assert.match(r.stdout, descB(ODD_B, SHA.r1, S211), msg(r));
+        assert.match(r.stdout, descA(ODD_A, SHA.r2, S212), msg(r));
+    },
+});
+row('1 a rev expression r2^{/r1} (message search) is a commit -> stages r1, DESC keeps the expression', {
+    args: (c) => refO(c, { '--before-ref': 'r2^{/r1}' }),
+    check: (c, r) => { verdict(1, 'DIFF')(r); assert.match(r.stdout, descB('r2^{/r1}', SHA.r1, S211), msg(r)); },
+});
+// adversarial: a short name that is BOTH a tag (r1 -> 211) and a branch (r1 -> 212). git resolves the tag first.
+row('1 adversarial: r1 is a tag AND a branch -> the tag wins (refs/tags before refs/heads); DESC shows which commit', {
+    args: (c) => refO(c, { '--repo': AMB }),
+    check: (c, r) => {
+        verdict(1, 'DIFF')(r);
+        assert.ok(r.stdout.includes(CNT_B211), msg(r));
+        assert.match(r.stdout, descB('r1', SHA.ambR1, S211), msg(r));
+    },
+});
+for (const bad of ['r*', 'r?', 'r[12]', 'sp ace', 'r2^{/no such message}']) {
+    row(`1 glob / space ref '${bad}' -> exit 2 "--before-ref: '${bad}' is not a commit in <repo> (git fetch?)", 0 spawns, no OUT`, {
+        args: (c) => refO(c, { '--before-ref': bad }),
+        check: refuses(() => `${reEsc(`--before-ref: '${bad}' is not a commit in ${realpathSync(REPO)} (git fetch?)`)}`),   // --repo is reported as its toplevel (symlinks resolved)
+    });
+}
+
+// =====================================================================================================
+// 2. KNOWN GAP (deferred FILLER: ls-tree mode 100644/100755 check): a TRACKED SYMLINK --module is a blob of mode
+// 120000; ref mode stages its TARGET TEXT ("mod.js") as the module, the driver fails, NO-VERDICT after 6 spawns.
+// =====================================================================================================
+row('2 KNOWN GAP tracked symlink --module src/link.js -> exit 2 NO-VERDICT "driver exited 1 in run 1" both sides, 6 spawns, staged link.js = "mod.js"', {
+    args: (c) => refO(c, { '--module': 'src/link.js', '--driver': DRV_LINK }),
+    env: () => ({ FAKE_MOD: 'link.js' }),
+    check: (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- before: driver exited 1 in run 1$/m, msg(r));
+        assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- after: driver exited 1 in run 1$/m, msg(r));
+        assert.match(r.stdout, /^VERDICT NO-VERDICT$/m, msg(r));
+        assert.equal(c.spawns().length, 6, c.spawns().join('\n'));
+        const st = join(c.out, 'stage', 'before', 'link.js');
+        assert.ok(lstatSync(st).isFile(), 'staged copy is a regular file');
+        assert.equal(readFileSync(st, 'utf8'), 'mod.js');
+    },
+});
+
+// =====================================================================================================
+// 3. KNOWN GAP (deferred: --no-replace-objects): refs/replace swaps the staged blob. r1's 211 blob replaced by 213.
+// =====================================================================================================
+const CS_REPL = row('3 KNOWN GAP git replace of r1:src/mod.js (211 -> 213): the 213 blob is staged, before=1 after=0 213, DESC sha256/8 of "213"', {
+    args: (c) => refO(c, { '--repo': REP }),
+    check: (c, r) => {
+        verdict(1, 'DIFF')(r);
+        assert.ok(r.stdout.includes('\n    before=1 after=0  213\n'), msg(r));
+        assert.match(r.stdout, descB('r1', SHA.repR1, S213), msg(r));
+        assert.equal(readFileSync(join(c.out, 'stage', 'before', 'mod.js'), 'utf8'), '213\n');
+    },
+});
+mutant('M-no-replace', 'cat-file blob gets --no-replace-objects (the deferred fix)',
+    [['git -C "$REPO" cat-file blob "$x:$MODULE"', 'git --no-replace-objects -C "$REPO" cat-file blob "$x:$MODULE"']], CS_REPL,
+    (c, r) => { assert.equal(readFileSync(join(c.out, 'stage', 'before', 'mod.js'), 'utf8'), '211\n'); });
+
+// =====================================================================================================
+// 4. a path value with a leading '-' (deferred refusal): dirname / basename / stat read it as an option; set -e exits 1
+// and ONLY the EXIT trap turns that into exit 2 "unexpected error (exit 1)". 0 spawns, OUT not created.
+// =====================================================================================================
+const dashCheck = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.match(r.stderr, /^bytecode-budget: unexpected error \(exit 1\)\nVERDICT NO-VERDICT$/m, msg(r));
+    assert.match(r.stderr, /^(dirname|basename|stat)(: illegal option| ?: (invalid|unrecognized) option)/m, msg(r));
+    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+    assert.ok(!existsSync(c.out), 'OUT was created');
+};
+const CS_DASH_B = row('4 --before -b.js (a readable file in cwd) -> exit 2 via the EXIT trap "unexpected error (exit 1)", 0 spawns, no OUT', {
+    prep: (c) => writeFileSync(join(c.cwd, '-b.js'), '211\n'),
+    args: (c) => fileO(c, { '--before': '-b.js' }),
+    check: dashCheck,
+});
+row('4 --after -mod.js (driver imports ./-mod.js) -> exit 2 via the EXIT trap, 0 spawns, no OUT', {
+    prep: (c) => writeFileSync(join(c.cwd, '-mod.js'), '212\n'),
+    args: (c) => fileO(c, { '--after': '-mod.js', '--driver': DRV_DASH }),
+    check: dashCheck,
+});
+mutant('M-trap-off', 'EXIT trap condition -> false (rc 1 escapes)', [['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
+    (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); });
+row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 2 "--out: cannot create -o9/raw", 0 spawns, no -o9 in cwd', {
+    args: (c) => refO(c, { '--out': '-o9' }),
+    check: (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stderr, /^bytecode-budget: --out: cannot create -o9\/raw\nVERDICT NO-VERDICT$/m, msg(r));
+        assert.equal(c.spawns().length, 0);
+        assert.deepEqual(readdirSync(c.cwd), []);
+    },
+});
+
+// =====================================================================================================
+// 5. a driver whose file name CONTAINS the module name is not "the same file name"
+// =====================================================================================================
+const nameRow = (label, drv) => row(`5 driver ${label} with module mod.js -> not refused, exit 1 DIFF, driver line names it`, {
+    args: (c) => refO(c, { '--driver': drv }),
+    check: (c, r) => {
+        verdict(1, 'DIFF')(r);
+        assert.doesNotMatch(r.stderr, /same file name/);
+        assert.match(r.stdout, new RegExp(`^driver  ${reEsc(drv)}  sha256/8 ${sha8(readFileSync(drv))}$`, 'm'), msg(r));
+    },
+});
+const CS_MY = nameRow('mymod.js', DRV_MY);
+const CS_SUF = nameRow('mod.js.driver.mjs', DRV_SUF);
+const M_SUBSTR = [['[[ "$STAGE_NAME" != "$(basename "$DRIVER")" ]]', '[[ "$(basename "$DRIVER")" != *"$STAGE_NAME"* ]]']];
+mutant('M-substr-mymod', 'same-name rule widened to a substring match', M_SUBSTR, CS_MY, (c, r) => assert.match(r.stderr, /same file name/));
+mutant('M-substr-suffix', 'same-name rule widened to a substring match', M_SUBSTR, CS_SUF, (c, r) => assert.match(r.stderr, /same file name/));
+
+// =====================================================================================================
+// 6. --out with spaces: 17 files (report + raw 6 + 6 + stage 2 + 2), the out line verbatim
+// =====================================================================================================
+row('6 --out "o u t/x y" (spaces) with --fn add,mid,dup -> exit 1, exactly 17 files, out line verbatim', {
+    args: (c) => refO({ ...c, out: join(c.dir, 'o u t', 'x y') }, {}, 'add,mid,dup'),
+    check: (c, r) => {
+        const out = join(c.dir, 'o u t', 'x y');
+        verdict(1, 'DIFF')(r);
+        assert.match(r.stdout, new RegExp(`^out     ${reEsc(out)}$`, 'm'), msg(r));
+        const f = files(out);
+        assert.equal(f.length, 17, f.join(' '));
+        assert.deepEqual(f.filter((x) => x.startsWith('stage/')), ['stage/after/driver.mjs', 'stage/after/mod.js', 'stage/before/driver.mjs', 'stage/before/mod.js']);
+        assert.equal(readFileSync(join(out, 'stage', 'before', 'mod.js'), 'utf8'), '211\n');
+    },
+});
+
+// =====================================================================================================
+// 7. OUT/stage: absent OR empty is allowed (addendum A3); one file, or a regular FILE named stage, is refused, OUT unchanged
+// =====================================================================================================
+const CS_EMPTY = row('7 OUT/stage present but EMPTY -> allowed: exit 1 DIFF, 9 files (report + raw 2 + 2 + stage 2 + 2)', {
+    prep: (c) => mkdirSync(join(c.out, 'stage'), { recursive: true }),
+    args: (c) => refO(c),
+    check: (c, r) => { verdict(1, 'DIFF')(r); assert.equal(files(c.out).length, 9, files(c.out).join(' ')); },
+});
+mutant('M-stage-absent-only', 'stage rule tightened to "absent only"', [['[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]', '[[ ! -e "$OUT/stage" ]]']], CS_EMPTY,
+    (c, r) => assert.equal(r.status, 2, msg(r)));
+const stageRefused = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.match(r.stderr, new RegExp(`^bytecode-budget: --out: ${reEsc(c.out)}/stage is not empty \\(give a new or empty DIR\\)\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
+    assert.equal(c.spawns().length, 0);
+    assert.equal(snap(c.out), c.before, 'OUT changed');
+};
+const STAGE_CHK = '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
+const CS_ONE = row('7 OUT/stage holding ONE file -> exit 2 "--out: <OUT>/stage is not empty", 0 spawns, OUT byte-for-byte unchanged (no raw/, no report.txt)', {
+    prep: (c) => { mkdirSync(join(c.out, 'stage'), { recursive: true }); writeFileSync(join(c.out, 'stage', 'f'), 'x\n'); c.before = snap(c.out); },
+    args: (c) => refO(c),
+    check: stageRefused,
+});
+mutant('M-stage-chk-off', 'the stage-not-empty refusal deleted', [[STAGE_CHK, ':']], CS_ONE, (c, r) => assert.notEqual(r.status, 2, msg(r)));
+// adversarial, KNOWN GAP (code FILLER): a FILE named stage is refused with the wrong reason 'is not empty' (ls -A of a file).
+const CS_SFILE = row('7 KNOWN GAP adversarial: OUT/stage is a regular FILE -> exit 2 with the "is not empty" line (pinned wording), OUT unchanged', {
+    prep: (c) => { mkdirSync(c.out); writeFileSync(join(c.out, 'stage'), 'x\n'); c.before = snap(c.out); },
+    args: (c) => refO(c),
+    check: stageRefused,
+});
+mutant('M-stage-chk-off-file', 'the stage-not-empty refusal deleted', [[STAGE_CHK, ':']], CS_SFILE,
+    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.ok(existsSync(join(c.out, 'raw')), 'raw/ was not created first'); });
+
+// =====================================================================================================
+// 8. git < 2.32 ignores GIT_CONFIG_GLOBAL (the self-test's isolation of the user's ~/.gitconfig)
+// =====================================================================================================
+const ge232 = GITVER.length === 2 && (GITVER[0] > 2 || (GITVER[0] === 2 && GITVER[1] >= 32));
+const skip232 = skip || (GITVER.length !== 2 ? `git --version did not parse: ${JSON.stringify(gv.stdout.trim())}`
+    : (ge232 ? `git ${GITVER.join('.')} >= 2.32 here: the real < 2.32 path is not reachable on this host` : false));
+test('stage boundary: 8 real git < 2.32 on this host (isolated empty HOME)', { skip: skip232 }, () => {
+    const home = mkdtempSync(join(ROOT, 'home-'));
+    const r = stRun(SCRIPT, { ...cleanEnv(), HOME: home });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+// KNOWN GAP (code FILLER: tg() lacks -c tag.gpgSign=false; PLAN RISK 'the -c flags still cover hooks and signing' is false
+// for tags). EMULATED: a git shim that unsets GIT_CONFIG_GLOBAL (as git < 2.32 ignores it) + a HOME/.gitconfig with
+// tag.gpgSign=true and a failing gpg.program: the self-test fails CLOSED. GIT_EDITOR=true is pinned so the signed tag's
+// missing message is 'no tag message?' on every host (unset, git would ask for -m / -F instead).
+function stRun(script, env) { return spawnSync('bash', [script, '--self-test'], { encoding: 'utf8', timeout: 240000, env }); }
+function emuEnv() {
+    const d = mkdtempSync(join(ROOT, 'g232-'));
+    mkdirSync(join(d, 'bin')); mkdirSync(join(d, 'home'));
+    const real = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(d, 'bin', 'git'), `#!/bin/sh\nunset GIT_CONFIG_GLOBAL\nexec ${JSON.stringify(real)} "$@"\n`); chmodSync(join(d, 'bin', 'git'), 0o755);
+    writeFileSync(join(d, 'home', '.gitconfig'), '[tag]\n\tgpgSign = true\n[gpg]\n\tprogram = /usr/bin/false\n');
+    return { ...cleanEnv(), GIT_EDITOR: 'true', HOME: join(d, 'home'), PATH: `${join(d, 'bin')}:${process.env.PATH}` };
+}
+const EMU_FAIL = 'FAIL ref / file modes: temp git repo set up (init, commits r1 r2, tags)';
+const emuCheck = (r) => {
+    const fails = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.deepEqual(fails, [EMU_FAIL]);
+    assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 45);
+};
+test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 45 ok', { skip }, () => {
+    emuCheck(stRun(SCRIPT, emuEnv()));
+});
+test('stage boundary teeth: [8 KNOWN GAP EMULATED] the 9173830d build has no staged rows (exit 0) -> the row is red', { skip: baseSkip }, () => {
+    const r = stRun(BASE, emuEnv());
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.throws(() => emuCheck(r), assert.AssertionError);
+});
+test('stage boundary MUTANT M-tag-gpgsign-off (tg gains -c tag.gpgSign=false): the row goes red (exit 0)', { skip }, () => {
+    const r = stRun(variant('M-tag-gpgsign-off', [['-c commit.gpgsign=false "$@"); }', '-c commit.gpgsign=false -c tag.gpgSign=false "$@"); }']]), emuEnv());
+    assert.throws(() => emuCheck(r), assert.AssertionError);
+    assert.equal(r.status, 0, r.stdout);
+});
+
+// =====================================================================================================
+// 9. PRE-EXISTING (not group 2b; addendum A4 deferred nit): --self-test has no INT/TERM trap, so a Ctrl-C (SIGINT to
+// the process group) leaves its mktemp -d dir behind. macOS mktemp ignores TMPDIR, so a PATH shim logs the dir.
+// =====================================================================================================
+function sigintRun(script) {
+    return new Promise((resolve) => {
+        const d = mkdtempSync(join(ROOT, 'sig-'));
+        const real = spawnSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8' }).stdout.trim();
+        const log = join(d, 'mktemp.log');
+        mkdirSync(join(d, 'bin'));
+        writeFileSync(join(d, 'bin', 'mktemp'), `#!/bin/sh\nx=$(${JSON.stringify(real)} "$@") || exit $?\necho "$x" >> ${JSON.stringify(log)}\necho "$x"\n`);
+        chmodSync(join(d, 'bin', 'mktemp'), 0o755);
+        const ch = spawn('bash', [script, '--self-test'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), PATH: `${join(d, 'bin')}:${process.env.PATH}` } });
+        let out = '', killed = false;
+        ch.stdout.on('data', (b) => { out += b; if (!killed && /^ok {3}/m.test(out)) { killed = true; process.kill(-ch.pid, 'SIGINT'); } });
+        ch.stderr.on('data', () => {});
+        ch.on('close', (code, signal) => {
+            const dirs = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+            const left = dirs.filter((x) => existsSync(x));
+            const hasAdd = left.some((x) => existsSync(join(x, 'add')));
+            for (const x of left) rmSync(x, { recursive: true, force: true });   // the test cleans what the script left
+            resolve({ code, signal, killed, dirs, left, hasAdd, out });
+        });
+    });
+}
+const sigCheck = (s) => {
+    assert.ok(s.killed, 'no ok line before exit');
+    assert.ok(s.signal === 'SIGINT' || s.code === 130, `not terminated by SIGINT: code=${s.code} sig=${s.signal}`);
+    assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
+    assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);
+    assert.ok(s.hasAdd, 'the left dir is the self-test dir (holds its "add" fixture)');
+    assert.doesNotMatch(s.out, /^self-test: all checks passed$/m);
+};
+test('stage boundary: 9 PRE-EXISTING --self-test SIGINT after the first ok line -> killed by SIGINT, its temp dir LEFT BEHIND (no INT/TERM trap)', { skip }, async () => {
+    sigCheck(await sigintRun(SCRIPT));
+});
+test('stage boundary: 9 PRE-EXISTING same on the 9173830d build (not new in group 2b)', { skip: baseSkip }, async () => {
+    sigCheck(await sigintRun(BASE));
+});
+test('stage boundary MUTANT M-int-trap (self_test gains an INT/TERM cleanup trap): the row goes red (dir removed)', { skip }, async () => {
+    const p = variant('M-int-trap', [['local d; d=$(mktemp -d)', 'local d; d=$(mktemp -d); trap \'rm -rf "$d"; exit 130\' INT TERM']]);
+    const s = await sigintRun(p);
+    assert.throws(() => sigCheck(s), assert.AssertionError);
+    assert.equal(s.left.length, 0);
+});

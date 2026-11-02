@@ -5,7 +5,7 @@
 // string edits of a copy of the built script, each red for the reason named in its row.
 // The fake node prints the staged ./mod.js as the bytecode length, so the module BYTES decide the verdict:
 // expected values are hand-derived from the fixture contents (r1 = 211, r2 = 212), not from running the script.
-// A5 (self-test counts) rows are NOT here yet (they wait for the B2 check names).
+// A5 (self-test counts) rows are at the end of this file (they use the B2 check names).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -281,7 +281,6 @@ mutant('M-stage-order', 'the stage-not-empty check moved back after the --out bl
 });
 
 // reviewer round: own-reason messages, the -h claims (--module outside staged mode, a ref starting with -, MODE text, NOTE only when identical)
-const notRefusal = (rx) => (c, r) => { assert.doesNotMatch(r.stderr, rx, msg(r)); };
 mutant('G2-needs-driver', 'message "mode needs --driver" reworded', [['mode needs --driver FILE', 'mode wants a driver FILE']], CS_NODRV, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.doesNotMatch(r.stderr, /mode needs --driver/); });
 mutant('G2-needs-module', 'message "needs --module" reworded', [['ref mode needs --module REL', 'ref mode wants a module REL']], CS_NOMOD, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.doesNotMatch(r.stderr, /needs --module/); });
 mutant('G2-must-be-relative', 'message "must be relative" reworded', [['--module must be relative to the repo root', '--module is not under the repo root']], CS_ABSMOD, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.doesNotMatch(r.stderr, /must be relative/); });

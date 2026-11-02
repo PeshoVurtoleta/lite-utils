@@ -1,5 +1,5 @@
 // test/bytecode-budget-diff-boundary.test.mjs -- QA rows for ../bytecode-budget.sh --diff (P2G2 group 2a).
-// Oracle: the Phase 2 group 2a ASSERTIONS A1-A5 + the usage header's diff statements, not the code.
+// Oracle: the Phase 2 group 2a ASSERTIONS A1-A4 + the usage header's diff statements, not the code.
 // Each row is red on the frozen a26e9f15 base (`git show b376a5a:bytecode-budget.sh`, no --diff) or on the
 // mutant it names. The A1 parity rows use that base as the oracle, so they are red on their named mutants.
 import { test, after } from 'node:test';
@@ -141,6 +141,8 @@ function outTree(out) {
     const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? [relative(out, join(d, e.name)) + '/', ...walk(join(d, e.name))] : [relative(out, join(d, e.name)) + ' ' + readFileSync(join(d, e.name), 'utf8')]));
     return walk(out).sort().join('\n');
 }
+let baseParity = null;   // parity(BASE) is the same for every row: compute it once
+const parityBase = () => (baseParity ??= parity(BASE));
 function parity(script) {
     const dir = mkdtempSync(join(tmpdir(), 'bbq-par-'));
     try {
@@ -155,7 +157,7 @@ function parity(script) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the a26e9f15 base (stdout, stderr, rc, spawns, --out tree)', { skip: baseSkip }, () => {
-    const want = parity(BASE), got = parity(SCRIPT);
+    const want = parityBase(), got = parity(SCRIPT);
     for (let i = 0; i < want.length; i++) assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
 });
 for (const [mname, from, to, caseName] of [
@@ -166,7 +168,7 @@ for (const [mname, from, to, caseName] of [
         const dir = mkdtempSync(join(tmpdir(), `bbq-${mname}-`));
         try {
             const p = variant(dir, mname, from, to);
-            const want = parity(BASE), got = parity(p);
+            const want = parityBase(), got = parity(p);
             const i = want.findIndex((c) => c.name === caseName);
             assert.equal(got[i].text.split("\n")[0], want[i].text.split("\n")[0], "mutant changed rc");
             assert.notEqual(got[i].text, want[i].text, `mutant ${mname} still byte-identical on ${caseName}`);
