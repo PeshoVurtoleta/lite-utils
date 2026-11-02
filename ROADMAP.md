@@ -103,7 +103,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Stop gate: Phase 0 tests pass unchanged on the regenerated script (same CHECKS count, same mutants);
   `bash -n` on every generated file; shellcheck if installed (REPORTED when absent).
 
-### Phase 2 -- bytecode-budget.sh (first new script)
+### Phase 2 -- bytecode-budget.sh (first new script) -- DONE 2026-11-02 (group 2b qa APPROVED)
 - Extract `BYTECODE_AWK` + the `--print-bytecode` probe from inlining-budget-diff.
 - Modes: report (lengths + every V8 limit crossed: 30 small, 75 heapnum, 460 TF single-inline,
   100 Maglev max, Maglev eager cutoff) and gate (`--max fn=N[,fn=N]`; exit 0 within, 1 over,
@@ -172,3 +172,5 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   build.sh); a `bin` entry per script; `repository` / `homepage` / `keywords`; `npm pack --dry-run`
   lists exactly that set. Publishing and making the repo public stay the maintainer's.
 - D-2 ANSWERED 2026-11-02: keep the lib split into fragments (six at Phase 1; see S-2).
+- D-3 ANSWERED 2026-11-02: no early release. 0.1.0 ships only after Phases 3-6;
+  every consuming module needs all four scripts.

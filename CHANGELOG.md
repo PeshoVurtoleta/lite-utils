@@ -26,21 +26,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`--max a=1 --max b=2`, `--fn a --fn b`; give one comma list), a newline in `--fn` / `--max` /
   `--v8-flags`, a stray comma (`--max add=6,`, `--fn ,add`, `--fn add,,mid`), a `--v8-flags`
   `max*inlined*bytecode*` flag without an `=N` of 1..9 digits, a `reserve*inline*budget*` flag without
-  an `=X` of N or N.M, N and M of 1..9 digits (`=1.5` runs; `=abc`, `=.5` refused), the negated forms of those two budget flags
+  an `=X` of N or N.M, N and M of 1..9 digits (`=1.5` runs; `=abc`, `=.5` refused), the negated forms of those two
+  budget flags
   (V8 spells them `no` + optional `-` / `_`: `--no-max-inlined-bytecode-size=5`, `--no_...`, `--nomax-...`,
   `--no-reserve-inline-budget-scale-factor=1.5`, `--noreserve-...`), `--self-test` combined with anything but
-  `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags` of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
+  `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an
+  empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags`
+  of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
   `--self-test` (49 canned checks; the 4 ref / file rows need git: with no git on PATH they are one
   FAIL line and `--self-test` exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
   DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 145 tests): the exact
   self-test counts (49 and 49+24), 19 self-test mutant rows (12 report/gate, 3 of them on the length
-  cap, + 7 diff) plus a
-  NODE_OPTIONS-leak and a version-prefix mutant that must each be caught, gate rows on a fake node,
-  48 refusal rows with 0 node spawns (41 report/gate + 7 diff), the driver cwd, spawn and retention
-  counts (8 spawns for 3 fns x 2 runs), and a
-  live pair on node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must
-  exit 2 with a version-mismatch NO-VERDICT).
+  cap, + 7 diff) plus a NODE_OPTIONS-leak and a version-prefix mutant that must each be caught, gate
+  rows on a fake node, 48 refusal rows with 0 node spawns (41 report/gate + 7 diff), the driver cwd,
+  spawn and retention counts (8 spawns for 3 fns x 2 runs), and a live pair on node v26.8.2
+  (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must exit 2 with a version-mismatch
+  NO-VERDICT).
   REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
   distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
   load1 2.31 before / 2.49 after, 4 other node processes before / 8 after, none >= 10% CPU before,
@@ -105,8 +107,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   load1 4.61 before / 4.21 after; 2 other node processes at >= 10% CPU before and 2 after, all from
   LiteSignal (before: two `bench/soak/main.mjs`; after: `bench/soak/calibration/calibrate.mjs` and a
   `node --test test/43-soak-model.test.mjs` child). An earlier 20/20 run on the B1 build 06cb4911
-  (load1 4.16 before / 3.95 after) gave the same verdicts. The shipped 9173830d (F1) was not rerun
-  20/20; its live diff pair runs once per `npm test`.
+  (load1 4.16 before / 3.95 after, 2 node processes before / 0 after, none >= 10% CPU) gave the same
+  verdicts. The shipped 9173830d (F1) was not rerun 20/20; its live diff pair runs once per `npm test`.
 - `bytecode-budget.sh --diff`, ref and file mode, and `lib/stage.sh` (new fragment, built into the
   script): the same diff, but each side is one module file staged by the script instead of two
   DRIVER paths. Ref mode: `--diff --fn LIST --before-ref R1 --after-ref R2 --module REL --driver D
@@ -141,10 +143,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `test/bytecode-budget-stage.test.mjs` (113 tests; they need git and skip without it): verdict rows
   on a fake node whose length is the staged module's bytes (r1 = 211, r2 = 212, hand-derived),
   refusal rows (exit 2, 0 spawns, the OUT dir is not created, except the stage-not-empty row, which
-  starts from an existing OUT and leaves it as it was: report.txt unchanged, no raw/), each row also
-  run on the pre-staging build 9173830d (`git show 6835177:bytecode-budget.sh`, skipped without git
-  history), where it must exit 2 "unknown option" naming its first staged option (--before-ref or
-  --before; --after-ref, --driver, --repo or --module on the 4 rows that start with one); mutants
+  starts from an existing OUT holding stage/junk and a 4-byte report.txt and leaves it as it was:
+  report.txt still 4 bytes, no raw/), each row also run on the pre-staging build 9173830d (`git show
+  6835177:bytecode-budget.sh`, skipped without git history), where it must exit 2 "unknown option"
+  naming its first staged option (--before-ref or --before; --after-ref, --driver, --repo or --module
+  on the 4 rows that start with one); mutants
   M7-M13, M-stage-order, M-git-env (x4), G2 x3, U1-U3 and STAGE_SAME-forced-1, each of which must
   turn its row red; retention (20 ref runs, each into a new `--out`: 0 entries left in TMPDIR and
   the cwd, the repo untouched, exactly 17 files per `--out`) with a mutant that stages under TMPDIR;
@@ -152,6 +155,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the 9173830d build; self-test mutants M7 and M10; a PATH without git -> exit 1 with one FAIL line;
   the six GIT_* vars set -> still 49 ok). No REPORTED (timed or measured) numbers exist for this
   entry.
+- `bytecode-budget.sh --diff` ref / file staging, QA boundary rows. Tier: DETERMINISTIC. Gated in `npm test`
+  by `test/bytecode-budget-stage-boundary.test.mjs` (63 tests; they need git and skip without it): 24
+  boundary rows, each with a teeth twin on the pre-staging build 9173830d (`git show
+  6835177:bytecode-budget.sh`) where it must exit 2 "unknown option" and its own check must go red; 5
+  `--self-test` rows (a real git < 2.32, skipped here; an emulated git < 2.32 and its 9173830d twin; a
+  SIGINT run on this build and on 9173830d); and 10 one-edit mutant tests (8 distinct exact-once edits of a
+  copy of the script; each must turn its row red). Row groups: ref names (odd bytes, a rev expression, an
+  annotated tag, a tag that is also a branch), a leading-dash `--before` / `--after` / `--out`, driver and
+  module file names that contain or start with the module name, `--out` with spaces (exactly 17 files), an
+  existing but empty `OUT/stage` (allowed) versus one holding a file (refused), and a `--self-test` run with
+  a git older than 2.32. A real git < 2.32 row is skipped on git 2.54.0. KNOWN GAPS, pinned as current
+  behaviour (not features; each is a later code fix): a git-tracked symlink as `--module` stages the link
+  and ends NO-VERDICT (driver exits non-zero) after 6 spawns; `git replace` of the module's blob changes the
+  staged bytes (the script does not pass `--no-replace-objects`); `OUT/stage` as a regular file is refused
+  with the reason "is not empty"; an emulated git < 2.32 with `tag.gpgSign=true` makes `--self-test` exit 1
+  (its tag helper lacks `-c tag.gpgSign=false`); SIGINT during `--self-test` leaves its temp dir (no INT /
+  TERM trap; pre-existing, not new in group 2b). `npm test`: 401 tests, 400 pass, 1 skip, 0 fail (node
+  v26.8.2, bash 3.2.57, git 2.54.0).
+  REPORTED (not gated, untimed, a maintainer-side evidence script, not shipped): ref mode with real node
+  v26.8.2 on the bundled driver split into a driver and a module: commits that differ only outside the
+  probed add / mid -> SAME in 20 of 20 runs; a longer `mid` (211 -> 223) -> DIFF in 20 of 20 runs
+  (2026-11-02T14:54Z, Darwin arm64, script sha256/8 99790884, load1 1.85 before / 1.61 after, quiet-lock
+  QUIET, no other node process; about 19 s).
 
 ### Changed
 
@@ -176,9 +202,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   naming that side); `-h` documents that a node version mismatch in diff mode prints
   `<fn>: NO-VERDICT -- node version mismatch: ...` with no before / after prefix (help text, not
   gated; the printed line is pinned by the boundary `--node-version` row and a `--self-test`
-  check). Gated in `test/bytecode-budget.test.mjs` by 3 length-cap rows (report, gate, diff), each with a teeth twin
-  that must be red on 686de5bf (`git show 41720de:bytecode-budget.sh`, skipped when git history is
-  absent) and with cap-8 and cap-10 mutants (999999999 must still be a length, 1000000000 must not),
-  by cap-off / cap-8 / cap-10 rows that must turn `--self-test --fixtures` red, by st-M5 and st-M6
-  self-test mutant rows, and in `test/bytecode-budget-diff-boundary.test.mjs` by the length matrix
-  (valid lengths up to 999999999; 10+ digits NO-VERDICT) with an M-no-cap mutant.
+  check). Tier: DETERMINISTIC. Gated in `test/bytecode-budget.test.mjs` by 3 length-cap rows (report, gate,
+  diff), each with a teeth twin that must be red on 686de5bf (`git show 41720de:bytecode-budget.sh`, skipped
+  when git history is absent) and with cap-8 and cap-10 mutants (999999999 must still be a length,
+  1000000000 must not), by cap-off / cap-8 / cap-10 rows that must turn `--self-test --fixtures` red, by
+  st-M5 and st-M6 self-test mutant rows, and in `test/bytecode-budget-diff-boundary.test.mjs` by the length
+  matrix (valid lengths up to 999999999; 10+ digits NO-VERDICT) with an M-no-cap mutant.
