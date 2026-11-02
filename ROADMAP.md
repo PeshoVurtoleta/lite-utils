@@ -114,7 +114,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Tests: self-test on canned + real fixtures (S-9), mutants, and a live deterministic gate on a bundled
   tiny driver (S-6).
 
-### Phase 3 -- deopt-diff.sh
+### Phase 3 -- deopt-diff.sh -- G1 DONE 2026-11-02 (driver-mode verdict core, qa APPROVED; G2-G4 open)
 - `--trace-deopt-verbose` + `--trace-opt` (+ `--no-concurrent-recompilation` by default, as inline diff).
 - Verdict lines: function + deopt reason + deopt kind (eager / lazy / soft) + compile unit; addresses,
   bytecode offsets and pc offsets normalized. Multiset compare; null control; guard.

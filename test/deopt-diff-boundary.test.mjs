@@ -1,0 +1,490 @@
+// test/deopt-diff-boundary.test.mjs -- ../deopt-diff.sh driver mode from the OUTSIDE: A5 retention, A3 boundary rows
+// and A4 parity that test/deopt-diff.test.mjs and the script's own --self-test do not pin.
+// ORACLE: .handoff/PLAN-phase3-g1.md ASSERTIONS A3-A5 (and the -h text where A3 defers to it), never what the script
+// printed. TIER: DETERMINISTIC (a fake node written in a temp dir; no V8 spawn). Every row names its teeth: a mutant
+// (one exact-once edit on a copy of the script) whose run must turn the same assertion red, checked in a sibling row.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+    mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync, statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..');
+const SCRIPT = join(ROOT, 'deopt-diff.sh');
+const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
+const ENV = { ...process.env };
+for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+const TRACE = '--trace-deopt-verbose --trace-opt --no-concurrent-recompilation';
+
+// Canned node v26.8.2 lines (p3-probe trace-deopt.txt, fn = add; the same two lines the self-test uses).
+const E9 = '[completed compiling 0x060e65bf5b89 <JSFunction add (sfi = 0xf7e008dc999)> (target TURBOFAN_JS) - took 0.009, 0.245, 0.003 ms]';
+const D10 = '[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing 0x060e65bf5b89 <JSFunction add (sfi = 0xf7e008dc999)>, 0x140083075c49 <Code TURBOFAN_JS>, opt id 2, bytecode offset 2, deopt exit 0, FP to SP delta 32, caller SP 0x00016eeed198, pc 0x00011f6425b4]';
+
+function tmp(p) { return mkdtempSync(join(tmpdir(), p)); }
+function rmAll(...ps) { for (const p of ps) if (p) rmSync(p, { recursive: true, force: true }); }
+
+// A copy of the script with exact-once edits (an anchor that does not match exactly once invalidates the row).
+function variant(dir, name, edits) {
+    let src = readFileSync(SCRIPT, 'utf8');
+    for (const [from, to] of edits) {
+        const n = src.split(from).length - 1;
+        assert.equal(n, 1, `mutant ${name}: anchor must match exactly once, matched ${n}`);
+        src = src.replace(from, () => to);
+    }
+    const p = join(dir, `${name}.sh`);
+    writeFileSync(p, src);
+    chmodSync(p, 0o755);
+    return p;
+}
+
+// A logging mktemp shim first on PATH. macOS /usr/bin/mktemp ignores TMPDIR when called bare, so a private
+// TMPDIR cannot see a leaked bare `mktemp -d`; the shim logs "args<TAB>created path" and execs the real one.
+// The shim only sees a mktemp found through PATH (an absolute /usr/bin/mktemp or `command -p mktemp` call would bypass it).
+function mktempShim(dir) {
+    const real = spawnSync('bash', ['-c', 'command -v mktemp'], { encoding: 'utf8', timeout: 30000 }).stdout.trim();
+    assert.ok(real, 'no real mktemp on PATH');
+    const bin = join(dir, 'shim-bin');
+    mkdirSync(bin);
+    const log = join(dir, 'mktemp.log');
+    writeFileSync(log, '');
+    writeFileSync(join(bin, 'mktemp'), `#!/bin/bash\np=$('${real}' "$@") || exit $?\nprintf '%s\\t%s\\n' "$*" "$p" >>'${log}'\nprintf '%s\\n' "$p"\n`);
+    chmodSync(join(bin, 'mktemp'), 0o755);
+    return { real, env: { PATH: bin + ':' + process.env.PATH }, paths: () => readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t')[1]) };
+}
+
+// A fake node (bash): logs "<basename of its cwd>|<argv>" per spawn to its OWN dir (never cwd / TMPDIR), exits 7 if
+// NODE_OPTIONS reached it, answers --version with v26.8.2, else cats ./trace.txt of its cwd (the driver's dir) and
+// exits with ./rc (or 0). Driver dirs: name -> { trace, rc }.
+function rig(dir, drivers) {
+    const fk = join(dir, 'fk');
+    mkdirSync(fk);
+    writeFileSync(join(fk, 'node'), [`#!${process.env.BASH || '/bin/bash'}`, 'd=$(dirname "$0")',
+        'printf "%s|%s\\n" "$(basename "$PWD")" "$*" >>"$d/log"',
+        'if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi',
+        'case "$1" in --version) echo v26.8.2; exit 0 ;; esac',
+        'if [ -f ./trace.txt ]; then cat ./trace.txt; fi', 'if [ -f ./rc ]; then exit "$(cat ./rc)"; fi', 'exit 0', ''].join('\n'));
+    chmodSync(join(fk, 'node'), 0o755);
+    writeFileSync(join(fk, 'log'), '');
+    const drv = {};
+    for (const [name, { trace, rc }] of Object.entries(drivers)) {
+        mkdirSync(join(dir, name));
+        writeFileSync(join(dir, name, 'driver.js'), '');
+        writeFileSync(join(dir, name, 'trace.txt'), trace);
+        if (rc !== undefined) writeFileSync(join(dir, name, 'rc'), String(rc));
+        drv[name] = join(dir, name, 'driver.js');
+    }
+    const cwd = join(dir, 'cwd');
+    mkdirSync(cwd);
+    return {
+        node: join(fk, 'node'), drv, cwd,
+        run(script, args, env = {}) {
+            writeFileSync(join(fk, 'log'), '');
+            const r = spawnSync('bash', [script, '--node', join(fk, 'node'), ...args], { encoding: 'utf8', timeout: 120000, cwd, env: { ...ENV, ...env } });
+            const out = r.stdout + r.stderr;
+            const log = readFileSync(join(fk, 'log'), 'utf8').split('\n').filter(Boolean);
+            return { status: r.status, out, lines: out.split('\n'), log, spawns: log.length, verdicts: out.split('\n').filter((l) => l.startsWith('VERDICT ')) };
+        },
+    };
+}
+const STD = {
+    monoA: { trace: E9 + '\n' }, monoB: { trace: E9 + '\n' }, deop: { trace: E9 + '\n' + D10 + '\n' }, rc3: { trace: E9 + '\n', rc: 3 },
+};
+
+// =====================================================================================================================
+// A5 retention: 3 cycles of SAME, DIFF and NO-VERDICT without --out; cwd, a private TMPDIR and the mktemp shim log
+// hold 0 entries afterwards, the driver dirs are unchanged, every run spawns 1 + 2 x 3 = 7 times.
+// =====================================================================================================================
+const CYCLE = [
+    // [label, before, after, exit, VERDICT, own line]
+    ['SAME', 'monoA', 'monoB', 0, 'VERDICT SAME', '  add: SAME -- identical deopt multiset (before 0 | after 0)'],
+    ['DIFF', 'monoA', 'deop', 1, 'VERDICT DIFF', '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)'],
+    ['NO-VERDICT', 'rc3', 'monoB', 2, 'VERDICT NO-VERDICT', '  add: NO-VERDICT -- before: driver exited 3 in run 1'],
+];
+function cycles(script) {
+    const dir = tmp('dd-a5-');
+    const td = tmp('dd-a5-tmpdir-');
+    const sh = mktempShim(dir);
+    const runs = [];
+    try {
+        const g = rig(dir, STD);
+        const snap = () => Object.keys(STD).map((n) => n + ':' + readdirSync(join(dir, n)).sort().join(',')).join(' ');
+        const before = snap();
+        for (let c = 0; c < 3; c++) {
+            for (const [label, b, a] of CYCLE) {
+                const r = g.run(script, ['--fn', 'add', g.drv[b], g.drv[a]], { TMPDIR: td, ...sh.env });
+                runs.push({ label, ...r });
+            }
+        }
+        const paths = sh.paths();
+        return {
+            runs, cwd: readdirSync(g.cwd), tmpdir: readdirSync(td), shim: paths, live: paths.filter((p) => existsSync(p)),
+            drvSame: snap() === before, real: sh.real,
+        };
+    } finally { for (const p of sh.paths()) rmAll(p); rmAll(dir, td); }
+}
+function assertCycles(c) {
+    assert.equal(c.runs.length, 9);
+    c.runs.forEach((r, i) => {
+        const [label, , , exit, vline, own] = CYCLE[i % 3];
+        assert.equal(r.status, exit, `${label} run ${i}: ${r.out}`);
+        assert.deepEqual(r.verdicts, [vline], r.out);
+        assert.ok(r.lines.includes(own), `${label} run ${i}: missing "${own}"\n${r.out}`);
+        assert.equal(r.spawns, 7, `${label} run ${i}: 1 --version + 2 x 3 runs\n${r.log.join('\n')}`);
+    });
+    assert.deepEqual(c.cwd, [], 'cwd holds entries after 9 runs without --out');
+    assert.deepEqual(c.tmpdir, [], 'the private TMPDIR holds entries');
+    assert.deepEqual(c.shim, [], 'driver mode called mktemp');
+    assert.ok(c.drvSame, 'a driver dir changed');
+}
+test('A5: 3 cycles x SAME / DIFF / NO-VERDICT without --out -> exits 0/1/2, 7 spawns each; cwd, TMPDIR, mktemp log empty', { skip }, () => {
+    assertCycles(cycles(SCRIPT));
+});
+// teeth 1: tee keeps the raw output in cwd when --out is absent (the "nothing is written without --out" claim)
+test('A5 teeth: mutant tee-default-to-cwd turns the cycle row red (cwd holds run.<k>.txt; verdicts unchanged)', { skip }, () => {
+    const dir = tmp('dd-a5m-');
+    try {
+        const c = cycles(variant(dir, 'tee_cwd', [['| tee "${3:-/dev/null}" |', '| tee "${3:-run.$k.txt}" |']]));
+        assert.throws(() => assertCycles(c), /cwd holds entries/);
+        assert.deepEqual(c.cwd.sort(), ['run.1.txt', 'run.2.txt', 'run.3.txt']);
+        c.runs.forEach((r, i) => assert.equal(r.status, CYCLE[i % 3][3]));   // red for retention only
+    } finally { rmAll(dir); }
+});
+// teeth 2: a bare `mktemp -d` in driver mode that is never removed; the shim sees it (macOS: the TMPDIR does not)
+test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim log, not the TMPDIR', { skip }, () => {
+    const dir = tmp('dd-a5m-');
+    try {
+        const c = cycles(variant(dir, 'mktemp_leak', [['RUN_RC=0; RUN_TX=""\n', 'mktemp -d >/dev/null\nRUN_RC=0; RUN_TX=""\n']]));
+        assert.throws(() => assertCycles(c), /driver mode called mktemp/);
+        assert.equal(c.shim.length, 9);
+        assert.equal(c.live.length, 9, 'every leaked dir was still on disk when the row read it');
+        if (process.platform === 'darwin' && c.real === '/usr/bin/mktemp') assert.deepEqual(c.tmpdir, [], 'macOS bare mktemp ignores TMPDIR');
+    } finally { rmAll(dir); }
+});
+
+// A5 self-test: run under the shim with a private TMPDIR and cwd; >= 1 logged dir (else the row is blind), every
+// logged path gone afterwards. Optional SIGTERM once the first dir is logged (the EXIT-trap path).
+function selfTestRun(script, { term = false } = {}) {
+    const dir = tmp('dd-st-');
+    const td = tmp('dd-st-tmpdir-');
+    const cwd = join(dir, 'cwd');
+    mkdirSync(cwd);
+    const sh = mktempShim(dir);
+    return new Promise((res, rej) => {
+        const c = spawn('bash', [script, '--self-test'], { cwd, env: { ...ENV, TMPDIR: td, ...sh.env } });
+        let out = '';
+        c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
+        const kill = setTimeout(() => c.kill('SIGKILL'), 120000);
+        let poll = null;
+        if (term) {
+            // SIGTERM once the shim logged the self-test's dir and the self-test printed >= 5 check lines (so it is
+            // mid-run); bash runs the EXIT trap after the foreground child ends
+            poll = setInterval(() => { if (sh.paths().length > 0 && (out.match(/^ok /gm) || []).length >= 5) { clearInterval(poll); c.kill('SIGTERM'); } }, 20);
+        }
+        c.on('close', (status, signal) => {
+            clearTimeout(kill); if (poll) clearInterval(poll);
+            const paths = sh.paths();
+            const r = { status, signal, out, shim: paths, live: paths.filter((p) => existsSync(p)), cwd: readdirSync(cwd), tmpdir: readdirSync(td) };
+            for (const p of paths) rmAll(p);
+            rmAll(dir, td);
+            res(r);
+        });
+        c.on('error', rej);
+    });
+}
+function assertNoDirs(r) {
+    assert.ok(r.shim.length >= 1, 'the shim logged no mktemp: the row is blind');
+    assert.deepEqual(r.live, [], `a logged mktemp path survived: ${r.live.join(' ')}`);
+    assert.deepEqual(r.cwd, [], 'cwd holds entries');
+    assert.deepEqual(r.tmpdir, [], 'TMPDIR holds entries');
+}
+test('A5: --self-test under a logging mktemp shim -> 53 ok, every logged dir gone, cwd and TMPDIR empty', { skip }, async () => {
+    const r = await selfTestRun(SCRIPT);
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, /^self-test: \d+ check\(s\) ok$/m);
+    assertNoDirs(r);
+});
+test('A5 teeth: mutant final-rm-dropped -> the self-test still passes 53/53 but its logged dir survives (red)', { skip }, async () => {
+    const dir = tmp('dd-stm-');
+    try {
+        const r = await selfTestRun(variant(dir, 'no_final_rm', [['  rm -rf "$d"\n  if [[ -n "$old" ]]; then trap', '  if [[ -n "$old" ]]; then trap']]));
+        assert.equal(r.status, 0, r.out);
+        assert.match(r.out, /^self-test: \d+ check\(s\) ok$/m);   // no check sees it: only the retention row does
+        assert.throws(() => assertNoDirs(r), /a logged mktemp path survived/);
+    } finally { rmAll(dir); }
+});
+test('A5: --self-test killed by SIGTERM mid-run -> its EXIT trap removes every logged dir', { skip }, async () => {
+    const r = await selfTestRun(SCRIPT, { term: true });
+    assert.doesNotMatch(r.out, /^self-test: /m, 'the self-test finished before the SIGTERM');
+    assert.equal(r.signal === 'SIGTERM' || r.status === 143 || r.status === 2, true, `status ${r.status} signal ${r.signal}`);
+    assertNoDirs(r);
+});
+test('A5 teeth: mutant trap-without-rm -> a SIGTERM mid self-test leaves the logged dir (red)', { skip }, async () => {
+    const dir = tmp('dd-stm-');
+    try {
+        const r = await selfTestRun(variant(dir, 'trap_no_rm', [['trap "st_rc=\\$?; rm -rf \\"\\$ST_D\\"; set +e;', 'trap "st_rc=\\$?; set +e;']]), { term: true });
+        assert.doesNotMatch(r.out, /^self-test: /m, 'the self-test finished before the SIGTERM');
+        assert.throws(() => assertNoDirs(r), /a logged mktemp path survived/);
+    } finally { rmAll(dir); }
+});
+
+// (every teeth row builds its mutant OUTSIDE assert.throws: an anchor that does not match exactly once is an error of the
+// row, never a kill)
+// =====================================================================================================================
+// A3 boundary: --runs edges (spawns 1 + 2R, sides alternating before / after per k, argv and cwd per run)
+// =====================================================================================================================
+function runsRow(script, runs) {
+    const dir = tmp('dd-runs-');
+    try {
+        const g = rig(dir, STD);
+        const r = g.run(script, ['--runs', runs, '--v8-flags', '--allow-natives-syntax', '--fn', 'add', g.drv.monoA, g.drv.deop]);
+        return r;
+    } finally { rmAll(dir); }
+}
+function assertRuns(r, R) {
+    assert.equal(r.status, 1, r.out);
+    assert.deepEqual(r.verdicts, ['VERDICT DIFF'], r.out);
+    assert.equal(r.spawns, 1 + 2 * R, r.log.join('\n'));
+    const want = ['cwd|--version'];
+    for (let k = 0; k < R; k++) want.push(`monoA|--allow-natives-syntax ${TRACE} driver.js`, `deop|--allow-natives-syntax ${TRACE} driver.js`);
+    assert.deepEqual(r.log, want);
+    assert.ok(r.lines.includes(`mode    diff  runs ${R}  v8 flags --allow-natives-syntax ${TRACE}`), r.out);
+}
+// [value, R, teeth mutant edits, flip(r): the field the mutant flips] -- each mutant must turn its row red (sibling row)
+const REFUSED = (v) => (r) => { assert.equal(r.status, 2, r.out); assert.equal(r.spawns, 0); assert.ok(r.out.includes(`deopt-diff: --runs must be an integer in [2, 20] (null control), got '${v}'`), r.out); };
+// bash 3.2: the $((08)) error abandons the whole `[[ ]] && RUNS=... || die` list (die included) and the script goes on with
+// RUNS=08 (seq reads it as 8): exit and spawns stay right, only the mode line shows the unnormalized value
+const UNNORMALIZED = (v, R) => (r) => {
+    assert.equal(r.status, 1, r.out); assert.equal(r.spawns, 1 + 2 * R);
+    assert.ok(r.lines.includes(`mode    diff  runs ${v}  v8 flags --allow-natives-syntax ${TRACE}`), r.out);
+};
+const RUNS_OK = [
+    ['2', 2, [['[[ $RUNS -ge 2 && $RUNS -le 20 ]]', '[[ $RUNS -ge 3 && $RUNS -le 20 ]]']], REFUSED('2')],
+    ['20', 20, [['[[ $RUNS -ge 2 && $RUNS -le 20 ]]', '[[ $RUNS -ge 2 && $RUNS -le 19 ]]']], REFUSED('20')],
+    // adversarial: a leading zero with 8 / 9 is not octal (bash $((08)) is an error without the 10# base)
+    ['08', 8, [['RUNS=$((10#$RUNS))', 'RUNS=$(($RUNS))']], UNNORMALIZED('08', 8)],
+    ['09', 9, [['RUNS=$((10#$RUNS))', 'RUNS=$(($RUNS))']], UNNORMALIZED('09', 9)],
+];
+for (const [v, R, teeth, flip] of RUNS_OK) {
+    test(`A3: --runs ${v} accepted -> exit 1 DIFF, ${1 + 2 * R} spawns, before / after alternating, exact argv`, { skip }, () => {
+        assertRuns(runsRow(SCRIPT, v), R);
+    });
+    test(`A3 teeth: --runs ${v} row is red on a boundary mutant`, { skip }, () => {
+        const dir = tmp('dd-runsm-');
+        try {
+            const r = runsRow(variant(dir, 'm', teeth), v);
+            flip(r);   // the designed field flipped
+            assert.throws(() => assertRuns(r, R), assert.AssertionError);
+        } finally { rmAll(dir); }
+    });
+}
+test('A3 teeth: the alternation row is red on a mutant that runs AFTER before BEFORE in each k', { skip }, () => {
+    const dir = tmp('dd-runsm-');
+    try {
+        const p = variant(dir, 'swap', [[
+            '  run_side "$DRV_B_DIR" "$DRV_B_BASE" "${OUT:+$OUT/raw/before/run.$k.txt}"; RCB+=("$RUN_RC"); TXB+=("$RUN_TX")\n' +
+            '  run_side "$DRV_A_DIR" "$DRV_A_BASE" "${OUT:+$OUT/raw/after/run.$k.txt}"; RCA+=("$RUN_RC"); TXA+=("$RUN_TX")\n',
+            '  run_side "$DRV_A_DIR" "$DRV_A_BASE" "${OUT:+$OUT/raw/after/run.$k.txt}"; RCA+=("$RUN_RC"); TXA+=("$RUN_TX")\n' +
+            '  run_side "$DRV_B_DIR" "$DRV_B_BASE" "${OUT:+$OUT/raw/before/run.$k.txt}"; RCB+=("$RUN_RC"); TXB+=("$RUN_TX")\n']]);
+        const r = runsRow(p, '2');
+        assert.equal(r.status, 1);   // same verdict and spawn count: only the order row sees it
+        assert.equal(r.spawns, 5);
+        assert.throws(() => assertRuns(r, 2), assert.AssertionError);
+    } finally { rmAll(dir); }
+});
+
+// --runs refusals: exit 2, 0 spawns, the die line with the value echoed. Integers at the 2^30 / 2^31 / 2^32 / 2^53
+// edges, signs, -0, NaN, decimals, blanks, a trailing newline, a non-ASCII digit.
+const RUNS_BAD = ['0', '1', '-1', '00', '01', '21', '99', '020', '100', '1073741824', '2147483647', '2147483648',
+    '4294967295', '4294967296', '9007199254740991', '9007199254740992', 'NaN', '-0', '+3', '3.0', '3e0', '0x3', ' 3', '3 ',
+    '3\n', '\u0663'];
+function runsBad(script, v) {
+    const dir = tmp('dd-rb-');
+    try { return rig(dir, STD).run(script, ['--runs=' + v, '--fn', 'add', join(dir, 'monoA', 'driver.js'), join(dir, 'monoB', 'driver.js')]); }
+    finally { rmAll(dir); }
+}
+function assertRefused(r, line) {
+    assert.equal(r.status, 2, r.out);
+    assert.equal(r.spawns, 0, r.log.join('\n'));
+    assert.ok(r.out.includes(line), `missing "${line}"\n${r.out}`);
+    assert.doesNotMatch(r.out, /^VERDICT (SAME|DIFF)$/m);
+}
+// 00 / 01 pass the 2-digit regex and are echoed AFTER the 10# normalization (got '0' / '1': a QA finding, cosmetic), so
+// they pin the reason only; every other value (020 included: the regex refuses it first) pins the value as given
+const runsLine = (v) => (/^0[0-9]$/.test(v) ? "deopt-diff: --runs must be an integer in [2, 20] (null control), got '"
+    : `deopt-diff: --runs must be an integer in [2, 20] (null control), got '${v}'`);
+for (const v of RUNS_BAD) {
+    test(`A3: --runs=${JSON.stringify(v)} refused -> exit 2, 0 spawns, its own reason`, { skip }, () => {
+        // the rig's driver dirs exist (monoA / monoB): only --runs can refuse
+        assertRefused(runsBad(SCRIPT, v), runsLine(v));
+    });
+}
+// teeth: a 3-digit regex lets 020 through; a refusal turned into a silent default (RUNS=2, bounded: never a 2^31-run
+// loop) lets every row through
+test('A3 teeth: --runs refusal rows are red on mutants (3-digit regex: 020; refusal -> silent RUNS=2: every value)', { skip }, () => {
+    const dir = tmp('dd-rbm-');
+    try {
+        const m3 = variant(dir, 'm3', [['[[ "$RUNS" =~ ^[0-9]{1,2}$ ]]', '[[ "$RUNS" =~ ^[0-9]{1,3}$ ]]']]);
+        for (const v of ['020']) assert.throws(() => assertRefused(runsBad(m3, v), runsLine(v)), assert.AssertionError);
+        const off = variant(dir, 'off', [['  || die "--runs must be an integer in [2, 20] (null control), got \'$RUNS\'"', '  || RUNS=2']]);
+        for (const v of RUNS_BAD) assert.throws(() => assertRefused(runsBad(off, v), runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the disabled check`);
+    } finally { rmAll(dir); }
+});
+
+// Other refusals no self-test row pins: an option given twice, an empty / missing value, --fn edges. 0 spawns each.
+const MORE_BAD = [
+    // [label, args (D1 / D2 are placeholders), own die line, teeth mutant edits]
+    ['--runs given twice', ['--runs', '3', '--runs', '3', '--fn', 'add', 'D1', 'D2'], '--runs given twice (give one comma list)',
+        [['[[ "$GOTOPT" != *" $a "* ]] || die', 'true || die']]],
+    ['--fn given twice', ['--fn', 'add', '--fn', 'get', 'D1', 'D2'], '--fn given twice (give one comma list)',
+        [['[[ "$GOTOPT" != *" $a "* ]] || die', 'true || die']]],
+    ['--runs= (empty)', ['--runs=', '--fn', 'add', 'D1', 'D2'], '--runs needs a non-empty value',
+        [['[[ -n "$v" ]] || die "$a needs a non-empty value"', 'true']]],
+    ['--fn= (empty)', ['--fn=', 'D1', 'D2'], '--fn needs a non-empty value', [['[[ -n "$v" ]] || die "$a needs a non-empty value"', 'true']]],
+    ['--fn ,add (stray comma)', ['--fn', ',add', 'D1', 'D2'], '--fn: empty entry (stray comma)',
+        [['[[ "$FNLIST" != ,* && ', '[[ ']]],
+    ["--fn 'add ' (trailing blank)", ['--fn', 'add ', 'D1', 'D2'], "got 'add '",
+        [["FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'", "FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$]*)?$'"]]],
+    ["--fn 'get value x' (three words)", ['--fn', 'get value x', 'D1', 'D2'], "got 'get value x'",
+        [["FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'", "FN_RE='^[A-Za-z_$][A-Za-z0-9_$ ]*$'"]]],
+    ['--fn 1add (leading digit)', ['--fn', '1add', 'D1', 'D2'], "got '1add'",
+        [["FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*(", "FN_RE='^[A-Za-z0-9_$][A-Za-z0-9_$]*("]]],
+    ['--fn with a newline', ['--fn', 'add\nadd', 'D1', 'D2'], '--fn / --v8-flags / --out / --node: a newline is not allowed',
+        [['[[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$\'\\n\'* ]] || die', 'true || die']]],
+    ['--v8-flags of blanks only', ['--fn', 'add', '--v8-flags', '   ', 'D1', 'D2'], '--v8-flags needs at least one flag, got only blanks',
+        [['[[ -z "$V8FLAGS" || ${#V8_EXTRA[@]} -gt 0 ]] || die', 'true || die']]],
+    ['--v8-flags --no_concurrent_recompilation (underscores)', ['--fn', 'add', '--v8-flags', '--no_concurrent_recompilation', 'D1', 'D2'],
+        '--v8-flags must not set --no_concurrent_recompilation: the script sets', [['  g="${f//_/-}"', '  g="$f"']]],
+];
+function moreBad(script, args) {
+    const dir = tmp('dd-mb-');
+    try {
+        const g = rig(dir, STD);
+        return g.run(script, args.map((a) => (a === 'D1' ? g.drv.monoA : a === 'D2' ? g.drv.monoB : a)));
+    } finally { rmAll(dir); }
+}
+for (const [label, args, line, teeth] of MORE_BAD) {
+    test(`A3: ${label} refused -> exit 2, 0 spawns, '${line}'`, { skip }, () => {
+        assertRefused(moreBad(SCRIPT, args), line);
+    });
+    test(`A3 teeth: ${label} row is red on its mutant`, { skip }, () => {
+        const dir = tmp('dd-mbm-');
+        try { const p = variant(dir, 'm', teeth); assert.throws(() => assertRefused(moreBad(p, args), line), assert.AssertionError); } finally { rmAll(dir); }
+    });
+}
+
+// =====================================================================================================================
+// A3 --out: raw/ must be absent or empty; a refusal spawns nothing and writes nothing (the OUT tree is unchanged)
+// =====================================================================================================================
+function tree(p) {
+    if (!existsSync(p)) return 'absent';
+    const s = statSync(p);
+    if (!s.isDirectory()) return 'file:' + readFileSync(p, 'utf8');
+    return '{' + readdirSync(p).sort().map((n) => n + '=' + tree(join(p, n))).join(',') + '}';
+}
+const OUT_BAD = [
+    // [label, setup(out), own die line, teeth edits]
+    ['raw/ holds a file', (o) => { mkdirSync(join(o, 'raw'), { recursive: true }); writeFileSync(join(o, 'raw', 'old.txt'), 'x'); },
+        'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']]],
+    ['raw/ holds only a dotfile', (o) => { mkdirSync(join(o, 'raw'), { recursive: true }); writeFileSync(join(o, 'raw', '.keep'), ''); },
+        'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]]', '[[ -z "$(ls "$OUT/raw" 2>/dev/null)" ]]']]],
+    ['raw/ holds an empty raw/before/', (o) => { mkdirSync(join(o, 'raw', 'before'), { recursive: true }); },
+        'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']]],
+    ['raw is a symlink to a non-empty dir', (o) => {
+        mkdirSync(o, { recursive: true }); mkdirSync(join(o, 'elsewhere')); writeFileSync(join(o, 'elsewhere', 'f'), 'y'); symlinkSync('elsewhere', join(o, 'raw'));
+    }, 'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']]],
+    // adversarial: a DANGLING raw symlink passes `! -e` (it follows the link) but `ls -A` prints the link itself, so it is
+    // refused before any spawn -- with the misleading reason "is not empty" (QA finding, cosmetic): pin the --out class only
+    ['raw is a dangling symlink', (o) => { mkdirSync(o, { recursive: true }); symlinkSync('nowhere', join(o, 'raw')); },
+        'deopt-diff: --out: ', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']],
+        // flip: the mutant reaches the --version probe (1 spawn), then mkdir fails
+        (r) => { assert.equal(r.spawns, 1, r.log.join('\n')); assert.ok(r.log[0].endsWith('|--version'), r.log.join('\n')); }],
+    ['OUT is a regular file', (o) => { writeFileSync(o, 'keep'); }, 'exists and is not a directory',
+        [['[[ ! -e "$OUT" || -d "$OUT" ]] || die', 'true || die']]],
+    ['OUT/raw is a regular file', (o) => { mkdirSync(o, { recursive: true }); writeFileSync(join(o, 'raw'), 'keep'); }, '/raw exists and is not a directory',
+        [['[[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die', 'true || die']]],
+];
+function outRow(script, setup) {
+    const dir = tmp('dd-out-');
+    try {
+        const g = rig(dir, STD);
+        const o = join(dir, 'o');
+        setup(o);
+        const t0 = tree(o);
+        const r = g.run(script, ['--out', o, '--fn', 'add', g.drv.monoA, g.drv.deop]);
+        return { ...r, same: tree(o) === t0, t0, t1: tree(o) };
+    } finally { rmAll(dir); }
+}
+function assertOutRefused(r, line) {
+    assertRefused(r, line);
+    assert.ok(r.same, `the OUT tree changed: ${r.t0} -> ${r.t1}`);
+}
+for (const [label, setup, line, teeth, flip] of OUT_BAD) {
+    test(`A3: --out where ${label} -> refused, exit 2, 0 spawns, OUT unchanged, '${line}'`, { skip }, () => {
+        assertOutRefused(outRow(SCRIPT, setup), line);
+    });
+    test(`A3 teeth: --out where ${label} is red on its mutant`, { skip }, () => {
+        const dir = tmp('dd-outm-');
+        try {
+            const r = outRow(variant(dir, 'm', teeth), setup);
+            if (flip) flip(r);   // the designed field flipped (rows without one: any red)
+            assert.throws(() => assertOutRefused(r, line), assert.AssertionError);
+        } finally { rmAll(dir); }
+    });
+}
+// accepted edge: an existing EMPTY raw/ ("absent or empty") -> report.txt + 3 + 3 raw files
+const outEmptyRaw = (o) => { mkdirSync(join(o, 'raw'), { recursive: true }); };
+function assertOutAccepted(r) {
+    assert.equal(r.status, 1, r.out);
+    assert.equal(r.spawns, 7);
+    assert.match(r.t1, /^\{raw=\{after=\{run\.1\.txt=file:.*run\.3\.txt=file:[^}]*\},before=\{run\.1\.txt=file:.*run\.3\.txt=file:[^}]*\}\},report\.txt=file:/s);
+    assert.match(r.t1, /report\.txt=file:[^]*VERDICT DIFF\n\}$/);
+}
+test('A3: --out with an existing EMPTY raw/ is accepted -> exit 1, 7 spawns, 3 + 3 raw files and report.txt ending VERDICT DIFF', { skip }, () => {
+    assertOutAccepted(outRow(SCRIPT, outEmptyRaw));
+});
+test('A3 teeth: the empty-raw/ row is red on a mutant that refuses any existing raw/', { skip }, () => {
+    const dir = tmp('dd-outm-');
+    try {
+        const p = variant(dir, 'm', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', '[[ ! -e "$OUT/raw" ]] || die']]);
+        assert.throws(() => assertOutAccepted(outRow(p, outEmptyRaw)), assert.AssertionError);
+    } finally { rmAll(dir); }
+});
+// =====================================================================================================================
+// A4 parity: the two Phase 2 scripts equal their frozen p3g1 copies and `git show cb9fa65:<file>` (sha256/8 pinned)
+// =====================================================================================================================
+const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
+const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
+const PARITY = [['bytecode-budget.sh', '99790884'], ['inlining-budget-diff.sh', '740da13b']];
+function gitShow(rev, file) {
+    const r = spawnSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26, timeout: 30000 });
+    return r.status === 0 ? r.stdout : null;
+}
+const hasGit = spawnSync('git', ['-C', ROOT, 'cat-file', '-e', 'cb9fa65^{commit}'], { env: ENV, timeout: 30000 }).status === 0;
+function assertParity(live, ref, want) {
+    assert.equal(sha8(live), want, 'live sha256/8');
+    assert.ok(Buffer.compare(live, ref) === 0, 'live differs from the reference copy');
+}
+for (const [file, want] of PARITY) {
+    const frozen = join(FROZEN, file);
+    test(`A4: ${file} sha256/8 ${want} and cmp-equal to .handoff/frozen/p3g1/${file}`,
+        { skip: skip || (existsSync(frozen) ? false : 'frozen copy absent (.handoff/ is gitignored): not checked, never passed') }, () => {
+            assertParity(readFileSync(join(ROOT, file)), readFileSync(frozen), want);
+        });
+    test(`A4: ${file} cmp-equal to git show cb9fa65:${file}`,
+        { skip: skip || (hasGit ? false : 'no git history with cb9fa65: not checked, never passed') }, () => {
+            const ref = gitShow('cb9fa65', file);
+            assert.ok(ref, 'git show failed');
+            assertParity(readFileSync(join(ROOT, file)), ref, want);
+        });
+    test(`A4 teeth: ${file} parity is red on a one-byte edit of the live bytes`, { skip }, () => {
+        const live = readFileSync(join(ROOT, file));
+        const m = Buffer.from(live); m[m.length - 2] ^= 1;
+        assert.throws(() => assertParity(m, live, want), assert.AssertionError);
+    });
+}

@@ -1,9 +1,11 @@
 // test/bytecode-budget-stage.test.mjs -- QA rows for ../bytecode-budget.sh ref + file staging (P2G2 group 2b, batch B3).
 // Oracle: PLAN-phase2-g2b.md ASSERTIONS A2 (verdicts), A3 (refusals, incl. addendum A3), A4 (retention), not the code.
 // Every A2/A3 row also runs on the pre-staging build (`git show 6835177:bytecode-budget.sh`, sha256/8 9173830d), where
-// it must exit 2 "unknown option --before(-ref)"; the mutant rows M7..M13, M-stage-order, M-git-env, M-relimport-sibling-staged, M-relimport-sibling-staged-file are exact-once
+// it must exit 2 "unknown option --before(-ref)"; the mutant rows M7..M13, M-stage-order, M-git-env,
+// M-relimport-sibling-staged, M-relimport-sibling-staged-file are exact-once
 // string edits of a copy of the built script, each red for the reason named in its row.
-// The fake node prints the staged ./mod.js minus its import lines as the bytecode length (exit 1 ERR_MODULE_NOT_FOUND if an `import './X'` sibling is absent from its cwd), so the module BYTES decide the verdict:
+// The fake node prints the staged ./mod.js minus its import lines as the bytecode length (exit 1 ERR_MODULE_NOT_FOUND
+// if an `import './X'` sibling is absent from its cwd), so the module BYTES decide the verdict:
 // expected values are hand-derived from the fixture contents (r1 = 211, r2 = 212), not from running the script.
 // A5 (self-test counts) rows are at the end of this file (they use the B2 check names).
 import { test, after } from 'node:test';
@@ -274,8 +276,8 @@ const relImp = (mode) => ({
     },
 });
 const CS_RELIMP_REF = relImp('ref'), CS_RELIMP_FILE = relImp('file');
-test('bytecode-budget stage: a module with a relative import fails closed (ref mode): exit 2, NO-VERDICT, the sibling is not staged', { skip }, () => { const { c, r } = runOn(SCRIPT, CS_RELIMP_REF); CS_RELIMP_REF.check(c, r); });
-test('bytecode-budget stage: a module with a relative import fails closed (file mode): exit 2, NO-VERDICT, the sibling is not staged', { skip }, () => { const { c, r } = runOn(SCRIPT, CS_RELIMP_FILE); CS_RELIMP_FILE.check(c, r); });
+row('a module with a relative import fails closed (ref mode): exit 2, NO-VERDICT, the sibling is not staged', CS_RELIMP_REF);
+row('a module with a relative import fails closed (file mode): exit 2, NO-VERDICT, the sibling is not staged', CS_RELIMP_FILE);
 
 // =====================================================================================================
 // mutants: each must be red for the stated reason (the observed rc / output goes to the test diagnostics)
