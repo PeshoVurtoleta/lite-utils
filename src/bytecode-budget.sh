@@ -114,6 +114,8 @@ END { bad = n - good; print n + 0, bad + 0, (out == "" ? "-" : out) }
 
 # @include lib/common.sh
 
+# @include lib/stage.sh
+
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 LINE_RE='^0 [0-9]+ [0-9]+ (-|[0-9]+(,[0-9]+)*)$'   # a probe line "<driver exit> <count> <bad> <lengths>" of a clean run
 
@@ -444,7 +446,8 @@ EOF
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; MAXLIST=""; WANT_VER=""; RUNS=2; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""
 SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; DIFFMODE=0
-OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fixtures --help --diff"
+BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0
+OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fixtures --help --diff --before-ref --after-ref --before --after --module --driver --repo"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 # @include lib/args.sh
 while [[ $# -gt 0 ]]; do
@@ -457,7 +460,7 @@ while [[ $# -gt 0 ]]; do
       [[ $EQ -eq 0 ]] || die "$a takes no value"
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice"
       GOTOPT="$GOTOPT $a "; DIFFMODE=1 ;;
-    --fn|--max|--node-version|--runs|--node|--v8-flags|--out|--fixtures)
+    --fn|--max|--node-version|--runs|--node|--v8-flags|--out|--fixtures|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
       GOTOPT="$GOTOPT $a "
       if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
@@ -465,6 +468,8 @@ while [[ $# -gt 0 ]]; do
       case "$a" in
         --fn) FNLIST="$v" ;; --max) MAXLIST="$v" ;; --node-version) WANT_VER="$v" ;; --runs) RUNS="$v" ;;
         --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;; --fixtures) FIXTURES="$v" ;;
+        --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;; --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
+        --module) MODULE="$v" ;; --driver) DRIVER="$v" ;; --repo) REPO="$v" ;;
       esac ;;
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
@@ -481,6 +486,9 @@ fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
 [[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
+if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
+[[ $STAGED == 0 || $DIFFMODE == 1 ]] || die "--before-ref/--after-ref and --before/--after need --diff (ref and file modes are diff modes)"
+[[ $STAGED == 1 || -z "$DRIVER$MODULE$REPO" ]] || die "--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after (and --diff)"
 
 [[ -n "$FNLIST$MAXLIST" ]] || die "need --fn LIST (report) or --max fn=N[,fn=N] (gate) (see --help)"
 [[ -z "$FNLIST" || -z "$MAXLIST" ]] || die "--fn (report) and --max (gate) are exclusive: give one"
@@ -523,13 +531,16 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       [[ "$f" =~ ^--[^=]+=[0-9]{1,9}(\.[0-9]{1,9})?$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =X (a decimal number, e.g. 1.2)" ;;
   esac
 done
-if [[ $DIFFMODE == 1 ]]; then
+if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then
+  stage_check   # lib/stage.sh: every ref / file refusal, before any disk write
+elif [[ $DIFFMODE == 1 ]]; then
   [[ ${#POS[@]} -eq 2 ]] || die "--diff needs exactly two DRIVER files (BEFORE AFTER), got ${#POS[@]} (see --help)"
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
   [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
   DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
   DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
   SHA_B=$(sha8 "$DRV_B_DIR/$DRV_B_BASE"); SHA_A=$(sha8 "$DRV_A_DIR/$DRV_A_BASE")
+  DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $SHA_B"; DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $SHA_A"
 else
   [[ ${#POS[@]} -eq 1 ]] || die "need exactly one DRIVER file, got ${#POS[@]} (see --help)"
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER not found (or not a readable file): ${POS[0]}"
@@ -546,16 +557,26 @@ if [[ -n "$OUT" ]]; then
 else
   REPORT=/dev/null   # nothing is written to disk without --out
 fi
+if [[ $STAGED == 1 ]]; then
+  stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver
+  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")
+  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
+fi
 
 # ---------------------------------------------------------------------------------------------
 # node version (S-6): checked before any probe
 # ---------------------------------------------------------------------------------------------
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; elif [[ $DIFFMODE == 1 ]]; then MODE="diff"; else MODE="report"; fi
+if [[ $STAGED == 1 ]]; then MODE="diff ($STAGE_MODE)"; fi
 say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
 if [[ $DIFFMODE == 1 ]]; then
-  say "before  $DRV_B_DIR/$DRV_B_BASE  sha256/8 $SHA_B"
-  say "after   $DRV_A_DIR/$DRV_A_BASE  sha256/8 $SHA_A"
+  say "before  $DESC_B"
+  say "after   $DESC_A"
+  if [[ $STAGED == 1 ]]; then
+    say "driver  $DESC_D"
+    if [[ $STAGE_SAME == 1 ]]; then say "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)"; fi
+  fi
 else
   say "driver  $DRV_DIR/$DRV_BASE"
 fi
