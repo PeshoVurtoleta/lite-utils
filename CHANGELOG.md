@@ -29,18 +29,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an `=X` of N or N.M, N and M of 1..9 digits (`=1.5` runs; `=abc`, `=.5` refused), the negated forms of those two budget flags
   (V8 spells them `no` + optional `-` / `_`: `--no-max-inlined-bytecode-size=5`, `--no_...`, `--nomax-...`,
   `--no-reserve-inline-budget-scale-factor=1.5`, `--noreserve-...`), `--self-test` combined with anything but
-  `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), and a `--v8-flags` of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
+  `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags` of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
   `--self-test` (29 canned checks) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
-  DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 72 tests): the exact
+  DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 78 tests): the exact
   self-test counts (29 and 29+24), 9 self-test mutant rows plus a NODE_OPTIONS-leak and a
-  version-prefix mutant that must each be caught, gate rows on a fake node, 36 refusal rows with
+  version-prefix mutant that must each be caught, gate rows on a fake node, 41 refusal rows with
   0 node spawns, the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs), and a
   live pair on node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must
   exit 2 with a version-mismatch NO-VERDICT).
   REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
-  distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script 2d83e824,
-  load1 7.39 before / 7.37 after, 5 other node processes, none >= 10% CPU).
+  distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
+  load1 2.31 before / 2.49 after, 4 other node processes before / 8 after, none >= 10% CPU before,
+  one after (another package's `node --test`)).
 
 ### Changed
 

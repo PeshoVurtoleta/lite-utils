@@ -26,7 +26,8 @@
 #   -h, --help             this text (exit 2)
 #   Each value option is given at most once (one comma list) and never empty (--v8-flags never only blanks);
 #   --fn / --max / --v8-flags take no newline and --fn / --max no empty entry (stray comma). --self-test takes
-#   only --fixtures.
+#   only --fixtures. --self-test / --help take no =value; an explicit empty --opt= is refused, never filled
+#   from the next argument.
 #
 # DRIVER: exactly one existing file, run as `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
 #   with cwd = its directory and NODE_OPTIONS stripped. V8 prints a function only once it is compiled.
@@ -315,15 +316,15 @@ OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fix
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 # @include lib/args.sh
 while [[ $# -gt 0 ]]; do
-  a="$1"; v=""
-  case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}" ;; esac
+  a="$1"; v=""; EQ=0
+  case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) usage; exit 2 ;;
-    --self-test) SELFTEST=1 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --fn|--max|--node-version|--runs|--node|--v8-flags|--out|--fixtures)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
       GOTOPT="$GOTOPT $a "
-      if ! need "$@"; then shift; fi
+      if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
       [[ -n "$v" ]] || die "$a needs a non-empty value"
       case "$a" in
         --fn) FNLIST="$v" ;; --max) MAXLIST="$v" ;; --node-version) WANT_VER="$v" ;; --runs) RUNS="$v" ;;

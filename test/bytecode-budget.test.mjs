@@ -247,6 +247,13 @@ const REFUSALS = [
     ['empty --runs value', ['--fn', 'add', '--runs', ''], 'needs a non-empty value'],
     ['empty --node value', ['--fn', 'add', '--node', ''], 'needs a non-empty value', true],
     ['empty --v8-flags value', ['--fn', 'add', '--v8-flags', ''], 'needs a non-empty value'],
+    // OPT-EQ F-a: an empty --opt= is an explicit empty value; it must not swallow the next argument
+    ['empty --fn= value', ['--fn=', 'add'], 'needs a non-empty value'],
+    ['empty --runs= value', ['--fn', 'add', '--runs=', '3'], 'needs a non-empty value'],
+    ['empty --max= value', ['--max=', 'add=6', ...NV], 'needs a non-empty value'],
+    // OPT-EQ F-b: a flag that takes no value refuses =value instead of dropping it
+    ['--self-test=0', ['--self-test=0'], 'takes no value'],
+    ['--help=x', ['--help=x'], 'takes no value'],
     ['blank --v8-flags value', ['--fn', 'add', '--v8-flags', ' '], 'needs at least one flag'],
     ['tab --v8-flags value', ['--fn', 'add', '--v8-flags', '\t'], 'needs at least one flag'],
     // T2: integer boundaries (2^30 is 10 digits; -0 is not digits; 2^64+2 wraps to 2)
@@ -260,9 +267,10 @@ for (const [name, args, msg, raw] of REFUSALS) {
         const dir = mkdtempSync(join(tmpdir(), 'bb-refuse-'));
         try {
             const f = fakeNode(dir);
-            const withDriver = args.includes('--self-test') ? args : [...args, DRIVER];
+            const st = args.some((a) => a.startsWith('--self-test'));
+            const withDriver = st ? args : [...args, DRIVER];
             // fake node is both --node (non-self-test) and first on PATH (self-test), so any spawn is logged
-            const pre = (args.includes('--self-test') || raw) ? [] : ['--node', f.path];
+            const pre = (st || raw) ? [] : ['--node', f.path];
             const r = run(SCRIPT, [...pre, ...withDriver], { env: { ...process.env, PATH: dir + ':' + process.env.PATH } });
             assert.equal(r.status, 2, r.stdout + r.stderr);
             assert.ok((r.stdout + r.stderr).includes(msg), `expected "${msg}" in:\n${r.stdout}${r.stderr}`);
@@ -292,6 +300,18 @@ test('bytecode-budget: a --node whose --version fails exits 2 "cannot run" after
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.ok((r.stdout + r.stderr).includes('cannot run'), r.stdout + r.stderr);
         assert.equal(f.spawns().length, 1, f.spawns().join('\n'));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// OPT-EQ positive pin: the equals form works exactly like the separate form; a separate-form option
+// follows it, so an EQ flag that is not reset per argument is red here
+test('bytecode-budget: --fn=add (equals form) exits 0 REPORTED like --fn add', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-eq-'));
+    try {
+        const f = fakeNode(dir);
+        const r = run(SCRIPT, ['--fn=add', '--node', f.path, DRIVER]);
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /VERDICT REPORTED/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
