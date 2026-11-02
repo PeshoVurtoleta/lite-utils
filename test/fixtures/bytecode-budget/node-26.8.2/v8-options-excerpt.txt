@@ -1,0 +1,28 @@
+  --max-maglev-inlined-bytecode-size (maximum size of bytecode for a single inlining)
+        type: int  default: --max-maglev-inlined-bytecode-size=100
+  --max-maglev-inlined-bytecode-size-cumulative (maximum cumulative size of bytecode considered for inlining excl. small functions)
+        type: int  default: --max-maglev-inlined-bytecode-size-cumulative=920
+  --max-maglev-inlined-bytecode-size-small-total (maximum size of small functions' bytecode that can be inlining)
+        type: int  default: --max-maglev-inlined-bytecode-size-small-total=3000
+  --max-maglev-inlined-bytecode-size-small (maximum size of bytecode considered for small function inlining)
+        type: int  default: --max-maglev-inlined-bytecode-size-small=27
+  --max-maglev-inlined-bytecode-size-small-with-heapnum-in-out (maximum size of bytecode considered for small function inlining, when the function call has a HeapNumber as input or output)
+        type: int  default: --max-maglev-inlined-bytecode-size-small-with-heapnum-in-out=75
+  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)
+        type: int  default: --max-inlined-bytecode-size=460
+  --max-inlined-bytecode-size-cumulative (maximum cumulative size of bytecode considered for inlining)
+        type: int  default: --max-inlined-bytecode-size-cumulative=920
+  --max-inlined-bytecode-size-absolute (maximum absolute size of bytecode considered for inlining)
+        type: int  default: --max-inlined-bytecode-size-absolute=4600
+  --max-inlined-bytecode-size-small-total (maximum size of small functions' bytecode that can be inlining)
+        type: int  default: --max-inlined-bytecode-size-small-total=30000
+  --reserve-inline-budget-scale-factor (scale factor of bytecode size used to calculate the inlining budget)
+        type: float  default: --reserve-inline-budget-scale-factor=1.2
+  --max-inlined-bytecode-size-small (maximum size of bytecode considered for small function inlining)
+        type: int  default: --max-inlined-bytecode-size-small=30
+  --max-inlined-bytecode-size-small-with-heapnum-in-out (maximum size of bytecode considered for small function inlining, when the function call has a HeapNumber as input or output)
+        type: int  default: --max-inlined-bytecode-size-small-with-heapnum-in-out=75
+  --max-maglev-eager-inlined-bytecode-size (maximum size of bytecode considered for eager inlining)
+        type: int  default: --max-maglev-eager-inlined-bytecode-size=30
+  --max-turbolev-eager-inlined-bytecode-size (maximum size of bytecode considered for eager inlining)
+        type: int  default: --max-turbolev-eager-inlined-bytecode-size=30

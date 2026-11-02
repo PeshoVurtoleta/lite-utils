@@ -1,0 +1,13 @@
+max-maglev-inlined-bytecode-size=100
+max-maglev-inlined-bytecode-size-cumulative=920
+max-maglev-inlined-bytecode-size-small-total=3000
+max-maglev-inlined-bytecode-size-small=27
+max-maglev-inlined-bytecode-size-small-with-heapnum-in-out=75
+max-inlined-bytecode-size=460
+max-inlined-bytecode-size-cumulative=920
+max-inlined-bytecode-size-absolute=4600
+max-inlined-bytecode-size-small-total=30000
+reserve-inline-budget-scale-factor=1.2
+max-inlined-bytecode-size-small=30
+max-inlined-bytecode-size-small-with-heapnum-in-out=75
+max-maglev-eager-inlined-bytecode-size=30

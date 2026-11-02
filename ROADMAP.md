@@ -78,6 +78,8 @@ belong here.
 - S-10 ASCII-only sources and docs (U+00D7 and U+00B5 excepted). MIT (c) Zahary Shinikchiev.
 - S-11 LiteSignal keeps a vendored copy of `inlining-budget-diff.sh`; LiteUtils is the source of truth.
   LiteSignal pins it by sha256 in a test (the maintainer coordinates the LiteSignal side).
+- S-12 (maintainer 2026-11-02) LiteUtils is exempt from the torture.mjs law; gates = each script's
+  --self-test (+ --fixtures), npm test, cmp frozen 7f0ba7b.
 
 ## 3. Phases
 

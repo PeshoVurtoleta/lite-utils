@@ -84,15 +84,19 @@ test('A3 drift: a stray root extra.sh fails the set check', { skip }, () => {
     } finally { cleanup(); }
 });
 
-test('A3 drift: lib mutant is exactly 1 mismatch, revert is 0', { skip }, () => {
+test('A3 drift: lib mutant differs in exactly the src files that include lib/common.sh, revert is 0', { skip }, () => {
     try {
         const copy = repoCopy();
+        // expected set derived from the build inputs (exact marker line), not hardcoded
+        const users = readdirSync(join(copy, 'src')).filter((f) => f.endsWith('.sh') &&
+            readFileSync(join(copy, 'src', f), 'utf8').split('\n').includes('# @include lib/common.sh')).sort();
+        assert.ok(users.length >= 2, 'expected >= 2 src files including lib/common.sh: ' + users);
         const lib = join(copy, 'lib', 'common.sh');
         const orig = readFileSync(lib);
         editOnce(lib, 'echo DIFF', 'echo SAME');          // root file deliberately NOT rebuilt
         const out1 = mk('bld-out-');
         assert.equal(build(copy, out1).status, 0);
-        assert.deepEqual(drift(out1, copy), ['differs:' + NAME]);
+        assert.deepEqual(drift(out1, copy), users.map((f) => 'differs:' + f));
         writeFileSync(lib, orig);                          // revert
         const out2 = mk('bld-out-');
         assert.equal(build(copy, out2).status, 0);
