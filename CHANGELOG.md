@@ -30,10 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (V8 spells them `no` + optional `-` / `_`: `--no-max-inlined-bytecode-size=5`, `--no_...`, `--nomax-...`,
   `--no-reserve-inline-budget-scale-factor=1.5`, `--noreserve-...`), `--self-test` combined with anything but
   `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags` of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
-  `--self-test` (45 canned checks) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
+  `--self-test` (49 canned checks; the 4 ref / file rows need git: with no git on PATH they are one
+  FAIL line and `--self-test` exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
   DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 145 tests): the exact
-  self-test counts (45 and 45+24), 19 self-test mutant rows (12 report/gate, 3 of them on the length
+  self-test counts (49 and 49+24), 19 self-test mutant rows (12 report/gate, 3 of them on the length
   cap, + 7 diff) plus a
   NODE_OPTIONS-leak and a version-prefix mutant that must each be caught, gate rows on a fake node,
   48 refusal rows with 0 node spawns (41 report/gate + 7 diff), the driver cwd, spawn and retention
@@ -106,6 +107,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `node --test test/43-soak-model.test.mjs` child). An earlier 20/20 run on the B1 build 06cb4911
   (load1 4.16 before / 3.95 after) gave the same verdicts. The shipped 9173830d (F1) was not rerun
   20/20; its live diff pair runs once per `npm test`.
+- `bytecode-budget.sh --diff`, ref and file mode, and `lib/stage.sh` (new fragment, built into the
+  script): the same diff, but each side is one module file staged by the script instead of two
+  DRIVER paths. Ref mode: `--diff --fn LIST --before-ref R1 --after-ref R2 --module REL --driver D
+  --out DIR` (each side is `git cat-file blob <sha>:REL`: plumbing, no textconv, frozen by
+  construction). File mode: `--diff --fn LIST --before FROZEN --after LIVE --driver D --out DIR`
+  (each side is a `cp`, so an edit after staging cannot leak in). `--out DIR` is required and
+  `DIR/stage` must be absent or empty; `DIR/stage/before` and `DIR/stage/after` each get the module
+  as NAME plus a copy of `--driver`, and each driver runs there (cwd = its own stage dir; the driver
+  must import `./NAME`). One module file per side: a module with relative imports of its own fails
+  closed (its driver exits non-zero: NO-VERDICT). Verdicts, exit codes (0 SAME, 1 DIFF, 2
+  NO-VERDICT), the null control and the spawn count are those of diff mode; `DIR` holds
+  `report.txt`, `raw/` and `stage/`. The head reads `before  REF @ <sha12>  REL  sha256/8 x` (ref)
+  or `before  <abs FILE>  sha256/8 x` (file), the same for `after`, then `driver  <abs>  sha256/8
+  x`, where x is the staged copy's; when the two staged modules are byte-identical a NOTE line says
+  the run is a null control (expect SAME). The mode line reads `diff (ref)` or `diff (file)`. Both
+  modes refuse with exit 2, 0 spawns and nothing written to `--out`: the two kinds mixed or
+  half-given, DRIVER paths, a missing `--out` / `--driver`, a non-empty `DIR/stage`, a newline in a
+  path option, no git on PATH, any of the six `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES` set (each can make a tracked
+  `--before` read as untracked: every repo is found from its path), a driver with the module's file
+  name or without `'./NAME'` or `"./NAME"`, and a ref that is not a commit, starts with `-`, or
+  lacks `REL` (`REL` relative, no empty, `.` or `..` segment). File mode also refuses `--module`,
+  and a `--before` that is not a frozen copy: it, or the end of its symlink chain, is git-tracked;
+  it is the same device:inode as a tracked `<top>/Signal.js` or `<top>/<same name>` (`<top>` = the
+  repo around the cwd, `--after`, `--before` and its link target, and `--repo`); or it is the same
+  file as `--after` (a hard link or symlink anywhere). NOT detected (also in `-h`): a driver that
+  reaches the live module by another path (an absolute path or a package self-reference) instead of
+  `./NAME`; a hard link of `--before` to a tracked file that is not `--after`, `<top>/Signal.js` or
+  `<top>/<same name>`; a git error while checking (e.g. safe.directory "dubious ownership") reads as
+  untracked, so a tracked `--before` behind it is not refused. Tier: DETERMINISTIC (one node binary;
+  each staged side keeps its null control). Gated in `npm test` by
+  `test/bytecode-budget-stage.test.mjs` (113 tests; they need git and skip without it): verdict rows
+  on a fake node whose length is the staged module's bytes (r1 = 211, r2 = 212, hand-derived),
+  refusal rows (exit 2, 0 spawns, the OUT dir is not created, except the stage-not-empty row, which
+  starts from an existing OUT and leaves it as it was: report.txt unchanged, no raw/), each row also
+  run on the pre-staging build 9173830d (`git show 6835177:bytecode-budget.sh`, skipped without git
+  history), where it must exit 2 "unknown option" naming its first staged option (--before-ref or
+  --before; --after-ref, --driver, --repo or --module on the 4 rows that start with one); mutants
+  M7-M13, M-stage-order, M-git-env (x4), G2 x3, U1-U3 and STAGE_SAME-forced-1, each of which must
+  turn its row red; retention (20 ref runs, each into a new `--out`: 0 entries left in TMPDIR and
+  the cwd, the repo untouched, exactly 17 files per `--out`) with a mutant that stages under TMPDIR;
+  and the `--self-test` count rows (49 ok, with the 4 staged checks present once each, absent from
+  the 9173830d build; self-test mutants M7 and M10; a PATH without git -> exit 1 with one FAIL line;
+  the six GIT_* vars set -> still 49 ok). No REPORTED (timed or measured) numbers exist for this
+  entry.
 
 ### Changed
 
