@@ -167,6 +167,38 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   (c) findings go through the normal pipeline (coder -> reviewer); re-audit only what changed; then
   the release.
 
+### Post-1.0 research leads (maintainer 2026-11-03: "Yes, please, add them")
+- These are LEADS, not plans. Each would start with a TASK 0 probe on the node of that day (a flag
+  listed by `--v8-options` is not proof it works). None gates 1.0.0 (D-3 unchanged: the first release
+  is 1.0.0 after Phases 3-7). No timing-based tool here (that is lite-perf-gate's job).
+- REPORTED probe facts (node v26.8.2, 2026-11-03, local darwin host, untimed,
+  `env -u NODE_OPTIONS`, one run each):
+  `--trace-protector-invalidation` works (patching `Array.prototype[Symbol.iterator]` printed
+  `Invalidating protector cell ArrayIteratorLookupChain`); `--trace-elements-transitions` works (no
+  source position, node-internal arrays mixed in); `--trace-generalization` works (node-internal
+  objects mixed in); `--trace-maglev-escape` and `--maglev-escape` are refused (`bad option`)
+  because they are not flag names: `--v8-options` lists `--trace-maglev-escape-analysis` and
+  `--maglev-escape-analysis`, both accepted (exit 0, output not probed). `--turbo-escape`,
+  `--log-code`, `--log-maps`, `--log-maps-details` and `--trace-gc-object-stats` are listed; output
+  not probed.
+- L1 import-audit.sh (top pick): what importing a module does to everyone else -- globals changed,
+  open timers / handles, import-time allocation, V8 protector cells invalidated. Checks the
+  `sideEffects: false` law; expected DETERMINISTIC (reuses allocation-diff machinery); light on V8
+  internals.
+- L2 shape-diff.sh: per-site elements-kind and field-representation stability, dictionary-mode
+  objects (`--trace-elements-transitions`, `--trace-generalization`; `--log-maps` is already
+  ic-diff's opt-in map section, S-1 / Phase 5). Hard part is attribution (`<unknown>:<unknown>`,
+  node-internal noise; likely the ic-diff pc -> code-creation join).
+- L3 optimization-ablation mode for deopt-diff / allocation-diff (not a new script): run with one
+  optimization off (`--no-turbo-escape`, inlining off); indirect answer to the deferred
+  escape-analysis item. Probe that the `--no-` forms are accepted.
+- L4 optimized-code size diff: machine-code size per function per tier from `--log-code` records;
+  catches inlining bloat that bytecode-budget cannot see; reuses ic-diff's code-creation parser.
+- L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
+  leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
+- L6 suite-wide runner (not a tool): run the five scripts over every package's drivers; store the
+  REPORTED tables as a per-package baseline.
+
 ## 4. Known drift to fix
 
 - LiteSignal `bench/inlining-budget-diff.sh` lacks two fixes that this repo has:
