@@ -218,13 +218,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   row), 2 controls that must survive (an awk crash the old records helper swallowed), `-h`, and 3
   end-to-end rows on a fake node with their revert rows (a glued `[completed compiling` line,
   `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
-  `test/deopt-diff-boundary.test.mjs` (87 tests) adds outside rows, each with a mutant row that must turn
+  `test/deopt-diff-boundary.test.mjs` (84 tests) adds outside rows, each with a mutant row that must turn
   it red: retention over 3 cycles of SAME / DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a
   logging mktemp shim stay empty; 7 spawns each), the self-test leaving 0 dirs (also when killed by
   SIGTERM mid-run), `--runs` 2 / 20 / 08 / 09 (5 / 41 / 17 / 19 spawns, before / after alternating,
   exact argv), 26 refused `--runs` values,
   11 further refusals and 7 `--out` refusals (exit 2, 0 spawns, OUT unchanged), and A4 parity of
-  bytecode-budget.sh 99790884 / inlining-budget-diff.sh 740da13b. REPORTED (not gated; one
+  inlining-budget-diff.sh 740da13b. REPORTED (not gated; one
   PRELIMINARY run under the quiet lock, 2026-11-02 20:43 EET, Darwin arm64, node v26.8.2,
   deopt-diff.sh 221ff2ec, load1 3.63 before / 3.50 after vs baseline 2.21, no other node >= 10% CPU,
   5 invocations per pair with the default `--runs 3`, `--v8-flags --allow-natives-syntax --fn add`
@@ -357,6 +357,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `lib/v8probe.sh` (LIMITS_AWK, BYTECODE_AWK) and `lib/v8limits.sh` (the limits read and `lim`)
   are cut verbatim from `src/inlining-budget-diff.sh` and shared with `bytecode-budget.sh`; the
   generated `inlining-budget-diff.sh` stays byte-identical (sha256 740da13b...).
+- `bytecode-budget.sh` / `deopt-diff.sh` header `node` field: the resolved absolute path.
+  `-h` for `--node`: resolved once before any cd, must be an executable file; for `--v8-flags`: each
+  flag is `--` and a letter.
+- `test/deopt-diff-boundary.test.mjs`: the A4 parity row no longer pins `bytecode-budget.sh` (it leaves the
+  Phase 2 freeze, MD-32 (a)); the `inlining-budget-diff.sh` pin (740da13b) stays.
 
 ### Fixed
 
@@ -376,3 +381,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   1000000000 must not), by cap-off / cap-8 / cap-10 rows that must turn `--self-test --fixtures` red, by
   st-M5 and st-M6 self-test mutant rows, and in `test/bytecode-budget-diff-boundary.test.mjs` by the length
   matrix (valid lengths up to 999999999; 10+ digits NO-VERDICT) with an M-no-cap mutant.
+
+- `bytecode-budget.sh` and `deopt-diff.sh`, external-audit group (exit 2 refusals, all before any node
+  spawn unless a bullet says otherwise; the scripts are generated from `src/`, root scripts rebuilt):
+  - node is resolved ONCE, from the caller's cwd, to one absolute path used for every spawn. A relative
+    PATH entry used to be looked up again after the `cd` into each driver's directory, so before and
+    after could run different binaries (fail-open). The header `node` field prints that path.
+  - `--node` naming a shell builtin or function, a directory or a non-executable file is refused (exit 2):
+    "node binary is not a file on PATH (...)" / "node binary is not an executable file".
+  - `CDPATH` is unset at the top of both scripts, so no `cd X && pwd` join resolves X through a CDPATH entry.
+  - A dash-led path is a name, never an option or OLDPWD: `--node -/node`, a DRIVER `./-driver.mjs` (it
+    reaches node as `./-driver.mjs`), `--out -`, `--out -x`. A dash-led `--out` used to end exit 2
+    "--out: cannot create" (mkdir read it as options; `deopt-diff.sh` after the `--version` spawn); in
+    ref / file mode the stage/ emptiness refusal now sees it (`ls` used to read `-x/stage` as options;
+    both tools).
+  - `--v8-flags` a `---` flag, `--=1` and `--1x` are refused (each flag must be `--` and a letter).
+  - An unwritable `report.txt` (a directory, a read-only file) is refused with "--out: cannot write
+    <DIR>/report.txt" before any node spawn. `deopt-diff.sh` known residue (F2: exit 2 after the
+    `--version` spawn, from the later mkdir / write backstop; `bytecode-budget.sh` refuses each of these
+    with 0 spawns, except an unwritable empty raw/ in report / gate mode: not refused, the probes run
+    and it ends NO-VERDICT "driver exited 1 in run 1", exit 2): an absent OUT under an unwritable
+    parent, a dangling-symlink OUT, a `report.txt` that is a dangling symlink into a missing directory,
+    an existing OUT that is not writable but has a writable `report.txt` and no raw/, an unwritable
+    empty raw/.
+  - Printed joins no longer contain `//`.
+  - A `--node` path (every mode) or a DRIVER (driver mode) whose `..` follows a symlink, so that its
+    logical and physical paths name different files, is refused with 0 spawns;
+    `--out` with such a `..` writes into the directory that was checked and the header prints its
+    physical path.
+  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (74 tests = 72 rows, `bytecode-budget.sh` 35 /
+  `deopt-diff.sh` 37, plus 2 retention loops; fake nodes, no V8 run; the rows are red on 8070907's
+  scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907 already had: the controls B4B
+  x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is red there). In `npm test`.
