@@ -652,6 +652,14 @@ FAKE_MKTEMP
   check "A5 retention: 3 x (SAME / DIFF / NONZERO / NO-VERDICT old GC / NO-VERDICT no count), no --out -> 1 logged mktemp each, 0 new entries in TMPDIR, cwd and the driver dirs" \
     "$o|$b0->$b1" "$(printf '/01/11/11/21/21%.0s' 1 2 3)|$b0->$b0"
 
+  # --- MD-33 (A15): an unreadable --out DIR/raw is refused, never read as empty (ls -A on it fails silently) ---
+  mkdir -p "$d/ou/raw/driver"; printf 'RUN1-BYTES\n' >"$d/ou/raw/driver/run.1.txt"; chmod 0300 "$d/ou/raw"
+  x='is not readable'; [[ $EUID -ne 0 ]] || x='is not empty (give a new or empty DIR)'   # euid 0 reads a 0300 dir: refused as non-empty
+  got=$(spawn -- "$NO" --runs 2 --zero --out "$d/ou" "$dr/z0/driver.js"); chmod 0700 "$d/ou/raw"   # mode restored before any read
+  check "MD-33 refused before any spawn: --out DIR whose raw/ is mode 0300 (holding driver/run.1.txt) -> exit 2, 0 spawns, 0 mktemp, 'is not readable', run.1.txt unchanged" \
+    "$got|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: --out: $d/ou/raw $x" "$d/sp.out" || true)|$(cat "$d/ou/raw/driver/run.1.txt")|$(ls -A "$d/ou" | tr '\n' ' ')" \
+    "2|VERDICT NO-VERDICT|0|0|1|RUN1-BYTES|raw "
+
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
 }
@@ -721,6 +729,7 @@ done
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
+  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   for ((i = 0; i < ${#POS[@]}; i++)); do   # -ef follows symlinks and sees hard links: refused before any truncation
     [[ ! "$OUT/report.txt" -ef "${POS[$i]}" ]] || die "--out: $OUT/report.txt is the DRIVER (${SIDES[$i]}) ${POS[$i]}"
