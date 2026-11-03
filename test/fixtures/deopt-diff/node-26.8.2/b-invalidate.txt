@@ -1,0 +1,7 @@
+[marking 0x27b8525c4711 <JSFunction isPosixPathSeparator (sfi = 0x1402e7bdd759)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x27b8525c4711 <JSFunction isPosixPathSeparator (sfi = 0x1402e7bdd759)> (target MAGLEV), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x27b8525c4711 <JSFunction isPosixPathSeparator (sfi = 0x1402e7bdd759)> (target MAGLEV) - took 0.002, 0.074, 0.002 ms]
+[manually marking 0x3f52fdef2b09 <JSFunction offFn (sfi = 0x26a8eb31bd11)> for optimization to TURBOFAN_JS, ConcurrencyMode::kSynchronous]
+[compiling method 0x3f52fdef2b09 <JSFunction offFn (sfi = 0x26a8eb31bd11)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x3f52fdef2b09 <JSFunction offFn (sfi = 0x26a8eb31bd11)> (target TURBOFAN_JS) - took 0.009, 0.244, 0.003 ms]
+[marking dependent code 0x01b8a3374e49 <Code TURBOFAN_JS> (0x26a8eb31bd11 <SharedFunctionInfo offFn>) (opt id 1) for deoptimization, reason: dependent prototype chain changed]

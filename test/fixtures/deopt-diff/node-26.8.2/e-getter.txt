@@ -1,0 +1,30 @@
+[marking 0x226119c04711 <JSFunction isPosixPathSeparator (sfi = 0x15fa2ad5d759)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x226119c04711 <JSFunction isPosixPathSeparator (sfi = 0x15fa2ad5d759)> (target MAGLEV), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x226119c04711 <JSFunction isPosixPathSeparator (sfi = 0x15fa2ad5d759)> (target MAGLEV) - took 0.002, 0.078, 0.001 ms]
+[manually marking 0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)> for optimization to TURBOFAN_JS, ConcurrencyMode::kSynchronous]
+[compiling method 0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)> (target TURBOFAN_JS) - took 0.009, 0.307, 0.004 ms]
+[bailout (kind: deopt-eager, reason: out of bounds): begin. deoptimizing 0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)>, 0x3f305d3f5089 <Code TURBOFAN_JS>, opt id 1, bytecode offset 0, deopt exit 3, FP to SP delta 32, caller SP 0x00016ef950a8, pc 0x000115f03068]
+            ;;; deoptimize at <file:///private/tmp/dd-fx/node-26.8.2/e-getter.mjs:2:86>
+  reading input frame get value => bytecode_offset=0, args=1, height=1, retval=0(#0); inputs:
+      0: 0x202470af2ff1 ;  [fp -  16]  0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)>
+      1: 0x202470af33f1 ; x2 0x202470af33f1 <Box map = 0x3c6e75d9cd89>
+      2: 0x3c6e75d9ca01 ;  [fp -  32]  0x3c6e75d9ca01 <ModuleContext[3]>
+      3: (optimized out)
+      4: (optimized out)
+  translating interpreted frame get value => bytecode_offset=0, variable_frame_size=32, frame_size=104
+    0x00016ef950a0: [top +  96] <- 0x202470af33f1 <Box map = 0x3c6e75d9cd89> ;  stack parameter (input #1)
+    -------------------------
+    0x00016ef95098: [top +  88] <- 0x000104930c98 ;  bottommost caller's pc
+    0x00016ef95090: [top +  80] <- 0x00016ef95130 ;  caller's fp
+    0x00016ef95088: [top +  72] <- 0x3c6e75d9ca01 <ModuleContext[3]> ;  context (input #2)
+    0x00016ef95080: [top +  64] <- 0x202470af2ff1 <JSFunction get value (sfi = 0x3c6e75d9bd59)> ;  function (input #0)
+    0x00016ef95078: [top +  56] <- 0x000000000001 ;  actual argument count
+    0x00016ef95070: [top +  48] <- 0x3f305d3f4dc9 <BytecodeArray[16]> ;  bytecode array
+    0x00016ef95068: [top +  40] <- 0x003f00000000 <Smi 63> ;  bytecode offset
+    0x00016ef95060: [top +  32] <- 0x3eca89aefff9 <arguments_marker> ;  feedback vector    -------------------------
+    0x00016ef95058: [top +  24] <- 0x27fb1848fff9 <optimized_out> ;  stack parameter (input #3)
+    0x00016ef95050: [top +  16] <- 0x2ed03f40fff9 <the_hole_value> ;  padding
+    0x00016ef95048: [top +   8] <- 0x2ed03f40fff9 <the_hole_value> ;  padding
+    0x00016ef95040: [top +   0] <- 0x27fb1848fff9 <optimized_out> ;  accumulator (input #4)
+[bailout end. code_invalidation: invalidated, took 0.206 ms]

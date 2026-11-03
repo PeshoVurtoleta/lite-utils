@@ -1,0 +1,5 @@
+[marking 0x1e2abe5c4711 <JSFunction isPosixPathSeparator (sfi = 0x3419e279d759)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x1e2abe5c4711 <JSFunction isPosixPathSeparator (sfi = 0x3419e279d759)> (target MAGLEV), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x1e2abe5c4711 <JSFunction isPosixPathSeparator (sfi = 0x3419e279d759)> (target MAGLEV) - took 0.001, 0.075, 0.002 ms]
+[compiling method 0x0a411ef72a59 <JSFunction loopFn (sfi = 0x5e72f65bcc1)> (target MAGLEV) OSR, mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x0a411ef72a59 <JSFunction loopFn (sfi = 0x5e72f65bcc1)> (target MAGLEV) OSR - took 0.000, 0.087, 0.000 ms]

@@ -1,0 +1,9 @@
+[marking 0x0c2dd0444711 <JSFunction isPosixPathSeparator (sfi = 0x28e7facdd759)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x0c2dd0444711 <JSFunction isPosixPathSeparator (sfi = 0x28e7facdd759)> (target MAGLEV), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x0c2dd0444711 <JSFunction isPosixPathSeparator (sfi = 0x28e7facdd759)> (target MAGLEV) - took 0.002, 0.083, 0.001 ms]
+@@LITE-MARK op 2
+[manually marking 0x3d60086b8fe9 <JSFunction add (sfi = 0x280b9251bdf1)> for optimization to TURBOFAN_JS, ConcurrencyMode::kSynchronous]
+[compiling method 0x3d60086b8fe9 <JSFunction add (sfi = 0x280b9251bdf1)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x3d60086b8fe9 <JSFunction add (sfi = 0x280b9251bdf1)> (target TURBOFAN_JS) - took 0.013, 0.254, 0.005 ms]
+@@LITE-MARK op 3
+@@LITE-MARK op 4

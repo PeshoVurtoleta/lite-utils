@@ -1,0 +1,34 @@
+[marking 0x328d94984711 <JSFunction isPosixPathSeparator (sfi = 0x2f940be1d759)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x328d94984711 <JSFunction isPosixPathSeparator (sfi = 0x2f940be1d759)> (target MAGLEV), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x328d94984711 <JSFunction isPosixPathSeparator (sfi = 0x2f940be1d759)> (target MAGLEV) - took 0.002, 0.084, 0.002 ms]
+@@LITE-MARK op 2
+[manually marking 0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)> for optimization to TURBOFAN_JS, ConcurrencyMode::kSynchronous]
+[compiling method 0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]
+[completed compiling 0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)> (target TURBOFAN_JS) - took 0.014, 0.282, 0.005 ms]
+@@LITE-MARK op 3
+[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing 0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)>, 0x05e8587c7db1 <Code TURBOFAN_JS>, opt id 1, bytecode offset 2, deopt exit 0, FP to SP delta 32, caller SP 0x00016bd591e8, pc 0x000118e03014]
+            ;;; deoptimize at <file:///private/tmp/dd-fx/node-26.8.2/deopt.mjs:2:31>
+  reading input frame add => bytecode_offset=2, args=3, height=0, retval=0(#0); inputs:
+      0: 0x099851f39029 ;  [fp -  16]  0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)>
+      1: 0x2095a72c0011 ;  [fp +  16]  0x2095a72c0011 <undefined>
+      2: 0x2095a72c5811 ; x2 0x2095a72c5811 <String[1]: #x>
+      3: 0x2095a72c5829 ;  [fp +  32]  0x2095a72c5829 <String[1]: #y>
+      4: 0x0fef1d0b9789 ;  [fp -  32]  0x0fef1d0b9789 <ModuleContext[3]>
+      5: 0x2095a72c5829 ;  [fp +  32]  0x2095a72c5829 <String[1]: #y>
+  translating interpreted frame add => bytecode_offset=2, variable_frame_size=16, frame_size=104
+    0x00016bd591e0: [top +  96] <- 0x2095a72c5829 <String[1]: #y> ;  stack parameter (input #3)
+    0x00016bd591d8: [top +  88] <- 0x2095a72c5811 <String[1]: #x> ;  stack parameter (input #2)
+    0x00016bd591d0: [top +  80] <- 0x2095a72c0011 <undefined> ;  stack parameter (input #1)
+    -------------------------
+    0x00016bd591c8: [top +  72] <- 0x000107825424 ;  bottommost caller's pc
+    0x00016bd591c0: [top +  64] <- 0x00016bd59250 ;  caller's fp
+    0x00016bd591b8: [top +  56] <- 0x0fef1d0b9789 <ModuleContext[3]> ;  context (input #4)
+    0x00016bd591b0: [top +  48] <- 0x099851f39029 <JSFunction add (sfi = 0x1f5e127dbe01)> ;  function (input #0)
+    0x00016bd591a8: [top +  40] <- 0x000000000003 ;  actual argument count
+    0x00016bd591a0: [top +  32] <- 0x05e8587c7b61 <BytecodeArray[6]> ;  bytecode array
+    0x00016bd59198: [top +  24] <- 0x004100000000 <Smi 65> ;  bytecode offset
+    0x00016bd59190: [top +  16] <- 0x067c02c2fff9 <arguments_marker> ;  feedback vector    -------------------------
+    0x00016bd59188: [top +   8] <- 0x2095a72cfff9 <the_hole_value> ;  padding
+    0x00016bd59180: [top +   0] <- 0x2095a72c5829 <String[1]: #y> ;  accumulator (input #5)
+[bailout end. code_invalidation: invalidated, took 0.263 ms]
+@@LITE-MARK op 4
