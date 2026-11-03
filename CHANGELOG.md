@@ -299,6 +299,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--self-test` gains 13 tier rows (T1-T13), 71 -> 84 checks, gated by a 16-row tier mutant table
   in `test/deopt-diff.test.mjs`.
 
+- `ic-diff.sh` (Phase 5 group 1, driver mode only): the inline-cache states of named functions,
+  DRIVER_BEFORE vs DRIVER_AFTER, on one node binary. Usage: `ic-diff.sh [opts] --fn LIST DRIVER_BEFORE
+  DRIVER_AFTER`. Flags: `--fn` (required; a short V8 name, at most one space part, e.g. `get`, `get
+  value`), `--runs` 2..20 (default 3), `--node`, `--v8-flags`, `--out DIR`, `--self-test`, `-h`. Per fn,
+  one record per IC site (kind, key, final state) from `--log-ic`, taken from the last IC line at that
+  site; the key is `[]` at the keyed kinds (a per-run Symbol hash never reaches the verdict). The
+  verdict compares the run-1 multisets of `fn kind key final[ mod]` (line:col is a label, never
+  compared): exit 0 SAME, 1 DIFF (one `before=<a> after=<b>` line per differing entry), 2 NO-VERDICT.
+  Null control: runs 2..N of each side must give run 1's records. Fails closed (NO-VERDICT, never SAME
+  or DIFF) on an unresolved pc, a pc in Maglev / Turbofan code, a code-move from an unknown start, a log
+  line that does not parse (wrong field count, bad hex or decimal, an IC state outside `X01P^NDG`, an
+  unknown IC kind or event, a code kind outside the allowlist), a driver exit != 0, a missing log, a
+  log-file count != 1 (expected from a Worker or a forked child; only the 2-file count is gated), a
+  v8-version line count != 1, a NUL byte, no final newline, and when fn has no IC site or only X sites
+  in run 1 (hint `--v8-flags=--no-lazy-feedback-allocation`). Every spawn runs under `env -u
+  NODE_OPTIONS -u NODE_COMPILE_CACHE`: one `--version`, one `--v8-options`, then 2 x runs trace runs
+  (runs 3: 8 spawns); a failing probe exits 2 before anything is written. Refuses before any spawn or
+  disk write (exit 2): a repeated or empty value option, a newline in `--fn` / `--v8-flags` / `--out` /
+  `--node`, a stray comma in `--fn`, a repeated fn, an unknown option (a did-you-mean hint when it
+  shares a prefix with a known option), a `--v8-flags` flag matching `*log*`, `*prof*`,
+  `*concurrent-recompilation*`, `*interpreted-frames-native-stack*` or `*snapshot*`, a node binary that
+  does not exist, and a non-empty `DIR/raw`. An IC pc, code-creation start or code-move from / to wider
+  than `0x` + 13 hex digits is an X line (awk sums those in a double, exact to 2^53); a driver file name
+  starting with `-` runs as `./<name>`; without `--out` the logs go to one private `mktemp -d` dir
+  removed on every exit (INT / TERM: exit 2 `interrupted`), with `--out` no mktemp and exactly 4 x runs
+  + 1 files. The header carries `v8-opts sha256/8 <x>` (the hash of the `--v8-options` byte stream),
+  REPORTED, never part of the verdict. Tier: on a user driver the verdict is STATISTICAL (IC states
+  follow warm-up, GC and tier-up timing; run it under the host quiet lock) and gated nowhere;
+  `--self-test` is DETERMINISTIC. `--self-test` (64 checks, no real node): canned node v26.8.2
+  `--log-ic` text through the record awk, judge and diff_fn (records, every X reason, the
+  basename-collision and keyed-Symbol rows), then the script end to end on a fake node that counts
+  spawns and mktemp calls (spawn budget, exact probe argvs, env stripped on every spawn, 13 files under
+  `--out`, no entry left after SAME / DIFF / NO-VERDICT cycles and a SIGTERM, 10 refusals with 0
+  spawns). `-h` documents every option, X and NO-VERDICT reason, the report lines and the Tier, and
+  lists what is not detected: two sites of fn that swap states, fn inlined into optimized code, eval /
+  vm / `data:` scripts, computed method names, a detached child that outlives the driver. Known gap (in
+  `-h`): after a run with != 1 isolate file, those files stay in the run dir and later runs of that side
+  count them too (still NO-VERDICT). Not yet in this group: ref / file modes, per-kind IC totals and
+  `--deterministic`, the map section (G3), the natives control pair and node fixtures (G4).
+- `test/ic-diff.test.mjs`: `--self-test` exact count (64), an unmodified-copy baseline, a row table
+  that names each printed check, 64 self-test mutant rows (each an exact-once edit of a temp copy
+  that must turn the self-test red on its designed rows, each with a revert check on the unmutated
+  copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs, is
+  host-semantics and not in the table), the exit wiring (a flipped expectation gives exit 1 and one
+  FAIL), the `-h` text with its revert checks, and 6 rows on the file's own fake node, each with
+  revert checks (spawn and mktemp counts, 13 files under `--out`, retention, a `-x.js` driver, the
+  verdict fold over fns, `mod` in the verdict key). DETERMINISTIC; no real V8 run.
+
 ### Changed
 
 - `bytecode-budget.sh` report and gate mode: an unreadable DRIVER (chmod 000) is now refused before any
