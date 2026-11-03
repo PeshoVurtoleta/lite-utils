@@ -51,8 +51,7 @@ const TRACE = '--trace-deopt-verbose --trace-opt --no-concurrent-recompilation';
 
 // ---- shared read-only fixtures. REPO m/trace.txt: r1 = T_R1 (tag r1, annotated tag ar1, branch b1), r2 = T_R2 (tag r2,
 // HEAD). FROZEN = an untracked r1 copy under ANOTHER file name (file mode stages it as --after's name) ----
-let ROOT;
-try { ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ddsb-root-'))); } catch (e) { throw e; }
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'ddsb-root-')));
 after(() => { try { chmodTree(ROOT); } finally { rmSync(ROOT, { recursive: true, force: true }); } });
 const REPO = join(ROOT, 'repo');
 const DRV = join(ROOT, 'drv', 'driver.js');
@@ -339,13 +338,13 @@ const outFiles = ['raw/after/run.1.txt', 'raw/after/run.2.txt', 'raw/after/run.3
     'report.txt', 'stage/after/driver.js', 'stage/after/trace.txt', 'stage/before/driver.js', 'stage/before/trace.txt'];
 const odd = (c) => join(c.dir, 'o u*t?[1]', 'x y');
 row('6 --out "o u*t?[1]/x y" (spaces + glob chars) -> exit 1 DIFF, exactly the 11 files, out line verbatim, cwd = that path', {
-    prep: (c) => { mkdirSync(join(c.dir, 'o u1t1')); mkdirSync(join(c.dir, 'o uXt1')); },   // decoys a glob would match
+    prep: (c) => { mkdirSync(join(c.dir, 'o uAtB1', 'x y'), { recursive: true }); mkdirSync(join(c.dir, 'o uXtY1', 'x y'), { recursive: true }); },   // decoys a glob would match
     args: (c) => refO(c, { '--out': odd(c) }),
     check: (c, r) => {
         verdict(r, 1, 'DIFF');
         assert.equal(has(r, `out     ${odd(c)}`), 1, msg(r));
         assert.deepEqual(files(odd(c)), outFiles);
-        assert.deepEqual(readdirSync(join(c.dir, 'o u1t1')), []); assert.deepEqual(readdirSync(join(c.dir, 'o uXt1')), []);
+        assert.deepEqual(readdirSync(join(c.dir, 'o uAtB1', 'x y')), []); assert.deepEqual(readdirSync(join(c.dir, 'o uXtY1', 'x y')), []);
         assert.equal(c.drivers()[0][0], `${odd(c)}/stage/before`);
     },
 });
@@ -355,7 +354,7 @@ row('6 --out=DIR form in ref mode -> exit 1 DIFF, exactly the 11 files', {
 });
 row('6 adversarial: every option in --opt=value form (file mode) -> exit 1 DIFF, mode "diff (file)"', {
     args: (c) => [`--before=${FROZEN}`, `--after=${c.live}`, `--driver=${DRV}`, `--repo=${REPO}`, `--out=${c.out}`, '--fn=add', `--node=${c.node}`, '--runs=2'],
-    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.match(r.stdout, /^mode {4}diff \(file\) {2}runs 2 /m); assert.equal(c.spawns(), 5); },
+    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.match(r.stdout, /^mode {4}diff \(file\) {2}runs 2 /m, msg(r)); assert.equal(c.spawns(), 5); },
 });
 row('6 --before-ref given twice -> exit 2 "--before-ref given twice (give one comma list)", 0 spawns, no OUT', {
     args: (c) => [...refO(c), '--before-ref', 'r2'], check: refuses('--before-ref given twice (give one comma list)'),
@@ -421,23 +420,25 @@ row('9 /bin/bash 3.2 runs ref r1 | r2 -> exit 1 DIFF, 7 spawns, the before=0 aft
 });
 
 // =====================================================================================================
-// 10. KNOWN GAPs of OUT/stage (lib/stage.sh). b and c are in the -h "Not detected" list; a is NOT in -h (doc gap)
+// 10. OUT/stage edge cases (lib/stage.sh + MD-17). a (dangling symlink) is FIXED: MD-17 refuses it; b and c are KNOWN
+// GAPs in the -h "Not detected" list
 // =====================================================================================================
 const snapL = (d) => walkL(d).sort().map(([p, k]) => `${k} ${p}`).join('|');
-const MD17 = '[[ -z $OUT || ! -e $OUT/stage || -d $OUT/stage ]]';
-const CS_DANG = row("10a KNOWN GAP (not in -h): OUT/stage a DANGLING symlink -> exit 2 with the lib's 'is not empty' wording (not MD-17's), 0 spawns, OUT unchanged", {
+const MD17 = '[[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]]';   // the built MD-17 test (dangling-aware)
+const MD17_OLD = '[[ -z $OUT || ! -e $OUT/stage || -d $OUT/stage ]]';
+const CS_DANG = row("10a OUT/stage a DANGLING symlink -> exit 2 with MD-17's 'exists and is not a directory' line (once), 0 spawns, OUT unchanged", {
     prep: (c) => { mkdirSync(c.out); symlinkSync(join(c.dir, 'nowhere'), join(c.out, 'stage')); c.snap = snapL(c.out); },
     args: (c) => refO(c),
     check: (c, r) => {
         const die = lines(r.stderr).filter((l) => l.startsWith('deopt-diff: '));
         assert.equal(r.status, 2, msg(r));
-        assert.deepEqual(die, [`deopt-diff: --out: ${c.out}/stage is not empty (give a new or empty DIR)`], msg(r));
+        assert.deepEqual(die, [`deopt-diff: --out: ${c.out}/stage exists and is not a directory`], msg(r));
         assert.equal(c.spawns(), 0);
         assert.equal(snapL(c.out), c.snap, 'OUT changed');
     },
 });
-mutant('M-dangling-md17', 'MD-17 also catches a symlink (! -e && ! -L)', [[MD17, '[[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]]']], CS_DANG,
-    (c, r) => assert.match(r.stderr, /stage exists and is not a directory/, msg(r)));
+mutant('M-dangling-revert', 'MD-17 reverted to the pre-fix test (no ! -L): the lib answers instead', [[MD17, MD17_OLD]], CS_DANG,
+    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stderr, /stage is not empty \(give a new or empty DIR\)/, msg(r)); });
 const uid0 = typeof process.getuid === 'function' && process.getuid() === 0;
 const CS_000 = row('10b KNOWN GAP (-h): OUT/stage mode 000 holding a file -> 1 spawn, OUT/raw/before + raw/after + an empty report.txt written, then "cannot create"', {
     rowSkip: skip || (uid0 ? 'root ignores mode 000' : false),

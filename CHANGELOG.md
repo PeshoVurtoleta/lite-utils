@@ -169,7 +169,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   behaviour (not features; each is a later code fix): a git-tracked symlink as `--module` stages the link
   and ends NO-VERDICT (driver exits non-zero) after 6 spawns; `git replace` of the module's blob changes the
   staged bytes (the script does not pass `--no-replace-objects`); `OUT/stage` as a regular file is refused
-  with the reason "is not empty"; an emulated git < 2.32 with `tag.gpgSign=true` makes `--self-test` exit 1
+  with the reason "--out: <OUT>/stage is not empty (give a new or empty DIR)"; an emulated
+  git < 2.32 with `tag.gpgSign=true` makes `--self-test` exit 1
   (its tag helper lacks `-c tag.gpgSign=false`); SIGINT during `--self-test` leaves its temp dir (no INT /
   TERM trap; pre-existing, not new in group 2b). `npm test`: 401 tests, 400 pass, 1 skip, 0 fail (node
   v26.8.2, bash 3.2.57, git 2.54.0).
@@ -236,12 +237,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   LIST --out DIR --driver FILE --before FROZEN --after FILE` (each side is a `cp`, so an edit of the
   live file after staging cannot leak in; the before file must be a frozen copy, not git-tracked and
   not the same file as `--after`). `--out DIR` is required and `DIR/stage` must be absent or an
-  empty directory (a regular file or a symlink to a file at `DIR/stage` is refused:
-  `--out: DIR/stage exists and is not a directory`; a DANGLING symlink there is refused by the
-  lib's `--out: DIR/stage is not empty` line instead, exit 2, 0 spawns, nothing written); after the
-  `node --version` spawn, `DIR/stage/before` and `DIR/stage/after` each get the module as NAME
-  plus a copy of the driver, and each side runs from there (the driver must
-  import `./NAME`; a module with relative imports of its own fails closed: NO-VERDICT). Nothing is
+  empty directory (a regular file, a symlink to a file or a dangling symlink at `DIR/stage` is
+  refused: `--out: DIR/stage exists and is not a directory`, exit 2, 0 spawns, nothing written);
+  after the `node --version` spawn, `DIR/stage/before` and `DIR/stage/after` each get the module
+  as NAME plus a copy of the driver, and each side runs from there (the driver must import
+  `./NAME`; a module with relative imports of its own fails closed: NO-VERDICT). Nothing is
   written before `node --version` succeeds. The head gains a `driver  <abs>  sha256/8 x` line (x =
   the staged copy's) and the mode line reads `diff (ref)` or `diff (file)`. When the two staged
   modules are byte-identical a NOTE line says the run is a null control (expect SAME), and a DIFF
@@ -249,12 +249,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   are; maintainer decision MD-16). New refusals, each exit 2 with 0 spawns and nothing written:
   `--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after` (MD-17
   covers the `DIR/stage` one above), a mixed or half-given pair, and the further stage / git checks
-  of `bytecode-budget.sh --diff`. Driver-mode output is unchanged: 43 golden-vector files (7 runs,
-  an `--out` report and 3 refusals: exit code, stdout, stderr and spawn log) of the pre-group build
-  221ff2ec equal those of the new build. `-h` documents both modes and the known gaps as Not
-  detected (a tracked symlink `--module` stages the link text, `refs/replace` swaps the staged blob,
-  a leading-dash path value exits 2 only through the EXIT trap, an unreadable or symlinked
-  `DIR/stage`). Tier: a verdict on a user driver is STATISTICAL, as in driver mode (run it under the
+  of `bytecode-budget.sh --diff`. Driver-mode output is unchanged: 43 golden-vector files (10 cases,
+  7 runs and 3 refusals: exit code, stdout, stderr and spawn log each = 40 files, plus the `--out`
+  report and file list and `leftovers.count`) of the pre-group build 221ff2ec equal those of the new
+  build. `-h` documents both modes and the known gaps as Not detected (a tracked symlink `--module`
+  stages the link text, `refs/replace` swaps the staged blob, a leading-dash path value exits 2
+  only through the EXIT trap, an unreadable `DIR/stage` or one that is a symlink to an empty
+  directory). Tier: a verdict on a user driver is STATISTICAL, as in driver mode (run it under the
   host quiet lock); the staging, the refusals and the byte-identical NO-VERDICT are DETERMINISTIC.
   `--self-test` gains 18 ref / file rows on a temp git repo with a fake node (S1-S4: ref r1 | r2
   DIFF, r1 | r1 SAME with the NOTE, file mode frozen | live with the live file rewritten mid-run,

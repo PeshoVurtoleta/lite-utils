@@ -878,7 +878,7 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   esac
 done
 if [[ $STAGED == 1 ]]; then
-  [[ -z $OUT || ! -e $OUT/stage || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
+  [[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write (--out is required)
 else
   [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
