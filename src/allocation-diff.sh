@@ -18,7 +18,9 @@
 #                      (it forces both semi-space sizes to 4 MB)
 #   --out DIR          keep DIR/report.txt, DIR/raw/<side>/run.<k>.txt (the raw stdout of run k) and
 #                      DIR/raw/<side>/run.<k>.err (its stderr); <side> = before / after, or driver with --zero.
-#                      DIR/raw must be absent or empty. Without --out only a temp dir is written (removed on exit).
+#                      DIR/raw must be absent or empty; DIR/report.txt must not be a DRIVER. With or without
+#                      --out, the guard preload and its counts live in a private temp dir under $TMPDIR (else
+#                      /tmp), removed on exit; without --out nothing else is written.
 #   --self-test        canned checks: one "ok <label>" or "FAIL <label>: <got>" line per check, then
 #                      "self-test: <C> check(s) ok" (exit 0) or "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
@@ -26,15 +28,19 @@
 #   newline. --self-test takes no other argument. --zero / --self-test / --help take no =value.
 #
 # DRIVER: an existing readable file (two in diff mode, one with --zero), each run as
-#   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation DRIVER`
-#   with cwd = its directory, NODE_OPTIONS stripped, stderr to its own file (never merged into stdout), stdout piped
-#   through tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL)
-#   and the record awk. Only records are held in memory, never trace text. Runs alternate before / after, k = 1..N.
+#   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
+#   --require <tmp>/gcn.cjs DRIVER 3><tmp>/gcn.<side>.<k>` with cwd = its directory, NODE_OPTIONS stripped, stderr to
+#   its own file (never merged into stdout), stdout piped through tee (to the --out raw file, else /dev/null), tr
+#   (every NUL byte becomes `?`; the raw file keeps the NUL) and the record awk. Only records are held in memory,
+#   never trace text. Runs alternate before / after, k = 1..N.
+# Guard: gcn.cjs (the tool's own preload, an absolute path) counts the run's GCs with v8.GCProfiler. Its 'exit'
+#   listener, registered before any driver listener, allocates past two semi-spaces (>= 1 young GC after `end`: the
+#   exit fence), writes `@@LITE-MARK gcn` to fd 1, then the count to fd 3. The count must equal g (below), else the
+#   side reads NO-VERDICT: it catches a GC line lost from the trace (or glued after other text outside the window),
+#   not a line moved across a marker nor a loss cancelled by extra lines.
 # Markers: whole lines on stdout, each exactly once, in this order: `@@LITE-MARK start`, `@@LITE-MARK end`, then
-#   `@@LITE-MARK gcn` (reserved: the tool's exit fence, written after at least one young GC that follows `end`; the
-#   preload that writes it is not built yet, so until it is, a run whose output lacks it reads NO-VERDICT). Any other
-#   `@@LITE-MARK` line (e.g. `@@LITE-MARK op 7`) is ignored. The output after gcn is read to EOF, never parsed (a
-#   second gcn line excepted).
+#   `@@LITE-MARK gcn` (reserved: the guard's exit fence). Any other `@@LITE-MARK` line (e.g. `@@LITE-MARK op 7`) is
+#   ignored. The output after gcn is read to EOF, never parsed (a second gcn line excepted).
 # GC line: a line starting `[<digits>:0x` must match the whole --trace-gc line grammar (tail-anchored). Its kind =
 #   the text between ` ms: ` and the first numeric token, one trailing ` (during sweeping)` dropped. Young = exactly
 #   Scavenge, Minor Mark-Sweep, whose lines end `; ` (no collector text); old = exactly Mark-Compact, Incremental
@@ -55,6 +61,9 @@
 #   driver exited <rc> in run <k>
 #   unparseable --trace-gc output in run <k>: <why>          (<why> = the run's first X record)
 #   no GC line between @@LITE-MARK end and the tool's exit fence in run <k>   (tracing not shown to be on)
+#   no guard count in run <k>        (the fd-3 count is missing, empty or not one decimal line; never read as 0)
+#   trace lost <d> GC line(s) in run <k> (guard count <c>, trace <g>)               (g < count)
+#   <d> GC line(s) in run <k> the guard did not count (guard count <c>, trace <g>)   (g > count)
 #   old-generation GC in the window in run <k> (<kind>)     (a full GC empties the young generation)
 #   null control: run <k> differs from run 1 (<n> kind(s) differ, first: run 1 x<a> | run <k> x<b>  <kind>)
 # Report: a head (node, drivers with sha256/8, mode, flags), per side whose run 1 exited 0 its counts line
@@ -123,6 +132,59 @@ END {
 TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation)
 ST_RE='^@ ([0-9]+) ([0-9]+) ([0-9]+) ([0-9]+)$'
 G_RE='^G ([0-9]+) ([0-9]+)$'
+CNT_RE=$'^(0|[1-9][0-9]{0,8})\n$'   # the guard's fd-3 file: exactly one canonical decimal line
+
+# gcn.cjs, the guard preload: written once per invocation into the private temp dir (text = PLAN-phase4-g1 TASK 0d's
+# evidence/p4-guard/0d/gcn.cjs, byte for byte). A heredoc, never $( ): no trailing-newline loss.
+gcn_cjs() {
+cat <<'GCN_CJS'
+'use strict';
+// allocation-diff.sh guard preload (TASK 0d = 0c's gcn-id.cjs + the A6 exit fence). Counts the run's GCs
+// with v8.GCProfiler; its 'exit' listener is registered here, before any driver listener, and on exit:
+// (1) fence: 2^17 {a,b} into a 1024-slot ring (> 2 semi-spaces of 1 MB -> >= 1 young GC after `end`);
+// (2) writes `@@LITE-MARK gcn` to fd 1; (3) reads the count; (4) writes it to fd 3. GCs caused by the read
+// or by later 'exit' listeners land after gcn. The first 'beforeExit' starts a 2nd profiler and stops the
+// 1st (its statistics array is the big allocation) with one more loop turn, so the GCs that causes are
+// counted. Counted gcTypes: Scavenge, MinorMarkSweep, MarkSweepCompact (IncrementalMarking prints no
+// --trace-gc line; an unknown type is not counted, so the count reads low and the judge fails closed).
+const v8 = require('v8');
+const fs = require('fs');
+const gcnBuf = Buffer.alloc(24);
+let gcnP = new v8.GCProfiler();
+let gcnQ = null;
+let gcnN = 0;
+gcnP.start();
+function gcnCount(st) {
+  let n = 0;
+  for (let i = 0; i < st.length; i++) {
+    const t = st[i].gcType;
+    if (t === 'Scavenge' || t === 'MinorMarkSweep' || t === 'MarkSweepCompact') n++;
+  }
+  return n;
+}
+function gcnNoop() {}
+process.on('beforeExit', () => {
+  if (gcnQ !== null) return;
+  gcnQ = new v8.GCProfiler();
+  gcnQ.start();
+  gcnN = gcnCount(gcnP.stop().statistics);
+  gcnP = null;
+  setImmediate(gcnNoop);
+});
+process.on('exit', () => {
+  const ring = new Array(1024).fill(null);
+  for (let i = 0; i < 131072; i++) ring[i & 1023] = { a: i, b: i };
+  fs.writeSync(1, '@@LITE-MARK gcn\n');
+  let n = gcnN;
+  if (gcnP !== null) n += gcnCount(gcnP.stop().statistics);
+  if (gcnQ !== null) n += gcnCount(gcnQ.stop().statistics);
+  let e = gcnBuf.length - 1;
+  gcnBuf[e] = 10;
+  do { gcnBuf[--e] = 48 + (n % 10); n = (n / 10) | 0; } while (n > 0);
+  try { fs.writeSync(3, gcnBuf, e, gcnBuf.length - e); } catch (x) { /* fd 3 absent: no count (fails closed) */ }
+});
+GCN_CJS
+}
 
 # records -> the null-control multiset (Y and O, as "*<TAB><kind>"); records -> the verdict multiset (Y only)
 nc_ms() { printf '%s\n' "$1" | awk '/^[YO] /{ print "*\t" substr($0, 3) }' | multiset; }
@@ -139,11 +201,12 @@ counts() {
 }
 
 # judge: one side. JRC[k-1] = the driver exit of run k (or "<tee|tr|awk> <rc>" when that tool failed), JREC[k-1] = the
-# GC_AWK records of run k. Sets JV (OK NO-VERDICT) and JWHY. Order, each over k = 1..N: driver output / exit, X record
-# (and a readable G line), p = 0, an O record, the null control (Y+O multiset of run k vs run 1).
+# GC_AWK records of run k, JCNT[k-1] = the guard count of run k ("" = none). Sets JV (OK NO-VERDICT) and JWHY. Order,
+# each over k = 1..N: driver output / exit, X record (and a readable G line), p = 0, the guard count vs g, an O record,
+# the null control (Y+O multiset of run k vs run 1).
 judge() {
-  local n i x o last first nk dl
-  local -a jp=()
+  local n i x o last first nk dl g c d w
+  local -a jp=() jg=()
   JV=NO-VERDICT; JWHY=""
   n=${#JRC[@]}
   for ((i = 0; i < n; i++)); do
@@ -158,10 +221,23 @@ judge() {
     if [[ -n "$x" ]]; then JWHY="unparseable --trace-gc output in run $((i + 1)): $x"; return 0; fi
     last=${JREC[$i]##*$'\n'}
     if [[ ! "$last" =~ $G_RE ]]; then JWHY="unparseable --trace-gc output in run $((i + 1)): no G record"; return 0; fi
-    jp[$i]=${BASH_REMATCH[2]}
+    jg[$i]=${BASH_REMATCH[1]}; jp[$i]=${BASH_REMATCH[2]}
   done
   for ((i = 0; i < n; i++)); do
     if [[ ${jp[$i]} == 0 ]]; then JWHY="no GC line between @@LITE-MARK end and the tool's exit fence in run $((i + 1))"; return 0; fi
+  done
+  for ((i = 0; i < n; i++)); do
+    c=${JCNT[$i]:-}
+    if [[ -z "$c" ]]; then JWHY="no guard count in run $((i + 1))"; return 0; fi
+    g=$((10#${jg[$i]})); c=$((10#$c))
+    if ((g < c)); then
+      d=$((c - g)); w=lines; [[ $d != 1 ]] || w=line
+      JWHY="trace lost $d GC $w in run $((i + 1)) (guard count $c, trace $g)"; return 0
+    fi
+    if ((g > c)); then
+      d=$((g - c)); w=lines; [[ $d != 1 ]] || w=line
+      JWHY="$d GC $w in run $((i + 1)) the guard did not count (guard count $c, trace $g)"; return 0
+    fi
   done
   for ((i = 0; i < n; i++)); do
     o=$(printf '%s\n' "${JREC[$i]}" | awk '!f && /^O /{ print substr($0, 3); f = 1 }')
@@ -256,6 +332,9 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  for ((i = 0; i < ${#POS[@]}; i++)); do   # -ef follows symlinks and sees hard links: refused before any truncation
+    [[ ! "$OUT/report.txt" -ef "${POS[$i]}" ]] || die "--out: $OUT/report.txt is the DRIVER (${SIDES[$i]}) ${POS[$i]}"
+  done
 fi
 NODE_RES=$(command -v "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
@@ -268,12 +347,15 @@ done
 
 # --- every refusal is above this line; spawns start here: --version, then disk writes, then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
-# the temp dir (driver stderr without --out) goes on every exit path: this trap runs the prologue's EXIT trap after it
-# (with $? restored; set +e so restoring a non-zero $? cannot cut the trap short)
+# the temp dir (gcn.cjs, the guard counts, driver stderr without --out) goes on every exit path: this trap runs the
+# prologue's EXIT trap after it (with $? restored; set +e so restoring a non-zero $? cannot cut the trap short). It is
+# set before mktemp, and T is absolute from the start (a relative TMPDIR is taken from the caller's cwd).
 eval "set -- $(trap -p EXIT)"; OLD_TRAP=${3:-}
 # shellcheck disable=SC2064
 trap "t_rc=\$?; if [[ -n \"\$T\" ]]; then rm -rf \"\$T\"; fi; set +e; (exit \$t_rc); $OLD_TRAP" EXIT
-T=$(mktemp -d) || die "cannot create a temp dir"
+TB=${TMPDIR:-/tmp}; [[ "$TB" == /* ]] || TB="$PWD/$TB"
+T=$(mktemp -d "$TB/allocation-diff.XXXXXX") || die "cannot create a temp dir in $TB"
+gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"
 if [[ -n "$OUT" ]]; then
   for s in "${SIDES[@]}"; do mkdir -p "$OUT/raw/$s" 2>/dev/null || die "--out: cannot create $OUT/raw/$s"; done
   OUT=$(cd "$OUT" && pwd)
@@ -294,14 +376,17 @@ say ""
 # ---------------------------------------------------------------------------------------------
 # runs: k = 1..R, before then after (or the one driver); each keeps its driver exit and its GC_AWK records
 # ---------------------------------------------------------------------------------------------
-RUN_RC=0; RUN_TX=""
-run_side() { # dir base rawfile errfile: one node run of dir/base; sets RUN_RC (the driver exit, or "<tee|tr|awk> <rc>") RUN_TX
-  local tx st n t r a
+RUN_RC=0; RUN_TX=""; RUN_CNT=""
+run_side() { # dir base rawfile errfile cntfile: one node run of dir/base; sets RUN_RC (the driver exit, or
+  # "<tee|tr|awk> <rc>"), RUN_TX, RUN_CNT (the guard count, "" when the count file is missing, empty or malformed)
+  local tx st n t r a sz c
   # the pipeline's four exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee / tr / awk failure is never
   # reported as the driver's exit. Nothing reads stdout before tee (the fast reader); stderr goes to its own file, never
   # into the pipe. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL, which would hide a GC line glued
-  # after it); GC_AWK then reads the glue as X. $( ) holds GC_AWK's records only, never trace text.
-  tx=$( (cd "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "$2" 2>"$4") \
+  # after it); GC_AWK then reads the glue as X. $( ) holds GC_AWK's records only, never trace text. fd 3 (the guard
+  # count file, truncated per run) is opened for node only, never for tee / tr / awk.
+  tx=$( (cd "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" \
+    --require "$T/gcn.cjs" "$2" 2>"$4" 3>"$5") \
     | tee "${3:-/dev/null}" | tr '\000' '?' | awk "$GC_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
   st=${tx##*$'\n'}
   if [[ "$tx" == *$'\n'* ]]; then tx=${tx%$'\n'*}; else tx=""; fi
@@ -309,21 +394,28 @@ run_side() { # dir base rawfile errfile: one node run of dir/base; sets RUN_RC (
   n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]}; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
   if [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else RUN_RC=$n; fi
   RUN_TX="$tx"
+  # the count: one canonical decimal line. Read with a sentinel (no trailing-newline loss) and length-checked against
+  # the file size (bash drops a NUL byte from $( ), which would otherwise pass "1<NUL>2").
+  RUN_CNT=""
+  if [[ -f "$5" ]]; then
+    sz=$(wc -c <"$5" | tr -d ' '); c=$(cat "$5"; printf x); c=${c%x}
+    if [[ "${#c}" == "$sz" && "$c" =~ $CNT_RE ]]; then RUN_CNT=${BASH_REMATCH[1]}; fi
+  fi
 }
-RC0=(); RC1=(); REC0=(); REC1=(); YL0=""; YL1=""
+RC0=(); RC1=(); REC0=(); REC1=(); CN0=(); CN1=(); YL0=""; YL1=""
 for k in $(seq 1 "$RUNS"); do
   for ((i = 0; i < ${#SIDES[@]}; i++)); do
     s=${SIDES[$i]}
     if [[ -n "$OUT" ]]; then raw="$OUT/raw/$s/run.$k.txt"; err="$OUT/raw/$s/run.$k.err"; else raw=""; err="$T/$s.run.$k.err"; fi
-    run_side "${DRV_DIR[$i]}" "${DRV_BASE[$i]}" "$raw" "$err"
+    run_side "${DRV_DIR[$i]}" "${DRV_BASE[$i]}" "$raw" "$err" "$T/gcn.$s.$k"
     if [[ "$RUN_RC" == 0 ]]; then y=$(ycount "$RUN_TX"); else y=-; fi
-    if [[ $i == 0 ]]; then RC0+=("$RUN_RC"); REC0+=("$RUN_TX"); YL0="${YL0:+$YL0,}$y"
-    else RC1+=("$RUN_RC"); REC1+=("$RUN_TX"); YL1="${YL1:+$YL1,}$y"; fi
+    if [[ $i == 0 ]]; then RC0+=("$RUN_RC"); REC0+=("$RUN_TX"); CN0+=("$RUN_CNT"); YL0="${YL0:+$YL0,}$y"
+    else RC1+=("$RUN_RC"); REC1+=("$RUN_TX"); CN1+=("$RUN_CNT"); YL1="${YL1:+$YL1,}$y"; fi
   done
 done
 
 if [[ $ZERO == 1 ]]; then
-  JRC=("${RC0[@]}"); JREC=("${REC0[@]}"); judge
+  JRC=("${RC0[@]}"); JREC=("${REC0[@]}"); JCNT=("${CN0[@]}"); judge
   side_line driver "${RC0[0]}" "${REC0[0]}" "$YL0"
   if [[ $JV == NO-VERDICT ]]; then
     VERDICT=NO-VERDICT; say "  NO-VERDICT -- driver: $JWHY"
@@ -336,8 +428,8 @@ if [[ $ZERO == 1 ]]; then
     fi
   fi
 else
-  JRC=("${RC0[@]}"); JREC=("${REC0[@]}"); judge; VB=$JV; WB=$JWHY
-  JRC=("${RC1[@]}"); JREC=("${REC1[@]}"); judge; VA=$JV; WA=$JWHY
+  JRC=("${RC0[@]}"); JREC=("${REC0[@]}"); JCNT=("${CN0[@]}"); judge; VB=$JV; WB=$JWHY
+  JRC=("${RC1[@]}"); JREC=("${REC1[@]}"); JCNT=("${CN1[@]}"); judge; VA=$JV; WA=$JWHY
   side_line before "${RC0[0]}" "${REC0[0]}" "$YL0"
   side_line after "${RC1[0]}" "${REC1[0]}" "$YL1"
   if [[ $VB == NO-VERDICT || $VA == NO-VERDICT ]]; then
