@@ -149,6 +149,18 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   who has never seen the suite: requirements (bash >= 3.2, POSIX awk, node), the three run modes,
   exit codes, and how to copy one script vs install the package.
 
+### Phase 7 -- independent audit (maintainer 2026-11-03: "After Phase 6")
+- After Phase 6, before the 1.0.0 release. Shape (orchestrator proposal; the planner may refine it):
+  (a) one fresh reviewer per shipped script (inlining-budget-diff, bytecode-budget, deopt-diff,
+  allocation-diff, ic-diff) with NO plan or review history -- only the script, its tests, README /
+  llms.txt and real node 26.8.2 runs. Its job is to break it: inputs that give a verdict where they
+  should fail closed, files left behind, gates with no teeth (mutants), and -h / README claims with no
+  gate behind them or no tier.
+  (b) one cross-script reviewer: flags, exit codes, refusal wording, header lines, the shared lib/
+  use, and the docs matching the code across all five.
+  (c) findings go through the normal pipeline (coder -> reviewer); re-audit only what changed; then
+  the release.
+
 ## 4. Known drift to fix
 
 - LiteSignal `bench/inlining-budget-diff.sh` lacks two fixes that this repo has:
@@ -172,5 +184,6 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   build.sh); a `bin` entry per script; `repository` / `homepage` / `keywords`; `npm pack --dry-run`
   lists exactly that set. Publishing and making the repo public stay the maintainer's.
 - D-2 ANSWERED 2026-11-02: keep the lib split into fragments (six at Phase 1; see S-2).
-- D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-6
-  (was 0.1.0; maintainer 2026-11-03); every consuming module needs all four scripts.
+- D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-7
+  (was 0.1.0; maintainer 2026-11-03; Phase 7 audit added 2026-11-03); every consuming module needs
+  all four scripts.
