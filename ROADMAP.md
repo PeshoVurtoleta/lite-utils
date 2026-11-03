@@ -172,5 +172,5 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   build.sh); a `bin` entry per script; `repository` / `homepage` / `keywords`; `npm pack --dry-run`
   lists exactly that set. Publishing and making the repo public stay the maintainer's.
 - D-2 ANSWERED 2026-11-02: keep the lib split into fragments (six at Phase 1; see S-2).
-- D-3 ANSWERED 2026-11-02: no early release. 0.1.0 ships only after Phases 3-6;
-  every consuming module needs all four scripts.
+- D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-6
+  (was 0.1.0; maintainer 2026-11-03); every consuming module needs all four scripts.

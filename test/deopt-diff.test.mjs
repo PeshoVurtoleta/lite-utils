@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 71;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14); a new check moves this literal
+const CHECKS = 84;   // every `check` call in self_test(): 53 driver-mode rows + 31 ref/file rows (18 staged S1-S4, R1-R14 + 13 G3 B2 rows); a new check moves this literal
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
 const ENV = { ...process.env };

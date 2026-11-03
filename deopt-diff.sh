@@ -51,7 +51,9 @@
 #   `node [v8 flags] --trace-deopt-verbose --trace-opt --no-concurrent-recompilation DRIVER`
 #   with cwd = its directory, NODE_OPTIONS stripped, stderr merged into stdout, piped through tee (to the --out raw
 #   file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and awk (keeps the trace
-#   lines). One run per side per k serves every fn; runs alternate before / after for k = 1..N.
+#   lines, and for the tier section every line holding `;;; deoptimize at ` or `@@LITE-MARK` anywhere). The kept
+#   text of every run is held in memory: dense markers grow it. One run per side per k serves every fn; runs
+#   alternate before / after for k = 1..N.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. add, get value). Never
 #   qualified (Store.add). A repeated fn is refused. Matching is EXACT on the name between `<JSFunction ` and
 #   ` (sfi = `: add never matches addX, ad or Store.add, get never matches get value; node internals of other
@@ -90,6 +92,7 @@
 #   "  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise"
 #                                    (the NOTE case below with a DIFF verdict: both sides are the same program, so
 #                                    the DIFF becomes NO-VERDICT, exit 2; SAME and NO-VERDICT stay as they are)
+# Then the tier section (below), a blank line and "VERDICT <SAME|DIFF|NO-VERDICT>".
 # Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. If both sides pass, the run-1
 #   D multisets are compared. Every refused argument exits 2 before any node is spawned and before anything is
 #   written to disk. Spawns: one `node --version` (a failing one exits 2 before anything is written), then
@@ -131,6 +134,42 @@
 #   dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a symlink to an empty
 #   directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already gets the raw
 #   files in driver mode).
+# Tier section: read from run 1 of each side, printed after the fn lines (and the byte-identical NO-VERDICT line)
+#   in every report that reaches VERDICT. Every line starts "tier    " and none holds " -- " (a " -- " in a reason
+#   or file name prints as " - - "): "tier    REPORTED: run 1 of each side, never part of the verdict", then per
+#   fn in --fn order its before lines, then its after lines; one side's lines, in this order:
+#   "tier    <fn>  <side>  compiles MAGLEV a, MAGLEV-OSR b, TURBOFAN_JS c, TURBOFAN_JS-OSR d[, <unit> n, ..]"
+#   "tier    <fn>  <side>  cycles <c>: <seq>"   seq = run 1's E (as its unit) and D (as deopt) records in order,
+#                                    joined " > ", cut after 16 with " > .."; none when empty; c = D records with a
+#                                    later E
+#   "tier    <fn>  <side>  deopt <i>/<d>: <unit> <kind> (<reason>), bytecode offset <o>, at <file>:<l>:<c>[ inlined
+#                                    at <file>:<l>:<c>]"   one per D record; <file> = the base name; the position
+#                                    is the first line holding `;;; deoptimize at ` (anywhere in the line) after the
+#                                    bailout line and before the next line-start `[` line: ", no source position"
+#                                    when there is none, ", source position unreadable" when it does not parse
+#   "tier    <fn>  <side>  deopts unreadable (<a> bailout line(s), <d> D record(s))"   instead of the deopt lines
+#                                    when the line-start `[bailout` lines naming fn, the <a> of them whose bytecode
+#                                    offset reads and the <d> D records are not one count
+#   "tier    <fn>  <side>  ops until TURBOFAN_JS: after op <a>, before op <b>"   a = the last marker before fn's
+#                                    first `[completed compiling` line read as E fn@TURBOFAN_JS[-OSR], b = the
+#                                    first marker after it; or "after op <a>", "before op <b>", "not compiled in
+#                                    run 1 (last marker op <n>)", "no @@LITE-MARK op lines", "markers unreadable
+#                                    (<why>)"
+#   "tier    <fn>  <side>  not reported (run 1: <rc>)"     instead of the side's lines when its run 1 did not
+#                                    exit 0 (<rc> = the driver exit, or "<tee|tr|awk> <rc>")
+#   "tier    <fn>  <side>  unreadable (awk exited <rc>)"   instead of the side's lines when the section's awk
+#                                    exits non-zero, prints nothing, or prints a line not starting "tier    " (rc 0
+#                                    for a clean exit); the verdict and exit stand
+# Marker protocol (tier section): the driver writes `@@LITE-MARK op <n>` at line start (n = ops done so far, 1-15
+#   digits, strictly increasing), recommended with fs.writeSync(1, ...). A line starting `@@LITE-MARK op` and then
+#   end of line or a byte that is not a letter, digit, `_` or `-` is an op line: one that is not exactly
+#   `@@LITE-MARK op <n>`, or whose n is not above the last n, reads "markers unreadable (<why>)", as does
+#   `@@LITE-MARK` after column 1 of any kept line. Any other line starting `@@LITE-MARK` is ignored (e.g.
+#   `@@LITE-MARK start`, `@@LITE-MARK opx 5`, `@@LITE-MARKop 7`, `@@LITE-MARK  op 6`).
+# Not detected (tier section): an asynchronous marker writer (console.log, process.stdout.write) is not proven to
+#   keep its order against the trace under a full pipe (a 20/20 in-order probe per writer at 1454 bytes per run
+#   does not separate the writers); ops are only as fine as the marker spacing.
+# Tier (tier section): REPORTED, gates nothing; it never moves the exit code or a verdict line.
 # Tier: on a user driver the verdict is STATISTICAL (deopts follow tier-up timing; run it under the host quiet
 #   lock); --self-test is DETERMINISTIC (canned text and a fake node).
 # Tier (ref / file mode): STATISTICAL on the same terms (each staged side is a user driver; its null control stays),
@@ -216,6 +255,95 @@ substr($0, 1, 21) == "[completed compiling " {
   if (r ~ /^ OSR - took .*\]$/) t = t "-OSR"
   else if (r !~ /^ - took .*\]$/) { x("completed compiling: after target"); next }
   print "E " fn "@" t; next
+}
+'
+
+# cold path, REPORTED tier (run 1 of one side, after the verdict lines; never part of the verdict): -v fn side,
+# ARGV[1] = fn's DEOPT_AWK records of run 1, ARGV[2] = run 1's kept lines. Prints only lines starting "tier    ",
+# none holding " -- ". Compiles / cycles from the records; per D record its bailout line's bytecode offset and the
+# first `;;; deoptimize at` line before the next line-start `[` line (paired in order, only when every line-start
+# `[bailout` line naming fn is read and is one D record); ops from `@@LITE-MARK op <n>` lines around fn's first
+# TURBOFAN_JS[-OSR] compile line. An unreadable marker / position is named, never guessed.
+# shellcheck disable=SC2016
+TIER_AWK='
+function names(s,   t, p, c) {                    # as DEOPT_AWK names() (its test reordered)
+  t = "<JSFunction " fn
+  while ((p = index(s, t)) > 0) {
+    s = substr(s, p + length(t)); c = substr(s, 1, 1)
+    if (s == "" || substr(s, 1, 8) == " (sfi = " || c == ">") return 1
+  }
+  return 0
+}
+function emit(s) { while (index(s, " -- ") > 0) sub(/ -- /, " - - ", s); print "tier    " fn "  " side "  " s }
+function bad(why) { if (MB == "") MB = why }
+function posof(s,   r, n, q, g, b) {              # text after ";;; deoptimize at " -> ", at b:l:c[ inlined at b:l:c]"
+  r = ""; n = 0
+  while (s != "") {
+    if (n == 0 && substr(s, 1, 1) == "<") s = substr(s, 2)
+    else if (n > 0 && substr(s, 1, 13) == " inlined at <") s = substr(s, 14)
+    else return ", source position unreadable"
+    q = index(s, ">"); if (q == 0) return ", source position unreadable"
+    g = substr(s, 1, q - 1); s = substr(s, q + 1)
+    if (!match(g, /:[0-9]+:[0-9]+$/)) return ", source position unreadable"
+    b = substr(g, 1, RSTART - 1); sub(/.*\//, "", b)
+    if (b == "") return ", source position unreadable"
+    r = r (n > 0 ? " inlined at " : ", at ") b substr(g, RSTART); n++
+  }
+  return (n > 0 ? r : ", source position unreadable")
+}
+FILENAME == ARGV[1] {                               # records, in trace order (X: the verdict lines name it)
+  if (substr($0, 1, 2) == "E ") {
+    u = substr($0, length(fn) + 4); EV[++NE] = u
+    if (!(u in CN)) { CN[u] = 0; if (u != "MAGLEV" && u != "MAGLEV-OSR" && u != "TURBOFAN_JS" && u != "TURBOFAN_JS-OSR") OT[++NO] = u }
+    CN[u]++
+  } else if (substr($0, 1, 2) == "D ") {
+    s = substr($0, length(fn) + 4); p = index(s, "\t"); EV[++NE] = "deopt"; DR[++ND] = substr(s, 1, p - 1) " " substr(s, p + 1)
+  }
+  next
+}
+{
+  if (index($0, "@@LITE-MARK") > 1) bad("@@LITE-MARK not at line start")
+  if (substr($0, 1, 1) == "[") {
+    PD = 0
+    if (substr($0, 1, 8) == "[bailout") {
+      if (!names($0)) next
+      NB++; s = $0; p = index(s, "): begin. deoptimizing "); q = 0; o = ""
+      if (p > 0) { s = substr(s, p); q = index(s, ", bytecode offset ") }
+      if (q > 0) { o = substr(s, q + 18); q = index(o, ","); o = (q > 1 ? substr(o, 1, q - 1) : "") }
+      if (o ~ /^-?[0-9]+$/) { NRD++; OF[NRD] = o; PS[NRD] = ", no source position"; PD = NRD }
+    } else if (!TF && match($0, /^\[completed compiling 0x[0-9a-fA-F]+ <JSFunction /) && substr($0, RLENGTH + 1, length(fn)) == fn &&
+      substr($0, RLENGTH + 1 + length(fn)) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN_JS\)( OSR)? - took .*\]$/) { TF = 1; TA = LM }
+    next
+  }
+  if (PD > 0 && (p = index($0, ";;; deoptimize at ")) > 0) { PS[PD] = posof(substr($0, p + 18)); PD = 0; next }
+  if (substr($0, 1, 14) == "@@LITE-MARK op" && substr($0, 15, 1) !~ /[A-Za-z0-9_-]/) {
+    n = substr($0, 16)
+    if (substr($0, 15, 1) != " " || n !~ /^[0-9]+$/ || length(n) > 15) bad("bad op line" (NM > 0 ? " after op " LM : "") ": want @@LITE-MARK op <1-15 digits>")
+    else if (NM > 0 && n + 0 <= LM + 0) bad("op " n " after op " LM)
+    else { NM++; LM = n; if (TF && TB == "") TB = n }
+  }
+}
+END {
+  s = "compiles MAGLEV " (CN["MAGLEV"] + 0) ", MAGLEV-OSR " (CN["MAGLEV-OSR"] + 0) ", TURBOFAN_JS " (CN["TURBOFAN_JS"] + 0) \
+    ", TURBOFAN_JS-OSR " (CN["TURBOFAN_JS-OSR"] + 0)
+  for (i = 1; i <= NO; i++) s = s ", " OT[i] " " CN[OT[i]]
+  emit(s)
+  c = 0; p = 0; s = ""
+  for (i = 1; i <= NE; i++) {
+    if (EV[i] == "deopt") p++; else { c += p; p = 0 }
+    if (i <= 16) s = s (i > 1 ? " > " : "") EV[i]
+  }
+  if (NE > 16) s = s " > .."
+  emit("cycles " c ": " (NE > 0 ? s : "none"))
+  if (NB != ND || NRD != NB) emit("deopts unreadable (" (NRD + 0) " bailout line(s), " (ND + 0) " D record(s))")
+  else for (i = 1; i <= ND; i++) emit("deopt " i "/" ND ": " DR[i] ", bytecode offset " OF[i] PS[i])
+  if (MB != "") s = "markers unreadable (" MB ")"
+  else if (NM == 0) s = "no @@LITE-MARK op lines"
+  else if (!TF) s = "not compiled in run 1 (last marker op " LM ")"
+  else if (TA != "" && TB != "") s = "after op " TA ", before op " TB
+  else if (TA != "") s = "after op " TA
+  else s = "before op " TB
+  emit("ops until TURBOFAN_JS: " s)
 }
 '
 
@@ -365,6 +493,11 @@ TRACE_FLAGS=(--trace-deopt-verbose --trace-opt --no-concurrent-recompilation)
 # run_side keeps a line that starts with `[` or carries trace text anywhere (DEOPT_AWK turns the latter into X)
 # shellcheck disable=SC2016
 KEEP_AWK='/^\[/ || index($0, "[bailout") > 0 || index($0, "[completed compiling") > 0'
+# ... and, for the REPORTED tier section only (TIER_AWK), a `;;; deoptimize at` line and a @@LITE-MARK line. A line
+# kept only by this clause neither starts with `[` nor holds trace text: DEOPT_AWK prints nothing for it (and keeps no
+# state across lines), so the records of every run are the same as without the clause
+# shellcheck disable=SC2016
+KEEP_AWK+=' || index($0, ";;; deoptimize at ") > 0 || index($0, "@@LITE-MARK") > 0'
 ST_RE='^@ ([0-9]+) ([0-9]+) ([0-9]+) ([0-9]+)$'
 
 # records -> the null-control multiset (E as "<unit><TAB>compiled", D as "<unit><TAB><kind> (<reason>)")
@@ -412,7 +545,7 @@ judge() {
   JV=OK
 }
 
-# diff_fn FN: one fn, from RCB/RCA (driver exits) and TXB/TXA (the `[` lines of run k at index k-1): records per
+# diff_fn FN: one fn, from RCB/RCA (driver exits) and TXB/TXA (the kept lines of run k, KEEP_AWK, at index k-1): records per
 # run, judge() each side, then compare the run-1 D multisets. Prints the fn's lines, sets FV and folds it into VERDICT.
 diff_fn() {
   local fn="$1" VB VA WB WA MSB MSA DB DA l i
@@ -440,6 +573,24 @@ diff_fn() {
     fi
   fi
   VERDICT=$(worst "$VERDICT" "$FV")
+}
+
+# tier_fn FN SIDE RC TEXT: the REPORTED tier lines of FN on one side, from run 1 (RC = its RUN_RC, TEXT = its kept
+# lines). Cold path, after every verdict line: never sets VERDICT / FV / JV and never moves the exit code. A run 1
+# that did not exit 0 prints "not reported"; a failing awk prints one "unreadable (awk exited <rc>)" line (MD-20).
+tier_fn() {
+  local rec out= rest l ok=0 rc=0
+  if [[ "$3" != 0 ]]; then say "tier    $1  $2  not reported (run 1: $3)"; return 0; fi
+  rec=$(printf '%s\n' "$4" | awk -v fn="$1" "$DEOPT_AWK") || rc=$?
+  if [[ $rc == 0 ]]; then out=$(awk -v fn="$1" -v side="$2" "$TIER_AWK" <(printf '%s\n' "$rec") <(printf '%s\n' "$4") \
+    && printf . || { rc=$?; printf .; exit "$rc"; }) || rc=$?; fi
+  # print only if awk exited 0 with output and EVERY line starts `tier    ` (an empty line is foreign; the `.` keeps
+  # trailing newlines); else one unreadable line (MD-20, A9 (1))
+  out=${out%.}; out=${out%$'\n'}; rest=$out
+  if [[ $rc == 0 && -n "$out" ]]; then
+    ok=1; while :; do l=${rest%%$'\n'*}; [[ "$l" == "tier    "* ]] || ok=0; [[ "$rest" == *$'\n'* ]] || break; rest=${rest#*$'\n'}; done
+  fi
+  if [[ $ok == 1 ]]; then say "$out"; else say "tier    $1  $2  unreadable (awk exited $rc)"; fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -605,6 +756,39 @@ EOF
   check "diff_fn: fns fold with worst() (NO-VERDICT then DIFF, DIFF then NO-VERDICT, DIFF then SAME, SAME then DIFF)" "$got" \
     " NO-VERDICT>NO-VERDICT DIFF>NO-VERDICT | DIFF>DIFF NO-VERDICT>NO-VERDICT | DIFF>DIFF SAME>DIFF | SAME>SAME DIFF>DIFF"
 
+  # --- TIER_AWK (the REPORTED tier section; PLAN A1 / A2): canned text the run_side way (tr, KEEP_AWK), a fresh
+  # DEOPT_AWK pass, then TIER_AWK as tier_fn runs it. tie FN TEXT [LINE] -> line LINE ($ = the last; all when none),
+  # "tier    FN  s  " cut, ";" per line ---
+  local SEMI INL LZE BEND XB PRE
+  SEMI=$(printf '%s\n' "$T_DEOPT" | sed -n 11p); INL='            ;;; deoptimize at <file:///a/inner.js:2:33> inlined at <file:///b/drv.js:3:31>'
+  LZE="${E9//JSFunction add /JSFunction lazyFn }"; BEND="${T_DEOPT##*$'\n'}"; XB="${D10/deopt-eager/deopt-Eager}"
+  PRE=$(printf '%s\n' "$T_DEOPT" | sed -n 1,6p)
+  mko() { printf '@@LITE-MARK op %s\n' "$@"; }
+  tie() {
+    local k r
+    k=$(printf '%s\n' "$2" | tr '\000' '?' | awk "$KEEP_AWK"); r=$(printf '%s\n' "$k" | awk -v fn="$1" "$DEOPT_AWK")
+    { awk -v fn="$1" -v side=s "$TIER_AWK" <(printf '%s\n' "$r") <(printf '%s\n' "$k") || echo "tier    $1  s  !awk exited $?"; } \
+      | sed -n "${3:-1,\$}p" | cut -c "$((14 + ${#1}))"- | tr '\n' ';'
+  }
+  check "T1 A1 compiles + cycles: fn=add -> TURBOFAN_JS 1, 'cycles 0' (no E after the D); + E9 -> 'cycles 1'; an OSR compile -> MAGLEV-OSR 1" \
+    "$(tie add "$T_DEOPT" 1)$(tie add "$T_DEOPT" 2)$(tie add "$T_DEOPT"$'\n'"$E9" 2)$(tie loopFn "$OSRC"$'\n'"$OSR" 1)" \
+    "compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0;cycles 0: TURBOFAN_JS > deopt;cycles 1: TURBOFAN_JS > deopt > TURBOFAN_JS;compiles MAGLEV 0, MAGLEV-OSR 1, TURBOFAN_JS 0, TURBOFAN_JS-OSR 0;"
+  check "T2 A1 deopt line: bytecode offset and ';;;' position as base names (offset 2; the P copy: offset 14, /elsewhere/drv.js; an inlined chain)" \
+    "$(tie add "$T_DEOPT" 3)$(tie add "$P" 3)$(tie add "$ED"$'\n'"$INL" 3)" \
+    "deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31;deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 14, at drv.js:9:9;deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at inner.js:2:33 inlined at drv.js:3:31;"
+  check "T3 A1 a ';;;' line only after the next line-start '[' line -> 'no source position'; an unread bailout naming fn -> 'deopts unreadable (1 bailout line(s), 0 D record(s))'" \
+    "$(tie lazyFn "$LZE"$'\n'"$LZ"$'\n'"$BEND"$'\n'"$SEMI" 3)$(tie add "$T_MONO"$'\n'"$XB" 3)" \
+    "deopt 1/1: TURBOFAN_JS deopt-lazy ((unknown)), bytecode offset 13, no source position;deopts unreadable (1 bailout line(s), 0 D record(s));"
+  check "T4 A2 ops window: 1 2 TF 3 -> 'after op 2, before op 3'; TF 3 4 -> 'before op 3'; 1 2 TF -> 'after op 2'; none; '@@LITE-MARK start' ignored" \
+    "$(tie add "$PRE"$'\n'"$(mko 1 2)"$'\n'"$E9"$'\n'"$(mko 3)" '$')$(tie add "$PRE"$'\n'"$E9"$'\n'"$(mko 3 4)" '$')$(tie add "$PRE"$'\n'"$(mko 1 2)"$'\n'"$E9" '$')$(tie add "$T_MONO" '$')$(tie add "$PRE"$'\n'"$(mko 1)"$'\n'"@@LITE-MARK start"$'\n'"$E9"$'\n'"$(mko 3)" '$')" \
+    "ops until TURBOFAN_JS: after op 2, before op 3;ops until TURBOFAN_JS: before op 3;ops until TURBOFAN_JS: after op 2;ops until TURBOFAN_JS: no @@LITE-MARK op lines;ops until TURBOFAN_JS: after op 1, before op 3;"
+  check "T5 A2 markers unreadable: op 5 then 4; op 2 then 2 (strictly increasing); '@@LITE-MARK' past column 1; a bad op line" \
+    "$(tie add "$PRE"$'\n'"$(mko 5 4)"$'\n'"$E9" '$')$(tie add "$PRE"$'\n'"$(mko 2 2)"$'\n'"$E9" '$')$(tie add "$PRE"$'\n'"$(mko 1)"$'\n'"x@@LITE-MARK op 9"$'\n'"$E9" '$')$(tie add "$PRE"$'\n'"$(mko 1)"$'\n'"@@LITE-MARK op x"$'\n'"$E9" '$')" \
+    "ops until TURBOFAN_JS: markers unreadable (op 4 after op 5);ops until TURBOFAN_JS: markers unreadable (op 2 after op 2);ops until TURBOFAN_JS: markers unreadable (@@LITE-MARK not at line start);ops until TURBOFAN_JS: markers unreadable (bad op line after op 1: want @@LITE-MARK op <1-15 digits>);"
+  check "T6 A2 'not compiled in run 1': ops 1 2 3, no TURBOFAN_JS compile; ops 1 2 around a TURBOFAN_JS line with a glued tail (DEOPT_AWK: X) -> last marker op 2" \
+    "$(tie add "$PRE"$'\n'"$(mko 1 2 3)" '$')$(tie add "$PRE"$'\n'"$(mko 1)"$'\n'"${E9}zz"$'\n'"$(mko 2)" '$')" \
+    "ops until TURBOFAN_JS: not compiled in run 1 (last marker op 3);ops until TURBOFAN_JS: not compiled in run 1 (last marker op 2);"
+
   # --- this script end to end: a fake node (bash) logs argv, prints a version, cats ./trace.<n>.txt or ./trace.txt
   # from cwd (n = its run count in that driver dir), in a cwd ending in /after also cats $FAKE_AFTER_EXTRA (when set),
   # exits with ./rc or 0, and exits 7 if NODE_OPTIONS reached it ---
@@ -668,6 +852,7 @@ EOF
     "2|VERDICT NO-VERDICT|7|1|0"
   check "e2e: driver exit 3 (before) -> exit 2 'before: driver exited 3 in run 1'" \
     "$(spawn - --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: driver exited 3 in run 1')" "2|VERDICT NO-VERDICT|7|1"
+  cp "$d/sp.out" "$d/rc3.out"   # read by T8 and T13
   check "e2e: an unparseable bailout naming fn (after) -> exit 2 'unparseable trace line naming 'add' in run 1: ...'" \
     "$(spawn - --fn add "$D2" "$d/xb/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: bailout: kind 'deopt-Eager'")" \
     "2|VERDICT NO-VERDICT|7|1"
@@ -698,6 +883,65 @@ EOF
   check "e2e --out: a failing node --version -> exit 2 after 1 spawn, nothing written (no OUT dir)" \
     "$(spawn FAKE_VER_RC=1 --out "$d/ov" --fn add "$D1" "$D2")|$(grep -c -e '^deopt-diff: cannot run .*/node --version$' "$d/sp.out" || true)|$([[ -e "$d/ov" ]] && echo exists || echo absent)" \
     "2|VERDICT NO-VERDICT|1|1|absent"
+
+  # --- the REPORTED tier section end to end (PLAN A3, A5, MD-20, A9): mx / dx are mono / deop driver dirs whose
+  # trace.txt put() rewrites between runs; mktaw DIR BODY writes an awk shim (first on PATH) that runs BODY for
+  # TIER_AWK only (the one awk with `-v side=` as its 3rd / 4th args) and never reads stdin ---
+  local EX N4L
+  EX=$(printf '%s\n' "$SEMI" '@@LITE-MARK op 1' '@@LITE-MARK op 2' '@@LITE-MARK op x' '....@@LITE-MARK op 3')
+  mkd mx "$T_MONO"; mkd dx "$T_DEOPT"
+  put() { printf '%s\n' "$T_MONO$1" >"$d/mx/trace.txt"; printf '%s\n' "$T_DEOPT$1" >"$d/dx/trace.txt"; }
+  sm() { [[ "$(grep -v -e '^tier    ' "$d/m0.out" || true)" == "$(grep -v -e '^tier    ' "$d/sp.out" || true)" ]] && echo same || echo differs; }
+  uw() { echo "$(has "tier    add  before  unreadable (awk exited $1)")$(has "tier    add  after  unreadable (awk exited $1)")"; }
+  mktaw() { mkdir -p "$1"; printf '%s\n' "#!$BASH" "case \"\${3:-} \${4:-}\" in \"-v side=\"*) $2 ;; esac" \
+    "exec $(command -v awk) \"\$@\"" >"$1/awk"; chmod +x "$1/awk"; }
+  mktaw "$d/ta5" 'exit 5'; mktaw "$d/ta0" 'exit 0'; mktaw "$d/tap" 'echo "tier    add  x  PARTIAL"; exit 5'
+  mktaw "$d/taf" 'echo "tier    add  x  OK"; echo FOREIGN; exit 0'
+  mktaw "$d/tam" 'echo "tier    add  x  OK"; echo "tier   add  x  3SP"; echo "tier    add  x  OK"; exit 0'
+  mktaw "$d/tab" 'echo "tier    add  x  OK"; echo; exit 0'
+  put ""; got=$(spawn - --fn add "$d/mx/driver.js" "$d/dx/driver.js"); cp "$d/sp.out" "$d/m0.out"
+  got="$got#$(has 'tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')"
+  put $'\n'"$EX"
+  check "T7 A3 never moves the verdict: mono|deop without, then with 5 extra lines (';;;', ops 1 2, 'op x', '....@@LITE-MARK op 3') -> same rc, VERDICT, 7 spawns, non-tier lines; tier lines read them" \
+    "$got#$(spawn - --fn add "$d/mx/driver.js" "$d/dx/driver.js")#$(sm)#$(has 'tier    add  before  ops until TURBOFAN_JS: markers unreadable (bad op line after op 2: want @@LITE-MARK op <1-15 digits>)')$(has 'tier    add  after  ops until TURBOFAN_JS: markers unreadable (bad op line after op 2: want @@LITE-MARK op <1-15 digits>)')" \
+    "1|VERDICT DIFF|7#1#1|VERDICT DIFF|7#same#11"
+  put ""
+  check "T8 MD-20 / A5: TIER_AWK exits 5, or exits 0 printing nothing -> 'unreadable (awk exited 5|0)' per side; rc, VERDICT, spawns, non-tier lines unchanged; run 1 exit 3 -> 'not reported (run 1: 3)'" \
+    "$(spawn "PATH=$d/ta5:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(uw 5)|$(sm)#$(spawn "PATH=$d/ta0:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(uw 0)|$(sm)#$(grep -c -F -x -e 'tier    add  before  not reported (run 1: 3)' "$d/rc3.out" || true)" \
+    "1|VERDICT DIFF|7|11|same#1|VERDICT DIFF|7|11|same#1"
+  IFS= read -r -d '' N4L <<'EOF' || true
+tier    REPORTED: run 1 of each side, never part of the verdict
+tier    add  before  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0
+tier    add  before  cycles 0: TURBOFAN_JS
+tier    add  before  ops until TURBOFAN_JS: no @@LITE-MARK op lines
+tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0
+tier    add  after  cycles 0: TURBOFAN_JS > deopt
+tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31
+tier    add  after  ops until TURBOFAN_JS: no @@LITE-MARK op lines
+tier    addX  before  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 0, TURBOFAN_JS-OSR 0
+tier    addX  before  cycles 0: none
+tier    addX  before  ops until TURBOFAN_JS: no @@LITE-MARK op lines
+tier    addX  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 0, TURBOFAN_JS-OSR 0
+tier    addX  after  cycles 0: none
+tier    addX  after  ops until TURBOFAN_JS: no @@LITE-MARK op lines
+EOF
+  check "T9 A9 (2) N4: --fn add,addX mono|deop -> exit 2, 7 spawns; tier lines exactly: header, then per fn in --fn order its before lines, then its after lines" \
+    "$(spawn - --fn add,addX "$D1" "$D2")|$(grep -e '^tier    ' "$d/sp.out" || true)" "2|VERDICT NO-VERDICT|7|${N4L%$'\n'}"
+  mkdir -p "$d/mixb" "$d/mixa"
+  for x in mixb mixa; do
+    : >"$d/$x/driver.js"; printf '%s\n' "$T_DEOPT" >"$d/$x/trace.1.txt"; printf '%s\n' "$T_MONO" >"$d/$x/trace.2.txt"; printf '%s\n' "$T_MONO" >"$d/$x/trace.3.txt"
+  done
+  check "T10 A9 (2) N5: each dir's run 1 deopts, runs 2 3 do not -> exit 2 (null control), 3 + 3 runs, both sides' tier deopt line read from run 1" \
+    "$(spawn - --fn add "$d/mixb/driver.js" "$d/mixa/driver.js")|$(cat "$fk/mixb.n" 2>/dev/null)+$(cat "$fk/mixa.n" 2>/dev/null)|$(has 'tier    add  before  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')$(has 'tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')" \
+    "2|VERDICT NO-VERDICT|7|3+3|11"
+  check "T11 A9 (2) N6: TIER_AWK prints 'tier    add  x  PARTIAL' then exits 5 -> no PARTIAL line, 'unreadable (awk exited 5)' per side; rc, VERDICT, spawns, non-tier lines unchanged" \
+    "$(spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e PARTIAL "$d/sp.out" || true)|$(uw 5)|$(sm)" "1|VERDICT DIFF|7|0|11|same"
+  got=""
+  for x in taf tam tab; do got="$got#$(spawn "PATH=$d/$x:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e FOREIGN -e '  x  ' "$d/sp.out" || true)|$(uw 0)"; done
+  check "T12 A9 (1) N7: TIER_AWK exits 0 after a tier line + a foreign line, a 3-space 'tier' line between 2 tier lines, or a tier line + an empty line -> no shim line, 'unreadable (awk exited 0)' per side" \
+    "$got" "#1|VERDICT DIFF|7|0|11#1|VERDICT DIFF|7|0|11#1|VERDICT DIFF|7|0|11"
+  check "T13 A9 (2) gv-cmp sub-check 8: before run 1 exits 3 -> the after side still reads its own run 1: 'tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0'" \
+    "$(grep -c -F -x -e 'tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0' "$d/rc3.out" || true)" "1"
   rf() { # LABEL FRAGMENT args...: refused with exit 2, 0 spawns, a die line holding FRAGMENT
     local l="$1" f="$2"; shift 2
     check "refused before any spawn: $l -> exit 2, 0 spawns, '$f'" \
@@ -926,7 +1170,7 @@ if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 say ""
 
 # ---------------------------------------------------------------------------------------------
-# runs: k = 1..R, before then after; each keeps its driver exit and its `[` lines (raw output to --out only)
+# runs: k = 1..R, before then after; each keeps its driver exit and its kept lines (KEEP_AWK) (raw output to --out only)
 # ---------------------------------------------------------------------------------------------
 RUN_RC=0; RUN_TX=""
 run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driver exit, or "<tee|tr|awk> <rc>") RUN_TX
@@ -955,6 +1199,10 @@ if [[ $STAGED == 1 && $STAGE_SAME == 1 && $VERDICT == DIFF ]]; then   # MD-16: b
   say "  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise"
   VERDICT=NO-VERDICT
 fi
+say "tier    REPORTED: run 1 of each side, never part of the verdict"   # A5: in every report that reaches VERDICT
+for fn in "${TARGETS[@]}"; do
+  tier_fn "$fn" before "${RCB[0]}" "${TXB[0]}"; tier_fn "$fn" after "${RCA[0]}" "${TXA[0]}"
+done
 say ""
 say "VERDICT $VERDICT"
 FINAL=1; case "$VERDICT" in SAME) exit 0 ;; DIFF) exit 1 ;; *) exit 2 ;; esac
