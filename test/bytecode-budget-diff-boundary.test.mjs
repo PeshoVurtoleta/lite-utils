@@ -388,7 +388,7 @@ diffRow('same basename in two dirs: each side runs with cwd = ITS dir (b and a c
     const { r, spawns } = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid', script);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /^ {2}mid: before 1 match\(es\): 211$/m); assert.match(r.stdout, /^ {2}mid: after {2}1 match\(es\): 212$/m);
-    for (const l of spawns.filter((x) => x.includes('--print-bytecode-filter='))) assert.ok(l.endsWith(' driver.mjs'), l);
+    for (const l of spawns.filter((x) => x.includes('--print-bytecode-filter='))) assert.ok(l.endsWith(' ./driver.mjs'), l);
 });
 diffRow('--out into an existing dir: other files kept, raw/before + raw/after created; raw/ holding an empty before/ is refused (0 spawns)', (script) => {
     const root = mkdtempSync(join(tmpdir(), 'bbq-oex-'));

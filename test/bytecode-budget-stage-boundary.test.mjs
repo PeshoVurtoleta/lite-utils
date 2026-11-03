@@ -279,13 +279,23 @@ row('4 --after -mod.js (driver imports ./-mod.js) -> exit 2 via the EXIT trap, 0
 });
 mutant('M-trap-off', 'EXIT trap condition -> false (rc 1 escapes)', [['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
     (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); });
-row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 2 "--out: cannot create -o9/raw", 0 spawns, no -o9 in cwd', {
+// ext-audit (B1e): a dash-led --out is a supported DIR name (read as ./-o9, never as an option), so this is a clean run
+row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 6 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {
     args: (c) => refO(c, { '--out': '-o9' }),
     check: (c, r) => {
-        assert.equal(r.status, 2, msg(r));
-        assert.match(r.stderr, /^bytecode-budget: --out: cannot create -o9\/raw\nVERDICT NO-VERDICT$/m, msg(r));
-        assert.equal(c.spawns().length, 0);
-        assert.deepEqual(readdirSync(c.cwd), []);
+        verdict(1, 'DIFF')(r);
+        assert.equal(r.stderr, '', msg(r));
+        assert.ok(r.stdout.includes(CNT_B211), msg(r));
+        assert.match(r.stdout, descB('r1', SHA.r1, S211), msg(r));
+        assert.match(r.stdout, descA('r2', SHA.r2, S212), msg(r));
+        assert.match(r.stdout, new RegExp(`^out {5}${reEsc(realpathSync(c.cwd))}/-o9$`, 'm'), msg(r));
+        assert.equal(c.spawns().length, 6, c.spawns().join('\n'));
+        assert.deepEqual(readdirSync(c.cwd), ['-o9']);
+        const o9 = join(c.cwd, '-o9');
+        assert.deepEqual(readdirSync(o9).sort(), ['raw', 'report.txt', 'stage']);
+        assert.deepEqual(files(join(o9, 'raw')), ['after/mid.1.txt', 'after/mid.2.txt', 'before/mid.1.txt', 'before/mid.2.txt']);
+        assert.equal(readFileSync(join(o9, 'report.txt'), 'utf8'), r.stdout);
+        assert.ok(!existsSync(c.out), 'the default OUT was created');
     },
 });
 

@@ -195,7 +195,7 @@ const runsRow = (R) => row(`1 ref r1 | r2 --runs ${R} -> exit 1 DIFF, ${1 + 2 * 
         const log = c.log();
         assert.equal(log.length, 1 + 2 * R, log.join('\n'));
         assert.ok(log[0].endsWith('|--version'), log[0]);
-        const want = Array.from({ length: 2 * R }, (_, i) => [`${c.out}/stage/${i % 2 ? 'after' : 'before'}`, `${TRACE} driver.js`]);
+        const want = Array.from({ length: 2 * R }, (_, i) => [`${c.out}/stage/${i % 2 ? 'after' : 'before'}`, `${TRACE} ./driver.js`]);
         assert.deepEqual(c.drivers(), want);
         assert.equal(files(join(c.out, 'raw', 'before')).length, R);
         assert.equal(files(join(c.out, 'raw', 'after')).length, R);

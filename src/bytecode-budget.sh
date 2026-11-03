@@ -22,10 +22,14 @@
 #                          NO-VERDICT before any probe.
 #                          Diff mode (optional): as in report mode.
 #   --runs N               probes per function, 2..20 (default 2). Run 1 vs runs 2..N is the null control.
-#   --node BIN             node binary (default: $NODE, else node)
-#   --v8-flags STR         extra V8 flags for every probe, split on spaces (flags only; any *print-bytecode* flag
-#                          is refused; a max*inlined*bytecode* flag must be --name=N, N an integer of 1..9 digits;
-#                          a reserve*inline*budget* flag must be --name=X, X = N or N.M, N and M of 1..9 digits (e.g. 1.2))
+#   --node BIN             node binary (default: $NODE, else node), resolved ONCE to an absolute path before any cd
+#                          (a bare name through PATH). It must be an executable file, else exit 2 before any node
+#                          spawn ("node binary not found", "node binary is not a file on PATH (...)", "node binary
+#                          is not an executable file").
+#   --v8-flags STR         extra V8 flags for every probe, split on spaces (flags only, each `--` and a letter; any
+#                          *print-bytecode* flag is refused; a max*inlined*bytecode* flag must be --name=N, N an
+#                          integer of 1..9 digits; a reserve*inline*budget* flag must be --name=X, X = N or N.M, N and
+#                          M of 1..9 digits (e.g. 1.2))
 #   --out DIR              keep DIR/report.txt and DIR/raw/<fn>.<k>.txt (raw output of run k, 0x addresses kept;
 #                          a space in fn becomes -). DIR/raw must be absent or empty. Without --out nothing is
 #                          written to disk.
@@ -134,6 +138,7 @@
 #   are one FAIL line and --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -616,7 +621,7 @@ done
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
 [[ -z "$V8FLAGS" || ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-  [[ "$f" == --* ]] || die "--v8-flags takes flags only (each starts with --), got '$f'"
+  [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   [[ "$g" != *print-bytecode* ]] || die "--v8-flags must not set $f: the probe sets --print-bytecode itself"
   g="${g#--}"; g="${g%%=*}"; g="${g#no}"; g="${g#-}"
@@ -627,29 +632,43 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       [[ "$f" =~ ^--[^=]+=[0-9]{1,9}(\.[0-9]{1,9})?$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =X (a decimal number, e.g. 1.2)" ;;
   esac
 done
+[[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write
 elif [[ $DIFFMODE == 1 ]]; then
   [[ ${#POS[@]} -eq 2 ]] || die "--diff needs exactly two DRIVER files (BEFORE AFTER), got ${#POS[@]} (see --help)"
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
   [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
-  DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
-  DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
+  DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
+  [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER (before): cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
+  DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+  [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER (after): cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
   SHA_B=$(sha8 "$DRV_B_DIR/$DRV_B_BASE"); SHA_A=$(sha8 "$DRV_A_DIR/$DRV_A_BASE")
-  DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $SHA_B"; DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $SHA_A"
+  DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $SHA_B"; DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $SHA_A"
 else
   [[ ${#POS[@]} -eq 1 ]] || die "need exactly one DRIVER file, got ${#POS[@]} (see --help)"
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER not found (or not a readable file): ${POS[0]}"
-  DRV_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_BASE=$(basename "${POS[0]}")
+  DRV_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_BASE=$(basename -- "${POS[0]}")
+  [[ "$DRV_DIR/$DRV_BASE" -ef "${POS[0]}" ]] || die "DRIVER: cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
 fi
-command -v "$NODE_BIN" >/dev/null 2>&1 || die "node binary not found: $NODE_BIN"
-if [[ "$NODE_BIN" == */* ]]; then NODE_BIN="$(cd "$(dirname "$NODE_BIN")" && pwd)/$(basename "$NODE_BIN")"; fi
+# resolve the binary ONCE, from the caller's cwd: every spawn (--version, --v8-options, each probe in its driver dir)
+# runs this absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a
+# path (never looked up on PATH): it goes straight to the -f / -x check, so a directory is named as such
+NODE_RES=$NODE_BIN
+if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
+[[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
+[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 if [[ -n "$OUT" ]]; then
-  mkdir -p "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
-  OUT=$(cd "$OUT" && pwd)
+  mkdir -p -- "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
+  # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one
+  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   if [[ $DIFFMODE == 1 ]]; then mkdir "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"; fi
-  REPORT="$OUT/report.txt"; : >"$REPORT"
+  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 else
   REPORT=/dev/null   # nothing is written to disk without --out
 fi
@@ -674,7 +693,7 @@ if [[ $DIFFMODE == 1 ]]; then
     if [[ $STAGE_SAME == 1 ]]; then say "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)"; fi
   fi
 else
-  say "driver  $DRV_DIR/$DRV_BASE"
+  say "driver  ${DRV_DIR%/}/$DRV_BASE"
 fi
 say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--print-bytecode --print-bytecode-filter=<fn>"
 if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
@@ -708,10 +727,10 @@ probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the r
   local rc=0 line
   if [[ -n "$OUT" ]]; then
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "$4" 2>&1) | tee "$OUT/raw/$5" | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      --print-bytecode-filter="$1" "./$4" 2>&1) | tee "$OUT/raw/$5" | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   else
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "$4" 2>&1) | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      --print-bytecode-filter="$1" "./$4" 2>&1) | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   fi
   printf '%s %s\n' "$rc" "$line"
 }

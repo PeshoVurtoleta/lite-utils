@@ -115,14 +115,16 @@ const MUTANTS = [
     ['Nb-version-probe-after-mkdir', [[
         'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\n' +
         'if [[ -n "$OUT" ]]; then\n' +
-        '  mkdir -p "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
-        '  OUT=$(cd "$OUT" && pwd)\n' +
-        '  REPORT="$OUT/report.txt"; : >"$REPORT"\n' +
+        '  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
+        '  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one\n' +
+        '  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L\n' +
+        '  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check\n' +
         'fi\n',
         'if [[ -n "$OUT" ]]; then\n' +
-        '  mkdir -p "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
-        '  OUT=$(cd "$OUT" && pwd)\n' +
-        '  REPORT="$OUT/report.txt"; : >"$REPORT"\n' +
+        '  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
+        '  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one\n' +
+        '  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L\n' +
+        '  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check\n' +
         'fi\n' +
         'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\n']],
         ['e2e --out: a failing node --version']],

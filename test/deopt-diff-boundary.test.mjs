@@ -251,7 +251,7 @@ function assertRuns(r, R) {
     assert.deepEqual(r.verdicts, ['VERDICT DIFF'], r.out);
     assert.equal(r.spawns, 1 + 2 * R, r.log.join('\n'));
     const want = ['cwd|--version'];
-    for (let k = 0; k < R; k++) want.push(`monoA|--allow-natives-syntax ${TRACE} driver.js`, `deop|--allow-natives-syntax ${TRACE} driver.js`);
+    for (let k = 0; k < R; k++) want.push(`monoA|--allow-natives-syntax ${TRACE} ./driver.js`, `deop|--allow-natives-syntax ${TRACE} ./driver.js`);
     assert.deepEqual(r.log, want);
     assert.ok(r.lines.includes(`mode    diff  runs ${R}  v8 flags --allow-natives-syntax ${TRACE}`), r.out);
 }
@@ -456,11 +456,12 @@ test('A3 teeth: the empty-raw/ row is red on a mutant that refuses any existing 
     } finally { rmAll(dir); }
 });
 // =====================================================================================================================
-// A4 parity: the two Phase 2 scripts equal their frozen p3g1 copies and `git show cb9fa65:<file>` (sha256/8 pinned)
+// A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show cb9fa65:<file>` (sha256/8 pinned)
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
-const PARITY = [['bytecode-budget.sh', '99790884'], ['inlining-budget-diff.sh', '740da13b']];
+// bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
+const PARITY = [['inlining-budget-diff.sh', '740da13b']];
 function gitShow(rev, file) {
     const r = spawnSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26, timeout: 30000 });
     return r.status === 0 ? r.stdout : null;

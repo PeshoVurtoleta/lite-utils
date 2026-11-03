@@ -15,8 +15,11 @@
 # Options
 #   --fn LIST          function names, comma separated (required)
 #   --runs N           node runs per side, 2..20 (default 3). Run 1 vs runs 2..N is the null control.
-#   --node BIN         node binary (default: $NODE, else node)
-#   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each starting with --). Refused,
+#   --node BIN         node binary (default: $NODE, else node), resolved ONCE to an absolute path before any cd (a
+#                      bare name through PATH). It must be an executable file, else exit 2 before any node spawn
+#                      ("node binary not found", "node binary is not a file on PATH (...)", "node binary is not an
+#                      executable file").
+#   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-deopt*, *trace-opt* or *concurrent-recompilation* flag (the
 #                      script sets them) and any *trace-file-names* flag (it changes the <JSFunction NAME (sfi = ...)>
 #                      text the records are read from)
@@ -178,6 +181,7 @@
 #   --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -802,7 +806,7 @@ EOF
   rf "--runs 21" "--runs must be an integer in [2, 20] (null control), got '21'" --runs 21 --fn add "$D1" "$D2"
   rf "one DRIVER" "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got 1" --fn add "$D1"
   rf "a trace-deopt flag in --v8-flags" "--v8-flags must not set --trace_deopt: the script sets" --fn add --v8-flags=--trace_deopt "$D1" "$D2"
-  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with --), got 'x.js'" --fn add --v8-flags=x.js "$D1" "$D2"
+  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with -- and a letter), got 'x.js'" --fn add --v8-flags=x.js "$D1" "$D2"
   rf "unknown option" "unknown option --nod (did you mean --node?)" --fn add --nod x "$D1" "$D2"
   rf "a trace-file-names flag in --v8-flags" "--v8-flags must not set --trace_file_names: it changes the <JSFunction NAME" \
     --fn add --v8-flags=--trace_file_names "$D1" "$D2"
@@ -957,7 +961,7 @@ done
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
 [[ -z "$V8FLAGS" || ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-  [[ "$f" == --* ]] || die "--v8-flags takes flags only (each starts with --), got '$f'"
+  [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   case "$g" in
     *trace-deopt*|*trace-opt*|*concurrent-recompilation*)
@@ -966,6 +970,7 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       die "--v8-flags must not set $f: it changes the <JSFunction NAME (sfi = ...)> text the records are read from" ;;
   esac
 done
+[[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ $STAGED == 1 ]]; then
   [[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write (--out is required)
@@ -979,22 +984,35 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
 fi
-command -v "$NODE_BIN" >/dev/null 2>&1 || die "node binary not found: $NODE_BIN"
-if [[ "$NODE_BIN" == */* ]]; then NODE_BIN="$(cd "$(dirname "$NODE_BIN")" && pwd)/$(basename "$NODE_BIN")"; fi
+# resolve the binary ONCE, from the caller's cwd: every spawn (--version, each run in its driver dir) runs this
+# absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a path
+# (never looked up on PATH): it goes straight to the -f / -x check, so a directory is named as such
+NODE_RES=$NODE_BIN
+if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
+[[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
+[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 if [[ $STAGED == 0 ]]; then
-  DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
-  DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
-  DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
-  DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
+  DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
+  DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+  [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER (before): cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
+  [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER (after): cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
+  DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
+  DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
 fi
 
 # --- every refusal is above this line; spawns start here: --version, then disk writes (--out only), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 if [[ -n "$OUT" ]]; then
-  mkdir -p "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
-  OUT=$(cd "$OUT" && pwd)
-  REPORT="$OUT/report.txt"; : >"$REPORT"
+  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
+  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one
+  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
 fi
 MODE=diff
 if [[ $STAGED == 1 ]]; then
@@ -1023,7 +1041,7 @@ run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driv
   # the pipeline's four exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee / tr / awk failure is
   # never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL, which
   # would drop a `[bailout` glued after it); DEOPT_AWK then reads the glue as X "trace text not at line start"
-  tx=$( (cd "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "$2" 2>&1) \
+  tx=$( (cd -- "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" 2>&1) \
     | tee "${3:-/dev/null}" | tr '\000' '?' | awk "$KEEP_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
   st=${tx##*$'\n'}
   if [[ "$tx" == *$'\n'* ]]; then tx=${tx%$'\n'*}; else tx=""; fi
