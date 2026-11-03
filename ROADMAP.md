@@ -4,8 +4,8 @@
 > For a client who wants to run one script and read the answer, without wiring lite-leak / lite-gc-profiler /
 > lite-perf-gate into a test suite.
 
-Status: adopted 2026-11-02 (maintainer accepted every item below). Baseline: `7f0ba7b initial commit`
-(one file, `inlining-budget-diff.sh`).
+Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape is still a proposal).
+Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
 
@@ -114,7 +114,10 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Tests: self-test on canned + real fixtures (S-9), mutants, and a live deterministic gate on a bundled
   tiny driver (S-6).
 
-### Phase 3 -- deopt-diff.sh -- G1 + G2 DONE 2026-11-02 (verdict core; ref + file modes; qa APPROVED; G3-G4 open)
+### Phase 3 -- deopt-diff.sh -- G1-G3 DONE, G4 open
+- Status 2026-11-03: G1 + G2 DONE 2026-11-02 (verdict core; ref + file modes; qa APPROVED); G3 DONE 2026-11-03
+  (REPORTED tier section per --fn; B1-B4 APPROVED, no qa; commits dc02285 + d22a330); G4 open (B0 fixtures
+  done, commit 5ecd79a; B1-B4 open).
 - `--trace-deopt-verbose` + `--trace-opt` (+ `--no-concurrent-recompilation` by default, as inline diff).
 - Verdict lines: function + deopt reason + deopt kind (eager / lazy / soft) + compile unit; addresses,
   bytecode offsets and pc offsets normalized. Multiset compare; null control; guard.
@@ -125,6 +128,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   against the monomorphic driver) and an identical pair (must SAME).
 
 ### Phase 4 -- allocation-diff.sh
+- Status 2026-11-03: G1 B1 DONE (records + judge + run_side; commit 2ed1c33); B1g (guard counter) next; MD-31
+  (P4 A10): default --runs 5, set in B2 (the B1 build still defaults to 3).
 - `--trace-gc` with fixed `--max-semi-space-size` (and `--min-semi-space-size`), driver prints
   `@@LITE-MARK start` / `@@LITE-MARK end` on stdout around the steady-state window (same stream as the GC
   trace, so order holds). Count Scavenge / Mark-Compact lines inside the window.
@@ -134,6 +139,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Controls: an allocating loop (must be > 0) and a zero-alloc loop (must be 0) at fixed N.
 
 ### Phase 5 -- ic-diff.sh
+- Status 2026-11-03: G1 B1 DONE (records + judge + run_side; commit ea8ef48); B2 (self-test + -h) next.
 - TASK 0 (coder, before any plan): probe node v26.8.2 for `--log-ic` output lines and format; record a
   sample as a fixture. If V8 no longer logs IC transitions in a parseable form, the phase stops and the
   maintainer decides (record in NEXT.md).
@@ -186,4 +192,4 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - D-2 ANSWERED 2026-11-02: keep the lib split into fragments (six at Phase 1; see S-2).
 - D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-7
   (was 0.1.0; maintainer 2026-11-03; Phase 7 audit added 2026-11-03); every consuming module needs
-  all four scripts.
+  all five scripts (inlining-budget-diff + the four S-1 ones).
