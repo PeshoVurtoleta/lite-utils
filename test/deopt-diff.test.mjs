@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 84;   // every `check` call in self_test(): 53 driver-mode rows + 31 ref/file rows (18 staged S1-S4, R1-R14 + 13 G3 B2 rows); a new check moves this literal
+const CHECKS = 84;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13); a new check moves this literal
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
 const ENV = { ...process.env };
@@ -163,6 +163,35 @@ const MUTANTS = [
     ['Rf-tr-after-awk', [[RS, '| tee "${3:-/dev/null}" | awk "$KEEP_AWK" | tr \'\\000\' \'?\';']], [R.nul0]],
     ['Rn-glued-E-clause-dropped', [[GE_X, 'else if (index($0, "[bailout") > 0) x(']], [R.ge]],
 ];
+// The REPORTED tier section's mutant table (P3G3 PLAN TASK 6 + A9 (4)): G1-G6, V1-V3 of ASSERTIONS A1-A3, TW1-TW7 =
+// A9's W1-W7 (renamed: this file's old table already holds W1 / W2). Designed row = the self-test's `T<n> ` row the
+// plan names (A1: G1-G3; A2: G4, G5; A3: G6, V1, V2 -> T7; V3 -> T8 + T11; A9 (4): W1-W7), confirmed red in
+// .handoff/evidence/p3g3/b2/muts.log, b2-review/rmuts.log, b3/. The prefix ends in a space, so `T1 ` never names T10-T13.
+const TR = (n) => `T${n} `;
+const OKL = '  if [[ $ok == 1 ]]; then say "$out"; else say "tier    $1  $2  unreadable (awk exited $rc)"; fi';
+const L0 = 'tier_fn "$fn" before "${RCB[0]}" "${TXB[0]}"; tier_fn "$fn" after "${RCA[0]}" "${TXA[0]}"';
+const HDR = 'say "tier    REPORTED: run 1 of each side, never part of the verdict"';
+const FORFN = 'for fn in "${TARGETS[@]}"; do';
+const TIER_MUTANTS = [
+    ['G1-every-D-a-cycle', [['    if (EV[i] == "deopt") p++; else { c += p; p = 0 }', '    if (EV[i] == "deopt") c++; else p = 0']], [TR(1)]],
+    ['G2-pairing-across-a-bracket-line', [['  if (substr($0, 1, 1) == "[") {\n    PD = 0\n', '  if (substr($0, 1, 1) == "[") {\n']], [TR(3)]],
+    ['G3-path-not-basenamed', [['b = substr(g, 1, RSTART - 1); sub(/.*\\//, "", b)', 'b = substr(g, 1, RSTART - 1)']], [TR(2)]],
+    ['G4-marker-order-le', [['else if (NM > 0 && n + 0 <= LM + 0)', 'else if (NM > 0 && n + 0 < LM + 0)']], [TR(5)]],
+    ['G5-no-last-marker-before-TF', [['{ TF = 1; TA = LM }', '{ TF = 1 }']], [TR(4)]],
+    ['G6-KEEP-clause-removed', [["KEEP_AWK+=' || index($0, \";;; deoptimize at \") > 0 || index($0, \"@@LITE-MARK\") > 0'", "KEEP_AWK+=' || 0'"]], [TR(7)]],
+    ['V1-unreadable-markers-fold-NO-VERDICT', [[OKL, OKL + '; [[ "$out" != *"markers unreadable"* ]] || VERDICT=NO-VERDICT']], [TR(7)]],
+    ['V2-tier-line-printed-as-fn-line', [['  if [[ $ok == 1 ]]; then say "$out";', '  if [[ $ok == 1 ]]; then say "${out//tier    /  }";']], [TR(7)]],
+    // V3 (A3 / A9 N6): a TIER_AWK exit != 0 folds NO-VERDICT into VERDICT, so the exit code moves 1 -> 2 (cut after the
+    // MD-20 print, the one place tier_fn holds TIER_AWK's rc; DEOPT_AWK's rec pass and the "not reported" path untouched)
+    ['V3-tier-awk-failure-moves-exit', [[OKL, OKL + '; [[ $rc == 0 ]] || VERDICT=NO-VERDICT']], [TR(8), TR(11)]],
+    ['TW1-after-side-reads-before-rc', [['tier_fn "$fn" after "${RCA[0]}"', 'tier_fn "$fn" after "${RCB[0]}"']], [TR(13)]],
+    ['TW2-tier-from-run-2', [[L0, 'tier_fn "$fn" before "${RCB[1]}" "${TXB[1]}"; tier_fn "$fn" after "${RCA[1]}" "${TXA[1]}"']], [TR(10)]],
+    ['TW3-first-fn-only', [[FORFN + '\n  ' + L0, 'for fn in "${TARGETS[0]}"; do\n  ' + L0]], [TR(9)]],
+    ['TW4-header-in-the-fn-loop', [[HDR + '   # A5: in every report that reaches VERDICT\n' + FORFN + '\n', FORFN + '\n' + HDR + '\n']], [TR(9)]],
+    ['TW5-after-before-swapped', [[L0, 'tier_fn "$fn" after "${RCA[0]}" "${TXA[0]}"; tier_fn "$fn" before "${RCB[0]}" "${TXB[0]}"']], [TR(9)]],
+    ['TW6-awk-rc-not-tested', [['if [[ $rc == 0 && -n "$out" ]]; then', 'if [[ -n "$out" ]]; then']], [TR(11)]],
+    ['TW7-first-line-test-only', [['[[ "$rest" == *$\'\\n\'* ]] || break;', 'break;']], [TR(12)]],
+];
 // Controls (must SURVIVE: W1 / W2 on the pre-r2 rec() body that swallowed an awk failure -- that is the gap W1 / W2 close)
 const CONTROLS = [
     ['C1-W1-on-old-rec', [W1, [REC_NEW, REC_OLD]]],
@@ -181,6 +210,7 @@ function assertKilled(name, r, rows) {
 }
 
 assert.equal(MUTANTS.length, 36, 'the mutant table holds the 29 + 7 rows of the plan');
+assert.equal(TIER_MUTANTS.length, 16, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4))');
 // The mutant self-tests are independent, so they run in parallel (6 at a time) from module load; each test awaits its own.
 let active = 0;
 const waiting = [];
@@ -206,10 +236,11 @@ function launch(name, edits) {
     })();
 }
 const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
+const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const SURV = skip ? null : CONTROLS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
-MUTANTS.forEach(([name, , rows], i) => {
+function killRows(table, kills) { table.forEach(([name, , rows], i) => {
     test(`deopt-diff --self-test MUST FAIL on mutant ${name}`, { skip }, async () => {
-        assertKilled(name, await KILLS[i], rows);
+        assertKilled(name, await kills[i], rows);
     });
     // revert check: the unmutated script must NOT satisfy the same assertion (one shared baseline run)
     test(`deopt-diff mutant ${name}: revert check (the unmutated run fails the same assertion)`, { skip }, () => {
@@ -220,7 +251,9 @@ MUTANTS.forEach(([name, , rows], i) => {
         }
         assert.throws(() => assertKilled(name, base(), rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
-});
+}); }
+killRows(MUTANTS, KILLS);
+killRows(TIER_MUTANTS, TKILLS);
 CONTROLS.forEach(([name], i) => {
     test(`deopt-diff --self-test control ${name} must SURVIVE`, { skip }, async () => {
         const r = await SURV[i];

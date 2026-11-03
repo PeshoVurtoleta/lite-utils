@@ -211,16 +211,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   at line start (read as V8 trace output) are Not detected; `--runs` default 3. Tier: `--self-test`
   is DETERMINISTIC (canned trace text and a fake node that counts spawns); a verdict on a user
   driver is STATISTICAL (deopts follow tier-up timing; run it under the host quiet lock). Gated in
-  `npm test` by `test/deopt-diff.test.mjs` (83 tests): the exact self-test count (71), an unmodified
+  `npm test` by `test/deopt-diff.test.mjs` (115 tests): the exact self-test count (84), an unmodified
   copy outside the repo, 36 mutants of the script, each of which must turn its own self-test row red
-  (and each with a revert row: the kill assertion fails on the unmutated run), 2 controls that must
-  survive (an awk crash the old records helper swallowed), `-h`, and 3 end-to-end rows on a fake
-  node with their revert rows (a glued `[completed compiling` line, `abc<CR>[bailout`, a CRLF
-  bailout line: each NO-VERDICT with its own reason). `test/deopt-diff-boundary.test.mjs` (87 tests)
-  adds outside rows, each with a mutant row that must turn it red: retention over 3 cycles of SAME /
-  DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a logging mktemp shim stay empty; 7 spawns
-  each), the self-test leaving 0 dirs (also when killed by SIGTERM mid-run), `--runs` 2 / 20 / 08 /
-  09 (5 / 41 / 17 / 19 spawns, before / after alternating, exact argv), 26 refused `--runs` values,
+  (and each with a revert row: the kill assertion fails on the unmutated run), a 16-row tier mutant
+  table (G1-G6, V1-V3, TW1-TW7: each must turn its designed T row(s) red, each with a revert
+  row), 2 controls that must survive (an awk crash the old records helper swallowed), `-h`, and 3
+  end-to-end rows on a fake node with their revert rows (a glued `[completed compiling` line,
+  `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
+  `test/deopt-diff-boundary.test.mjs` (87 tests) adds outside rows, each with a mutant row that must turn
+  it red: retention over 3 cycles of SAME / DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a
+  logging mktemp shim stay empty; 7 spawns each), the self-test leaving 0 dirs (also when killed by
+  SIGTERM mid-run), `--runs` 2 / 20 / 08 / 09 (5 / 41 / 17 / 19 spawns, before / after alternating,
+  exact argv), 26 refused `--runs` values,
   11 further refusals and 7 `--out` refusals (exit 2, 0 spawns, OUT unchanged), and A4 parity of
   bytecode-budget.sh 99790884 / inlining-budget-diff.sh 740da13b. REPORTED (not gated; one
   PRELIMINARY run under the quiet lock, 2026-11-02 20:43 EET, Darwin arm64, node v26.8.2,
@@ -249,20 +251,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   are; maintainer decision MD-16). New refusals, each exit 2 with 0 spawns and nothing written:
   `--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after` (MD-17
   covers the `DIR/stage` one above), a mixed or half-given pair, and the further stage / git checks
-  of `bytecode-budget.sh --diff`. Driver-mode output is unchanged: 43 golden-vector files (10 cases,
-  7 runs and 3 refusals: exit code, stdout, stderr and spawn log each = 40 files, plus the `--out`
-  report and file list and `leftovers.count`) of the pre-group build 221ff2ec equal those of the new
-  build. `-h` documents both modes and the known gaps as Not detected (a tracked symlink `--module`
-  stages the link text, `refs/replace` swaps the staged blob, a leading-dash path value exits 2
-  only through the EXIT trap, an unreadable `DIR/stage` or one that is a symlink to an empty
-  directory). Tier: a verdict on a user driver is STATISTICAL, as in driver mode (run it under the
-  host quiet lock); the staging, the refusals and the byte-identical NO-VERDICT are DETERMINISTIC.
+  of `bytecode-budget.sh --diff`. Group 2 leaves driver-mode output unchanged (group 3 below adds only
+  `tier    ` lines): 43 golden-vector files (10 cases, 7 runs and 3 refusals: exit code, stdout, stderr
+  and spawn log each = 40 files, plus the `--out` report and file list and `leftovers.count`) of the
+  pre-group build 221ff2ec equal those of the group 2 build. `-h` documents both modes and the known
+  gaps as Not detected (a tracked symlink `--module` stages the link text, `refs/replace` swaps the
+  staged blob, a leading-dash path value exits 2 only through the EXIT trap, an unreadable
+  `DIR/stage` or one that is a symlink to an empty directory). Tier: a verdict on a user driver is
+  STATISTICAL, as in driver mode (run it under the host quiet lock); the staging,
+  the refusals and the byte-identical NO-VERDICT are DETERMINISTIC.
   `--self-test` gains 18 ref / file rows on a temp git repo with a fake node (S1-S4: ref r1 | r2
   DIFF, r1 | r1 SAME with the NOTE, file mode frozen | live with the live file rewritten mid-run,
   byte-identical DIFF -> NO-VERDICT; R1-R14: refusals, each with its own die line), 53 -> 71 checks;
   with no git on PATH, or a failed repo set-up, the 18 rows are ONE FAIL line. Its git calls are
   isolated (no editor, global or system config, hooks or signing; the six `GIT_*` variables unset).
-  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin 71) and
+  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin now 84) and
   `test/deopt-diff-stage.test.mjs` (65 tests: 22 verdict / refusal rows, each with a twin that must
   exit 2 `unknown option` and go red on the pre-group build; 11 exact-once mutants; 2 retention
   rows, 20 staged runs = 140 spawns and 11 files per OUT; 8 self-test rows: env, no git, two control
@@ -271,6 +274,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   KNOWN GAP pins -- each with a twin on the pre-group build; 1 parity row + twin; retention over 3
   cycles of SAME / DIFF / NO-VERDICT / refusal and a SIGTERM mid-run, each row + twin + mutant; 7
   row mutants, 9 mutant tests from 7 distinct edits).
+- `deopt-diff.sh` tier section (Phase 3 group 3): every report that reaches VERDICT now prints a
+  REPORTED section after the fn lines and before `VERDICT`, read from run 1 of each side. It opens
+  with `tier    REPORTED: run 1 of each side, never part of the verdict`; then, per `--fn` in order,
+  the before lines and then the after lines: the compile counts per unit (MAGLEV, MAGLEV-OSR,
+  TURBOFAN_JS, TURBOFAN_JS-OSR, other units after them), `cycles <c>: <seq>` (run 1's E / D records
+  in order, cut after 16; c = D records with a later E), one `deopt <i>/<d>` line per D record with
+  its bytecode offset and `;;; deoptimize at` source position (base file name, inlined chain; `no
+  source position` or `source position unreadable` when there is none or it does not parse; a single
+  `deopts unreadable (<a> bailout line(s), <d> D record(s))` line instead when the line-start
+  `[bailout` lines naming fn, those whose offset reads and the D records are not one count), and
+  `ops until TURBOFAN_JS: after op <a>, before op <b>`. The record awk is unchanged; the keep filter
+  also keeps `;;; deoptimize at` and `@@LITE-MARK` lines (the kept text of a run is held in memory,
+  so dense markers grow it). Fail closed (MD-20): when the section awk (`TIER_AWK`) exits non-zero,
+  prints nothing, or prints a line not starting `tier    `, that fn / side prints exactly one
+  `unreadable (awk exited <rc>)` line (rc 0 for a clean exit) and the verdict stands; a side whose
+  run 1 did not exit 0 prints `not reported (run 1: <rc>)`. Marker protocol: the driver writes
+  `@@LITE-MARK op <n>` at line start (n = ops done so far, strictly increasing), recommended with
+  `fs.writeSync(1, ...)`; a malformed op line, a non-increasing n, or a marker after column 1 reads
+  `markers unreadable (<why>)`. Limits (listed under Not detected in `-h`): an asynchronous marker
+  writer (`console.log`, `process.stdout.write`) is not proven to keep its order against the trace
+  under a full pipe, and ops are only as fine as the marker spacing. Tier: REPORTED, gates nothing;
+  it never moves the exit code or a verdict line, and every non-`tier` line stays byte-identical.
+  `--self-test` gains 13 tier rows (T1-T13), 71 -> 84 checks, gated by a 16-row tier mutant table
+  in `test/deopt-diff.test.mjs`.
 
 ### Changed
 
