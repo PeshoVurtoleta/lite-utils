@@ -183,8 +183,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   not probed.
 - L1 import-audit.sh (top pick): what importing a module does to everyone else -- globals changed,
   open timers / handles, import-time allocation, V8 protector cells invalidated. Checks the
-  `sideEffects: false` law; expected DETERMINISTIC (reuses allocation-diff machinery); light on V8
-  internals.
+  `sideEffects: false` law; expected DETERMINISTIC except import-time allocation, which reuses
+  allocation-diff machinery and so is STATISTICAL, REPORTED only (S-5); light on V8 internals.
 - L2 shape-diff.sh: per-site elements-kind and field-representation stability, dictionary-mode
   objects (`--trace-elements-transitions`, `--trace-generalization`; `--log-maps` is already
   ic-diff's opt-in map section, S-1 / Phase 5). Hard part is attribution (`<unknown>:<unknown>`,
