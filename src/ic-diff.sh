@@ -3,30 +3,110 @@
 # per fn, the multiset of its IC sites (kind, key, final state) compared across the two drivers.
 #
 #   ic-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER     driver mode: two drivers, one verdict
+#   ic-diff.sh --self-test                                       canned checks, a fake node (no real node)
 #   ic-diff.sh -h | --help                                       this text
 #
-#   e.g. ic-diff.sh --fn get,get\ value before/driver.js after/driver.js
+#   e.g. ic-diff.sh --fn get,get\ value --v8-flags --no-lazy-feedback-allocation before/driver.js after/driver.js
 #
 # Options
 #   --fn LIST          function names, comma separated (required)
 #   --runs N           node runs per side, 2..20 (default 3). Run 1 vs runs 2..N is the null control.
-#   --node BIN         node binary (default: $NODE, else node)
+#   --node BIN         node binary (default: $NODE, else node). Resolved ONCE, from the caller's directory, to an
+#                      absolute path (`command -v`; a function, alias or builtin is refused): the probes and every
+#                      trace run (each in its driver's directory) run that one file, and the header names it.
 #   --v8-flags STR     extra V8 flags for every trace run, split on spaces (flags only, each starting with --).
 #                      Refused, with `_` read as `-`: any *log*, *prof*, *concurrent-recompilation*,
 #                      *interpreted-frames-native-stack* or *snapshot* flag. --no-lazy-feedback-allocation is allowed.
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
 #                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent or empty.
 #                      Without --out the logs go to one private temp dir, removed on every exit.
-#   --self-test        canned checks (not in this build: exits 2)
+#   --self-test        canned checks (--log-ic text through the record awk, judge and diff_fn, then this script end
+#                      to end on a fake node that counts spawns and mktemp calls): one "ok <label>" or
+#                      "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0) or
+#                      "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
+#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline and
+#   --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value. An
+#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write.
 #
-# Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one `node --version`, one `node --v8-options`
-#   (a failing probe exits 2 before anything is written), then 2 x runs trace runs
-#   `node [v8 flags] --log-ic --no-concurrent-recompilation --no-node-snapshot --logfile=<abs dir>/run.log DRIVER`
-#   with cwd = the driver's directory. V8 writes isolate-0x<addr>-<pid>-run.log there; exactly one such file per
-#   run is renamed run.<k>.log. The header line `v8-opts sha256/8 <x>` is the sha256/8 of the --v8-options bytes
-#   (env -u NODE_OPTIONS <node> --v8-options | shasum -a 256): REPORTED, never part of the verdict.
+# DRIVER: exactly two existing readable files (no newline in the path). Each trace run is
+#   `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE <node> [v8 flags] --log-ic --no-concurrent-recompilation
+#   --no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>` with cwd = the driver's directory (`./`
+#   keeps a file name starting with `-` a path), stdout + stderr to DIR/raw/<side>/run.<k>.out with --out, else
+#   /dev/null. Runs alternate before / after for k = 1..N. Only a run's records are held in memory, never its log.
+# Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, one --v8-options, then
+#   2 x runs trace runs (runs 3: 8 spawns); a failing probe exits 2 before anything is written. Probe die lines:
+#   `ic-diff: cannot run <node> --version`, `ic-diff: cannot run <node> --v8-options`, `ic-diff: <node> --v8-options
+#   printed nothing`, `ic-diff: cannot hash the <node> --v8-options output`.
+# Log files: V8 writes isolate-0x<addr>-<pid>-run.log in the run dir (DIR/raw/<side>, else <private dir>/<side>);
+#   exactly one such file per run is renamed run.<k>.log. Without --out: ONE
+#   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after both probes, removed on every exit; an INT / TERM ->
+#   "ic-diff: interrupted", exit 2 (one that lands while mktemp runs is held until the dir is named, then removes it).
+#   With --out: no mktemp; DIR holds report.txt and raw/<side>/run.<k>.{log,out} (4 x runs + 1 files; 13 for runs 3).
+#   Known gap: when a run leaves != 1 isolate file, those files stay in its run dir and later runs of that side count
+#   them too (still NO-VERDICT; the first such run is named).
+# fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. get, get value). Never qualified
+#   (Store.get); a repeat is refused. fn owns a code entry when its code-creation name is fn + " " + a rest starting
+#   `/` or `file:///` (a prefix test, never a split at the first space): get never matches getX, ge, `get value ...`
+#   or node's own `get node:...`. fn is only compared with ==, never used as a regex.
+# Records (IC_AWK, one pass over each run's whole log), one per IC site of fn (fn, kind, script, line:col, key), from
+#   the LAST IC line at that site:
+#   S fn<TAB>kind<TAB>base:line:col<TAB>key<TAB>final<TAB>mod<TAB>slow
+#   base = the script's file name (the site key itself uses the full path: two same-named scripts never merge); key
+#   `[]` at the keyed kinds (Keyed*, StoreInArrayLiteralIC), so a per-run Symbol hash never reaches the null control.
+#   An IC pc is joined NEWEST-FIRST to the live code-creation entry whose [start, start+size) holds it; code-move
+#   moves an entry; sfi-move is ignored.
+# X (global: an X line makes every fn of that run NO-VERDICT; the first is named, then `(+<m> more X line(s))`), each
+#   followed by ` at log line <n>`. A hex field (IC pc, code-creation start, code-move from / to) is wider than
+#   `0x` + 13 digits when it has more than 15 bytes (awk sums it in a double, exact to 2^53):
+#   unresolved pc (no code-creation holds it: compile cache or user snapshot code?)
+#   IC pc in optimized code (Maglev / Turbofan, kind <12|13>)
+#   code-move from an unknown start
+#   code-move does not parse                      (NF not 3, or from / to not 0x-hex or too wide)
+#   IC line not 11 fields                         (a torn or glued line)
+#   IC line does not parse                        (pc not 0x-hex or too wide, line / col not decimal, or a TAB)
+#   IC state outside X01P^NDG
+#   code-creation does not parse                  (NF not 7 / 9, start not 0x-hex or too wide, size not decimal)
+#   code kind outside the allowlist: <type,kind>  (NF 7: Builtin,3 BytecodeHandler,0 RegExp,4;
+#                                                  NF 9: Eval,10 JS,10 JS,11 JS,12 JS,13 Script,10)
+#   unknown IC kind <$1>                          (known: KeyedLoadIC KeyedStoreIC LoadGlobalIC LoadIC StoreIC
+#                                                  StoreInArrayLiteralIC StoreGlobalIC)
+#   unknown event <$1>                            (known: code-creation code-source-info delete heap-available
+#                                                  heap-capacity new script-source v8-platform v8-version code-move
+#                                                  sfi-move; code-delete is unknown)
+# NO-VERDICT, per side, the first that applies (the first seven checked run by run, k = 1..N):
+#   driver exited <rc> in run <k>
+#   no IC log (no isolate-0x*-*-run.log written) in run <k>
+#   another isolate or process logged (<n> isolate-0x*-*-run.log files) in run <k>   (a Worker, a forked child)
+#   the log holds <n> v8-version line(s), want 1 in run <k>
+#   a NUL byte in the log in run <k>                (BSD awk would cut the line at the NUL)
+#   the log has no final newline in run <k>
+#   cannot read the log (awk exited <rc>) in run <k>
+#   unreadable IC log in run <k>: <X why>
+#   null control: run <k> differs from run 1 (<n> record(s) differ, first: run 1 x<a> | run <k> x<b>  <record>)
+#   no IC site of '<fn>' in run 1 (no such name, never called, or no feedback vector yet: try
+#     --v8-flags=--no-lazy-feedback-allocation)
+#   every IC site of '<fn>' is X (no feedback) in run 1: try --v8-flags=--no-lazy-feedback-allocation
+#   Else the run-1 multisets V = `fn<TAB>kind<TAB>key<TAB>final[ mod]` of the two sides are compared (line:col is a
+#   label, never compared): SAME, or DIFF with one `  before=<a> after=<b>  <V>` line per differing V.
+# Report: `ic-diff  node <ver>  <abs node>  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)`; `v8-opts sha256/8 <x>` =
+#   the sha256/8 of the --v8-options byte stream (env -u NODE_OPTIONS <node> --v8-options | shasum -a 256), REPORTED,
+#   never part of the verdict; `before  <abs driver>  sha256/8 <x>`; `after   ...`; `mode    diff  runs <N>  v8 flags
+#   ...`; `out     <DIR>` (--out); then per fn `  <fn>: SAME -- identical IC multiset (before <n> | after <m>
+#   site(s))`, `  <fn>: DIFF -- IC multiset differs (...)` + its before= / after= lines, or `  <fn>: NO-VERDICT --
+#   <before|after>: <reason>`; then `VERDICT <SAME|DIFF|NO-VERDICT>`. Refusals and die lines go to stderr as
+#   `ic-diff: <why>` + `VERDICT NO-VERDICT`.
 # Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT.
+# Note: a LoadIC site in a fn with no feedback vector (< ~8-10 calls) logs NO line (absent, not X); StoreIC and
+#   LoadGlobalIC sites there log X->X (node 26.8.2). --v8-flags=--no-lazy-feedback-allocation gives every fn one.
+# Not detected: two sites of fn that swap states (the verdict key has no line:col); fn inlined into optimized code
+#   (its sites run in the caller's code, never attributed to fn; an IC line from Maglev / Turbofan code is X); eval /
+#   vm / data: scripts (their names start with neither `/` nor `file:///`); computed method names (named after the
+#   enclosing literal); a detached child that outlives the driver. A Worker or a forked child that logs is caught
+#   by the isolate-file count (NO-VERDICT).
+# Tier: on a user driver the verdict is STATISTICAL (IC states follow warm-up, GC and tier-up timing; run it under the
+#   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
+# Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
 # @include lib/prologue.sh
 
@@ -44,7 +124,8 @@
 # (fn, kind, base:line:col, key; key `[]` at keyed kinds), from the LAST IC line at that site:
 #   S fn<TAB>kind<TAB>base:line:col<TAB>key<TAB>final<TAB>mod<TAB>slow
 # X <why> at log line <n>[ (+<m> more X line(s))]: the first line that cannot be read; X is global (every fn).
-# fn is only ever compared with ==, never used as a regex.
+# fn is only ever compared with ==, never used as a regex. An address field (IC pc, code-creation start, code-move
+# from / to) longer than 15 bytes (`0x` + 13 hex digits, < 2^52) does not parse: hex() sums in a double, exact to 2^53.
 # shellcheck disable=SC2016
 IC_AWK='
 function hex(s,   i, v) {
@@ -81,7 +162,7 @@ BEGIN {
 }
 $1 in IC {
   if (NF != 11) { x("IC line not 11 fields"); next }
-  if ($2 !~ /^0x[0-9a-fA-F]+$/ || $4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/ || index($0, "\t") > 0) { x("IC line does not parse"); next }
+  if ($2 !~ /^0x[0-9a-fA-F]+$/ || length($2) > 15 || $4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/ || index($0, "\t") > 0) { x("IC line does not parse"); next }
   if (!($6 in ST) || !($7 in ST)) { x("IC state outside X01P^NDG"); next }
   p = hex($2); h = 0
   for (i = n; i >= 1; i--) if (lv[i] && p >= cs[i] && p < ce[i]) { h = i; break }
@@ -94,7 +175,7 @@ $1 in IC {
   FIN[k] = $7; MOD[k] = $10; SLW[k] = $11; next
 }
 $1 == "code-creation" {
-  if ((NF != 7 && NF != 9) || $5 !~ /^0x[0-9a-fA-F]+$/ || $6 !~ /^[0-9]+$/) { x("code-creation does not parse"); next }
+  if ((NF != 7 && NF != 9) || $5 !~ /^0x[0-9a-fA-F]+$/ || length($5) > 15 || $6 !~ /^[0-9]+$/) { x("code-creation does not parse"); next }
   ty = $2 "," $3; ok = 0
   if (NF == 7) { if (ty in C7) ok = 1 } else if (ty in C9) ok = 1
   if (!ok) { x("code kind outside the allowlist: " safe(ty)); next }
@@ -102,7 +183,7 @@ $1 == "code-creation" {
   add(hex($5), $6 + 0, $3, f, BASE, SCR); next
 }
 $1 == "code-move" {
-  if (NF != 3 || $2 !~ /^0x[0-9a-fA-F]+$/ || $3 !~ /^0x[0-9a-fA-F]+$/) { x("code-move does not parse"); next }
+  if (NF != 3 || $2 !~ /^0x[0-9a-fA-F]+$/ || $3 !~ /^0x[0-9a-fA-F]+$/ || length($2) > 15 || length($3) > 15) { x("code-move does not parse"); next }
   p = hex($2); h = 0
   for (i = n; i >= 1; i--) if (lv[i] && cs[i] == p) { h = i; break }
   if (!h) { x("code-move from an unknown start"); next }
@@ -192,6 +273,322 @@ diff_fn() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# --self-test: canned --log-ic text through IC_AWK, judge and diff_fn, then this script end to end on a fake node
+# ---------------------------------------------------------------------------------------------
+self_test() {
+  local d old got rc fails=0 oks=0 REPORT=/dev/null VERDICT=SAME FV="" JV="" JWHY="" x
+  local H T L01 L1P LPP LPN LNN LM1 KTOP MONO POLY MEGA MAPS INL2 REW GTR XU R_M R_P R_X R_C R_A R_S1 R_S2 C2 NO
+  local -a RCB RCA LGB LGA REB REA JRC JLOG JREC
+  local TB=$'\t'
+  d=$(mktemp -d) || { echo "FAIL self-test: mktemp -d"; echo; echo "self-test: 1 check(s) FAILED"; return 1; }
+  # the temp dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $? restored; set +e
+  # so restoring a non-zero $? cannot cut the trap short)
+  ST_D=$d
+  eval "set -- $(trap -p EXIT)"; old=${3:-}
+  # shellcheck disable=SC2064
+  trap "st_rc=\$?; rm -rf \"\$ST_D\"; set +e; (exit \$st_rc); $old" EXIT
+  check() { if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"; else fails=$((fails + 1)); echo "FAIL $1: $2"; echo "  want: $3"; fi; }
+  # FNS TEXT -> IC_AWK records (";" per line, "|" = TAB); a failing IC_AWK adds "!awk exited <rc>" (no row expects it)
+  rec() { printf '%s\n' "$2" | { awk -v fns="$1" "$IC_AWK" || echo "!awk exited $?"; } | tr '\t\n' '|;'; }
+  recs() { printf '%s\n' "$2" | awk -v fns="$1" "$IC_AWK"; }   # FNS TEXT -> the raw records
+
+  # --- canned node v26.8.2 --log-ic text (p5-probe recheck2 drv-mono.js capture; the path is shortened to
+  # file:///w/, two code-creation lines (caller, node's own `get`) and the IC lines after `get` are added) ---
+  IFS= read -r -d '' H <<'EOF' || true
+v8-version,14,6,202,34,-node.28,0
+v8-platform,macos,macos
+new,CodeRange,0x117bac000,0
+code-creation,Builtin,3,3621,0x1065d4000,796,DeoptimizationEntry_Eager
+code-creation,BytecodeHandler,0,9102,0x106762680,28,Wide
+code-creation,JS,10,98126,0x3bcd762b52f8,52,ModuleJobBase node:internal/modules/esm/module_job:245:14,0x2603c8871ff0,~
+StoreIC,0x3bcd762b5308,98137,247,17,X,X,0x000000000000,loader,,
+code-creation,Script,10,98050,0x3bcd762b4fc8,103, file:///w/drv-mono.js:1:1,0x29a78805a8a0,~
+script-source,82,file:///w/drv-mono.js,// mono: one receiver shape at the load site in get()\nfunction get(o) {\n  return o.x;\n}\n
+code-creation,JS,10,98500,0x3bcd762b6900,40,caller file:///w/drv-mono.js:6:16,0x29a78805a950,~
+code-creation,JS,10,98536,0x3bcd762b6930,5,get file:///w/drv-mono.js:2:13,0x29a78805a970,~
+EOF
+  IFS= read -r -d '' T <<'EOF' || true
+code-creation,JS,12,98601,0x117c09fa0,272,get file:///w/drv-mono.js:2:13,0x29a78805a970,+'
+LoadGlobalIC,0x3bcd762b501b,98728,8,1,0,1,0x28e309f99201,console,,
+LoadIC,0x3bcd762b501f,98733,8,9,0,1,0x2e39d7717021,log,,
+code-creation,JS,10,98779,0x3bcd762b6da0,16,get node:internal/console/constructor:218:14,0x2603c885fe28,~
+LoadIC,0x3bcd762b6da8,98790,219,24,0,1,0x2e39d7717021,kColorInspectOptions,,
+EOF
+  H=${H%$'\n'}; T=${T%$'\n'}
+  L01='LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,'
+  L1P='LoadIC,0x3bcd762b6932,98560,3,12,1,P,0x29a78805c261,x,,'
+  LPP='LoadIC,0x3bcd762b6932,98570,3,12,P,P,0x29a78805c289,x,,'
+  LPN='LoadIC,0x3bcd762b6932,98580,3,12,P,N,0x000000000000,x,,'
+  LNN='LoadIC,0x3bcd762b6932,98590,3,12,N,N,0x000000000000,x,,'
+  LM1='LoadIC,0x3bcd762b6932,98565,3,12,^,1,0x29a78805c2b1,x,,'
+  KTOP='KeyedLoadIC,0x3bcd762b5021,98700,7,46,0,1,0x0bc2f8040249,0,,'
+  XU='LoadIC,0x3bcd762b9000,98551,3,12,0,1,0x29a78805c239,x,,'
+  MONO="$H"$'\n'"$L01"$'\n'"$T"
+  POLY="$H"$'\n'"$L01"$'\n'"$L1P"$'\n'"$LPP"$'\n'"$T"
+  MEGA="$H"$'\n'"$L01"$'\n'"$L1P"$'\n'"$LPP"$'\n'"$LPN"$'\n'"$LNN"$'\n'"$T"
+  MAPS="$H"$'\n'"$L01"$'\n'"$LM1"$'\n'"$L1P"$'\n'"$T"
+  INL2="$H"$'\n'"$L01"$'\n'"$KTOP"$'\n'"$L1P"$'\n'"$LPP"$'\n'"$LPN"$'\n'"$LNN"$'\n'"$T"
+
+  # --- IC_AWK: records (PLAN A1, A2 D-b / D-d, A6 S6) ---
+  check "A1 records: mono fn=get -> exactly one LoadIC record; node's own 'get node:...' and the top-level sites give none" \
+    "$(rec get "$MONO")" "S get|LoadIC|drv-mono.js:3:12|x|1||;"
+  check "A1 records: the LAST IC line per site -> poly P, mega N, maps (^->1 then 1->P) P, inline2 (a top-level keyed line between) N" \
+    "$(rec get "$POLY")#$(rec get "$MEGA")#$(rec get "$MAPS")#$(rec get "$INL2")" \
+    "S get|LoadIC|drv-mono.js:3:12|x|P||;#S get|LoadIC|drv-mono.js:3:12|x|N||;#S get|LoadIC|drv-mono.js:3:12|x|P||;#S get|LoadIC|drv-mono.js:3:12|x|N||;"
+  check "A1 records: exact names -- fn=ge, fn=getX and fn=caller (no IC line in its range) on mono -> 0 records each" \
+    "$(rec ge "$MONO")#$(rec getX "$MONO")#$(rec caller "$MONO")" "##"
+  REW=$(printf '%s\n' "$POLY" | sed -e 's/0x3bcd762b/0x2d0e1f44/g' -e 's/0x29a78805c/0x11aa2233c/g' -e 's/,98\([0-9][0-9][0-9]\),/,77\1,/g' \
+    -e 's|file:///w/|file:///elsewhere/x/|g')
+  check "A1 records: every pc, time, map and the script path rewritten consistently -> byte-identical records" \
+    "$(printf '%s\n' "$REW" | grep -c -e '0x2d0e1f44.*,77[0-9][0-9][0-9],' -e ',77[0-9][0-9][0-9],0x2d0e1f44' || true)|$(rec get "$REW")" \
+    "12|$(rec get "$POLY")"
+  check "A1 join NEWEST-FIRST: a newer non-fn code-creation covering get's range -> 0 get records" \
+    "$(rec get "$H"$'\n''code-creation,JS,10,98540,0x3bcd762b6920,64,other file:///w/drv-mono.js:9:1,0x29a78805a990,~'$'\n'"$L01")" ""
+  check "A1 code-move: get moved, an IC line at the new start -> its record; at the old start -> X 'unresolved pc'" \
+    "$(rec get "$H"$'\n''code-move,0x3bcd762b6930,0x3bcd762b7930'$'\n''LoadIC,0x3bcd762b7931,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''code-move,0x3bcd762b6930,0x3bcd762b7930'$'\n'"$L01")" \
+    "S get|LoadIC|drv-mono.js:3:12|x|1||;#X unresolved pc (no code-creation holds it: compile cache or user snapshot code?) at log line 13;"
+  check "A1 / D-b keyed site: KeyedLoadIC key 0 then key 35 at one get site -> ONE record, key []" \
+    "$(rec get "$H"$'\n''KeyedLoadIC,0x3bcd762b6933,98600,3,14,0,1,0x0bc2f8040249,0,,'$'\n''KeyedLoadIC,0x3bcd762b6933,98610,3,14,1,1,0x0bc2f8040249,35,,')" \
+    "S get|KeyedLoadIC|drv-mono.js:3:14|[]|1||;"
+  GTR="$H"$'\n''code-creation,JS,10,98700,0x3bcd762b7a00,20,get value file:///w/drv-getter.js:4:8,0x29a78805a9b0,~'$'\n''LoadIC,0x3bcd762b7a02,98710,4,29,0,1,0x29a78805c2d9,_v,,'
+  check "A2 D-d getter: fn='get value' -> its LoadIC record; fn=get and fn=value on the same log -> 0 records" \
+    "$(rec 'get value' "$GTR")#$(rec get "$GTR")#$(rec value "$GTR")" "S get value|LoadIC|drv-getter.js:4:29|_v|1||;##"
+  check "S6 one-digit line / col: '1,1,0,1' -> final 1 at :1:1; '1,1,1,P' at key y -> final P (the state is field 7)" \
+    "$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,1,1,0,1,0x29a78805c239,x,,'$'\n''LoadIC,0x3bcd762b6931,98552,1,1,1,P,0x29a78805c239,y,,')" \
+    "S get|LoadIC|drv-mono.js:1:1|x|1||;S get|LoadIC|drv-mono.js:1:1|y|P||;"
+  check "S6 a key equal to fn ('get') at a site of ANOTHER fn (ModuleJobBase) -> 0 records for --fn get" \
+    "$(rec get "$H"$'\n''LoadIC,0x3bcd762b5310,98800,247,30,0,1,0x28e309fb2961,get,,')" ""
+  check "S6 'X,X' at a StoreIC site of get -> kept, final X" \
+    "$(rec get "$H"$'\n''StoreIC,0x3bcd762b6934,98575,3,5,X,X,0x000000000000,y,,')" "S get|StoreIC|drv-mono.js:3:5|y|X||;"
+  check "S6 / A2 an IC line no code-creation holds -> X 'unresolved pc', never a guessed fn" \
+    "$(rec get "$H"$'\n'"$XU")" "X unresolved pc (no code-creation holds it: compile cache or user snapshot code?) at log line 12;"
+  check "A2 an IC pc in Maglev (kind 12) or Turbofan (kind 13) code of get -> X 'IC pc in optimized code'" \
+    "$(rec get "$MONO"$'\n''LoadIC,0x117c09fb0,98610,3,12,1,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''code-creation,JS,13,98620,0x117c0a400,64,get file:///w/drv-mono.js:2:13,0x29a78805a970,*'$'\n''LoadIC,0x117c0a410,98630,3,12,1,1,0x29a78805c239,x,,')" \
+    "S get|LoadIC|drv-mono.js:3:12|x|1||;X IC pc in optimized code (Maglev / Turbofan, kind 12) at log line 18;#X IC pc in optimized code (Maglev / Turbofan, kind 13) at log line 13;"
+  check "A2 a code-move from an unknown start -> X; one with 4 fields -> X 'code-move does not parse'" \
+    "$(rec get "$H"$'\n''code-move,0x3bcd762b6990,0x3bcd762b7930')#$(rec get "$H"$'\n''code-move,0x3bcd762b6930,0x3bcd762b7930,1')" \
+    "X code-move from an unknown start at log line 12;#X code-move does not parse at log line 12;"
+  check "A2 a 10-field IC line, and two IC lines glued into one (18 fields) -> X 'IC line not 11 fields'" \
+    "$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,xLoadIC,0x3bcd762b6930,98552,3,12,1,P,0x29a78805c239,x,,')" \
+    "X IC line not 11 fields at log line 12;#X IC line not 11 fields at log line 12;"
+  check "A2 an IC line with pc 0xZZ, with line 'a', or with a TAB -> X 'IC line does not parse'; state Q -> X 'IC state outside X01P^NDG'" \
+    "$(rec get "$H"$'\n''LoadIC,0xZZ,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,a,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x'$'\t''y,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,Q,0x29a78805c239,x,,')" \
+    "X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC state outside X01P^NDG at log line 12;"
+  check "A2 M15 a torn fragment whose \$1 does not end in IC ('x3bcd762b6930,...') -> X 'unknown event'; 'oadIC,...' -> X 'unknown IC kind'" \
+    "$(rec get "$H"$'\n''x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''oadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')" \
+    "X unknown event x3bcd762b6930 at log line 12;#X unknown IC kind oadIC at log line 12;"
+  check "A2 KeyedHasIC -> X 'unknown IC kind'; code-delete -> X 'unknown event'; an X names the first line and counts the rest" \
+    "$(rec get "$H"$'\n''KeyedHasIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''code-delete,0x3bcd762b6930'$'\n''code-delete,0x3bcd762b6900'$'\n'"$L01")" \
+    "X unknown IC kind KeyedHasIC at log line 12;#S get|LoadIC|drv-mono.js:3:12|x|1||;X unknown event code-delete at log line 12 (+1 more X line(s));"
+  check "A2 code-creation JS,14 -> X 'code kind outside the allowlist'; 8 fields, or size 'z' -> X 'code-creation does not parse'" \
+    "$(rec get "$H"$'\n''code-creation,JS,14,98540,0x3bcd762b7000,5,get file:///w/drv-mono.js:2:13,0x29a78805a970,~')#$(rec get "$H"$'\n''code-creation,JS,10,98540,0x3bcd762b7000,5,get file:///w/drv-mono.js:2:13,~')#$(rec get "$H"$'\n''code-creation,JS,10,98540,0x3bcd762b7000,z,get file:///w/drv-mono.js:2:13,0x29a78805a970,~')" \
+    "X code kind outside the allowlist: JS,14 at log line 12;#X code-creation does not parse at log line 12;#X code-creation does not parse at log line 12;"
+  check "A9 hex width: an IC pc or a code-creation start of 0x + 14 digits (zero-padded, same value) -> X 'does not parse'; 0x + 13 digits -> a record" \
+    "$(rec get "$H"$'\n''LoadIC,0x003bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''code-creation,JS,10,98540,0x003bcd762b8000,5,get file:///w/drv-mono.js:2:13,0x29a78805a970,~'$'\n''LoadIC,0x3bcd762b8000,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get 'code-creation,JS,10,98540,0x1fffffffffff0,16,get file:///w/drv-mono.js:2:13,0x29a78805a970,~'$'\n''LoadIC,0x1fffffffffff8,98551,3,12,0,1,0x29a78805c239,x,,')" \
+    "X IC line does not parse at log line 12;#X code-creation does not parse at log line 12 (+1 more X line(s));#S get|LoadIC|drv-mono.js:3:12|x|1||;"
+  check "A9 hex width: a code-move from, or to, of 0x + 14 digits (zero-padded, same value) -> X 'code-move does not parse'" \
+    "$(rec get "$H"$'\n''code-move,0x003bcd762b6930,0x3bcd762b8800'$'\n''LoadIC,0x3bcd762b8800,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''code-move,0x3bcd762b6930,0x003bcd762b8800'$'\n''LoadIC,0x3bcd762b8800,98551,3,12,0,1,0x29a78805c239,x,,')" \
+    "X code-move does not parse at log line 12 (+1 more X line(s));#X code-move does not parse at log line 12 (+1 more X line(s));"
+
+  # --- judge: one side, from JRC (driver exits), JLOG (log reasons) and JREC (records per run) ---
+  R_M=$(recs get "$MONO"); R_P=$(recs get "$POLY"); R_X=$(recs get "$H"$'\n'"$XU"); R_C=$(recs caller "$MONO")
+  JRC=(0 0 0); JLOG=("" "" ""); JREC=("$R_M" "$R_M" "$R_M"); judge get
+  check "judge: 3 identical runs -> OK" "$JV|$JWHY" "OK|"
+  JRC=(0 3 0); judge get
+  check "judge A2: driver exit 3 in run 2 -> 'driver exited 3 in run 2'" "$JV|$JWHY" "NO-VERDICT|driver exited 3 in run 2"
+  JRC=(0 0 5); JLOG=("" "a NUL byte in the log" ""); judge get
+  check "judge: a log reason in run 2 is named before run 3's driver exit (run by run)" "$JV|$JWHY" "NO-VERDICT|a NUL byte in the log in run 2"
+  JRC=(0 0 0); JLOG=("" "" ""); JREC=("$R_M" "$R_M" "$R_X"); judge get
+  check "judge A2: an X line in run 3 -> 'unreadable IC log in run 3: <why>'" "$JV|$JWHY" \
+    "NO-VERDICT|unreadable IC log in run 3: unresolved pc (no code-creation holds it: compile cache or user snapshot code?) at log line 12"
+  JRC=(0 0); JLOG=("" ""); JREC=("$R_M" "$R_P"); judge get
+  check "judge A2: run 2 != run 1 -> null control naming run 2 and the first differing record" "$JV|$JWHY" \
+    "NO-VERDICT|null control: run 2 differs from run 1 (2 record(s) differ, first: run 1 x1 | run 2 x0  LoadIC${TB}drv-mono.js:3:12${TB}x${TB}1${TB}${TB})"
+  JREC=("$R_C" "$R_C"); judge caller
+  check "judge A2: no IC site of fn (fn=caller) -> the empty guard" "$JV|$JWHY" \
+    "NO-VERDICT|no IC site of 'caller' in run 1 (no such name, never called, or no feedback vector yet: try --v8-flags=--no-lazy-feedback-allocation)"
+  R_A=$(recs get "$H"$'\n''StoreIC,0x3bcd762b6934,98575,3,5,X,X,0x000000000000,y,,'); JREC=("$R_A" "$R_A"); judge get
+  check "judge A2: every site of fn X -> 'every IC site of 'get' is X'" "$JV|$JWHY" \
+    "NO-VERDICT|every IC site of 'get' is X (no feedback) in run 1: try --v8-flags=--no-lazy-feedback-allocation"
+  x='KeyedLoadIC,0x3bcd762b6933,98600,3,14,0,1,0x0bc2f8040249,symbol("k" hash 3ec16600),,'
+  R_S1=$(recs get "$H"$'\n'"$x"); R_S2=$(recs get "$H"$'\n'"${x/3ec16600/24cef8b8}")
+  JREC=("$R_S1" "$R_S2"); judge get; got="$JV|$(v_ms "$R_S1" get | sed 's/^ *//' | tr '\t' '|')"
+  x=${x#Keyed}; JREC=("$(recs get "$H"$'\n'"$x")" "$(recs get "$H"$'\n'"${x/3ec16600/24cef8b8}")"); judge get
+  check "D-b a Symbol key with a per-run hash at a KEYED site -> null control passes, V 'get KeyedLoadIC [] 1'; at a named LoadIC -> null control" \
+    "$got#$JV" "OK|1 *|get|KeyedLoadIC|[]|1#NO-VERDICT"
+
+  # --- diff_fn: both sides, from RCB / RCA, LGB / LGA, REB / REA ---
+  RCB=(0 0); RCA=(0 0); LGB=("" ""); LGA=("" "")
+  C2=$(recs get "$MONO"$'\n''LoadIC,0x3bcd762b6934,98552,3,20,0,1,0x29a78805c239,x,,')
+  REB=("$C2" "$C2"); REA=("$R_M" "$R_M"); VERDICT=SAME; diff_fn get >"$d/df.out"
+  check "A3 diff_fn: {1,1} vs {1} (two get sites of one V vs one) -> DIFF 'before=2 after=1' (a multiset, never sort -u)" \
+    "$FV|$VERDICT|$(tr '\t\n' '|;' <"$d/df.out")" \
+    "DIFF|DIFF|  get: DIFF -- IC multiset differs (before 2 | after 1 site(s));  before=2 after=1  get|LoadIC|x|1;"
+  C2='code-creation,JS,10,1,0x3bcd762b7000,16,get file:///a/x.js:2:13,0x1,~'$'\n''code-creation,JS,10,2,0x3bcd762b7100,16,get file:///b/x.js:2:13,0x2,~'
+  C2="$C2"$'\n''LoadIC,0x3bcd762b7104,3,3,12,0,1,0x5,x,,'$'\n''LoadIC,0x3bcd762b7104,4,3,12,1,P,0x6,x,,'$'\n''LoadIC,0x3bcd762b7004,5,3,12,0,1,0x5,x,,'
+  R_A=$(recs get "$C2"); R_C=$(recs get "$C2"$'\n''LoadIC,0x3bcd762b7004,6,3,12,1,P,0x6,x,,')
+  REB=("$R_A" "$R_A"); REA=("$R_C" "$R_C"); VERDICT=SAME; diff_fn get >"$d/df.out"
+  check "A9 basename collision: get in /a/x.js and /b/x.js, same line:col, before {1,P} vs after {P,P} -> DIFF (the site key is the full path)" \
+    "$FV|$(tr '\t\n' '|;' <"$d/df.out")" \
+    "DIFF|  get: DIFF -- IC multiset differs (before 2 | after 2 site(s));  before=1 after=0  get|LoadIC|x|1;  before=1 after=2  get|LoadIC|x|P;"
+
+  # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log, exits 7 if NODE_OPTIONS or
+  # NODE_COMPILE_CACHE reached it; --version prints v26.8.2 (FAKE_VER_RC: that exit); --v8-options cats ./v8opts.txt
+  # (FAKE_OPTS_RC: that exit; FAKE_OPTS_EMPTY: prints nothing); else a trace run: exit 9 on a driver argument starting
+  # with - (as node: "bad option"), copy ./ic.<n>.log or ./ic.log (n = its run count in that dir) to
+  # isolate-0x7508000000-<pid>-<basename of --logfile> beside the --logfile path (./iso2: a second isolate file too),
+  # ./term: SIGTERM to its parent (this script), exit with ./rc or 0. A mktemp shim (first on PATH) logs each call
+  # and, with ST_MKTERM set, sends SIGTERM to its parent after the dir is made ---
+  local fk="$d/fk" mk="$d/mk" dr="$d/dr" b0 b1
+  mkdir -p "$fk" "$mk" "$dr" "$d/cwd" "$d/tmp" "$d/cc"
+  printf '%s\n' "#!$BASH" 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
+    'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi' \
+    'case "$1" in' \
+    '  --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;;' \
+    '  --v8-options) if [ -n "${FAKE_OPTS_RC:-}" ]; then exit "$FAKE_OPTS_RC"; fi; if [ -n "${FAKE_OPTS_EMPTY:-}" ]; then exit 0; fi' \
+    '    cat ./v8opts.txt; exit 0 ;;' \
+    'esac' \
+    'lf=""; drv=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; drv="$a"; done' \
+    'case "$drv" in -*) echo "bad option: $drv" >&2; exit 9 ;; esac' \
+    'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"' \
+    'src=./ic.log; if [ -f "./ic.$n.log" ]; then src="./ic.$n.log"; fi' \
+    'if [ -n "$lf" ] && [ -f "$src" ]; then cp "$src" "$(dirname "$lf")/isolate-0x7508000000-$$-$(basename "$lf")"' \
+    '  if [ -f ./iso2 ]; then cp "$src" "$(dirname "$lf")/isolate-0x7508800000-$$-$(basename "$lf")"; fi; fi' \
+    'if [ -f ./term ]; then kill -TERM "$PPID"; fi' \
+    'echo "driver ran"' 'if [ -f ./rc ]; then exit "$(cat ./rc)"; fi' 'exit 0' >"$fk/node"
+  chmod +x "$fk/node"
+  printf '%s\n' "#!$BASH" "printf '%s\\n' \"\$*\" >>$(printf '%q' "$d/mk.log")" \
+    "r=\$($(printf '%q' "$(command -v mktemp)") \"\$@\") || exit 1" 'printf "%s\n" "$r"' \
+    'if [ -n "${ST_MKTERM:-}" ]; then kill -TERM "$PPID"; fi' 'exit 0' >"$mk/mktemp"
+  chmod +x "$mk/mktemp"
+  printf 'Synopsis:\n  fake v8 options\n\n' >"$d/cwd/v8opts.txt"
+  mkd() { mkdir -p "$dr/$1"; : >"$dr/$1/driver.js"; printf '%s\n' "$2" >"$dr/$1/ic.log"; }
+  mkd mono "$MONO"; mkd mono2 "$(printf '%s\n' "$MONO" | sed -e 's/0x3bcd762b/0x2d0e1f44/g' -e 's|file:///w/|file:///elsewhere/x/|g')"
+  mkd poly "$POLY"; mkd nc "$MONO"; printf '%s\n' "$POLY" >"$dr/nc/ic.2.log"
+  mkd rc3 "$MONO"; echo 3 >"$dr/rc3/rc"; mkdir -p "$dr/nolog"; : >"$dr/nolog/driver.js"
+  mkd v2 "$MONO"$'\n''v8-version,14,6,202,34,-node.28,0'; mkd xu "$MONO"$'\n'"$XU"
+  mkd nul "$H"; printf '%s\000\n%s\n' "$L01" "$T" >>"$dr/nul/ic.log"         # a valid IC line, then a NUL right before its \n
+  mkd nonl ""; printf '%s' "$MONO" >"$dr/nonl/ic.log"
+  mkd iso2 "$MONO"; : >"$dr/iso2/iso2"; mkd term "$MONO"; : >"$dr/term/term"
+  mkdir -p "$dr/dash"; : >"$dr/dash/-x.js"; printf '%s\n' "$MONO" >"$dr/dash/ic.log"
+  NO="--node=$fk/node"
+  spawn() { # [VAR=value ...] -- args... -> "rc|VERDICT line(s)|node spawns|mktemp calls"; output in $d/sp.out. Host
+    local -a e=()   # NODE_OPTIONS / NODE_COMPILE_CACHE / NODE / editor env never reach the script (rows that need one set it)
+    local r
+    while [[ "$1" != -- ]]; do e+=("$1"); shift; done; shift
+    rm -f "$fk"/*.n; : >"$fk/log"; : >"$d/mk.log"
+    (cd "$d/cwd" && env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE -u GIT_EDITOR -u EDITOR -u VISUAL PATH="$mk:$PATH" \
+      TMPDIR="$d/tmp" ${e[@]+"${e[@]}"} "$BASH" "$SELF" "$@") >"$d/sp.out" 2>&1 && r=0 || r=$?
+    printf '%s|%s|%s|%s' "$r" "$(awk '/^VERDICT /{ printf "%s%s", (n++ ? "," : ""), $0 }' "$d/sp.out")" \
+      "$(wc -l <"$fk/log" | tr -d ' ')" "$(wc -l <"$d/mk.log" | tr -d ' ')"
+  }
+  has() { grep -c -F -x -e "$1" "$d/sp.out" || true; }
+  ents() { find "$d/tmp" "$d/cwd" "$dr/mono" "$dr/poly" "$dr/rc3" "$dr/term" -mindepth 1 | wc -l | tr -d ' '; }
+  check "A3 / A7 R-a e2e: mono vs poly (R=3) -> exit 1 DIFF, 8 spawns (log line 1 --version, line 2 --v8-options, then 6 trace runs), 1 mktemp, the before=0 after=1 line" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "  before=0 after=1  get${TB}LoadIC${TB}x${TB}P")|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
+    "1|VERDICT DIFF|8|1|1|--version+--v8-options|1"
+  check "A3 e2e: mono vs mono2 (every address and the script path changed) -> exit 0 SAME; TMPDIR and cwd keep no new entry" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(has '  get: SAME -- identical IC multiset (before 1 | after 1 site(s))')|$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" \
+    "0|VERDICT SAME|8|1|1|1"
+  check "A7 R-b: --runs 2 -> 6 spawns, --runs 5 -> 12 spawns" \
+    "$(spawn -- "$NO" --runs 2 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")#$(spawn -- "$NO" --runs 5 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")" \
+    "1|VERDICT DIFF|6|1#1|VERDICT DIFF|12|1"
+  got=$(spawn -- "$NO" --v8-flags=--no-lazy-feedback-allocation --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")
+  check "A7 R-c / K2: --v8-flags=--no-lazy-feedback-allocation -> probe argvs exactly --version / --v8-options; trace argvs 3-8 hold --no-node-snapshot and the flag once each" \
+    "$got|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")|$(awk 'NR >= 3 { a = 0; b = 0; for (i = 1; i <= NF; i++) { if ($i == "--no-node-snapshot") a++; if ($i == "--no-lazy-feedback-allocation") b++ } printf "%d%d,", a, b }' "$fk/log")" \
+    "1|VERDICT DIFF|8|1|--version+--v8-options|11,11,11,11,11,11,"
+  check "A7 R-d / K2: NODE_OPTIONS and NODE_COMPILE_CACHE set in the environment never reach any spawn (mono vs mono -> SAME, 8 spawns)" \
+    "$(spawn NODE_OPTIONS=--st-probe NODE_COMPILE_CACHE="$d/cc" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")" "0|VERDICT SAME|8|1"
+  check "A7 R-e / K3: --v8-options exit 1 (with --out) -> exit 2, 2 spawns, 0 mktemp, the die line once, no OUT dir; empty output -> exit 2, 2 spawns, die once" \
+    "$(spawn FAKE_OPTS_RC=1 -- "$NO" --out "$d/oe" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --v8-options")|$([[ -e "$d/oe" ]] && echo exists || echo absent)#$(spawn FAKE_OPTS_EMPTY=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: $fk/node --v8-options printed nothing")" \
+    "2|VERDICT NO-VERDICT|2|0|1|absent#2|VERDICT NO-VERDICT|2|0|1"
+  check "A7 K1: --version exit 1 (with --out) -> exit 2 after 1 spawn, 0 mktemp, the die line once, no OUT dir" \
+    "$(spawn FAKE_VER_RC=1 -- "$NO" --out "$d/ov" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --version")|$([[ -e "$d/ov" ]] && echo exists || echo absent)" \
+    "2|VERDICT NO-VERDICT|1|0|1|absent"
+  got=$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js"); cp "$d/sp.out" "$d/g1.out"
+  check "A7 R-f / K4: v8opts.txt ending in two newlines -> exactly one 'v8-opts sha256/8 3d098cd0' (the hash of the byte stream)" \
+    "$got|$(has 'v8-opts sha256/8 3d098cd0')|$(grep -c -e '^v8-opts ' "$d/sp.out" || true)" "0|VERDICT SAME|8|1|1|1"
+  printf 'Synopsis:\n  fake v8 options, second build\n\n' >"$d/cwd/v8opts.txt"
+  got="$got#$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")"
+  printf 'Synopsis:\n  fake v8 options\n\n' >"$d/cwd/v8opts.txt"
+  check "A7 R-g control: a second v8opts.txt -> the same rc, VERDICT, spawns and every non-v8-opts line; its v8-opts line 6633eb97" \
+    "$got|$([[ "$(grep -v -e '^v8-opts ' "$d/g1.out")" == "$(grep -v -e '^v8-opts ' "$d/sp.out")" ]] && echo same || echo differs)|$(has 'v8-opts sha256/8 6633eb97')" \
+    "0|VERDICT SAME|8|1#0|VERDICT SAME|8|1|same|1"
+  check "A4 --out: exit 1 DIFF, 0 mktemp, exactly 13 files (report.txt + 3 x 2 x {log,out}), no isolate file left; report.txt holds the verdict" \
+    "$(spawn -- "$NO" --out "$d/o" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(find "$d/o" -type f | wc -l | tr -d ' ')|$(find "$d/o" -name 'isolate-*' | wc -l | tr -d ' ')|$(grep -c '^VERDICT DIFF$' "$d/o/report.txt" 2>/dev/null || true)|$(grep -c -F -x -e "$LPP" "$d/o/raw/after/run.2.log" 2>/dev/null || true)" \
+    "1|VERDICT DIFF|8|0|13|0|1|1"
+  check "A2 e2e: no isolate log written (after) -> 'no IC log (no isolate-0x*-*-run.log written) in run 1'" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nolog/driver.js")|$(has '  get: NO-VERDICT -- after: no IC log (no isolate-0x*-*-run.log written) in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 / M16 e2e: two isolate files in one run (after) -> 'another isolate or process logged (2 isolate-0x*-*-run.log files) in run 1'" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/iso2/driver.js")|$(has '  get: NO-VERDICT -- after: another isolate or process logged (2 isolate-0x*-*-run.log files) in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 e2e: 2 v8-version lines (after) -> 'the log holds 2 v8-version line(s), want 1 in run 1'" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/v2/driver.js")|$(has '  get: NO-VERDICT -- after: the log holds 2 v8-version line(s), want 1 in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A9 e2e: a NUL as the last byte before the \\n of a valid IC line (after) -> 'a NUL byte in the log in run 1', never SAME" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nul/driver.js")|$(has '  get: NO-VERDICT -- after: a NUL byte in the log in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 e2e: no final newline (after) -> 'the log has no final newline in run 1'" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nonl/driver.js")|$(has '  get: NO-VERDICT -- after: the log has no final newline in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 e2e: driver exit 3 (before) -> 'before: driver exited 3 in run 1'" \
+    "$(spawn -- "$NO" --fn get "$dr/rc3/driver.js" "$dr/mono/driver.js")|$(has '  get: NO-VERDICT -- before: driver exited 3 in run 1')" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 e2e: an unresolved pc (after) -> 'unreadable IC log in run 1: unresolved pc ...'" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/xu/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- after: unreadable IC log in run 1: unresolved pc (' "$d/sp.out" || true)" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "A2 e2e: run 2 of after differs (mono, then poly) -> 'after: null control: run 2 differs from run 1', before passes" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nc/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- after: null control: run 2 differs from run 1 (' "$d/sp.out" || true)|$(grep -c -e ' -- before: ' "$d/sp.out" || true)" \
+    "2|VERDICT NO-VERDICT|8|1|1|0"
+  check "A2 e2e: --fn nosuch -> each side 'no IC site of 'nosuch' in run 1 (...'" \
+    "$(spawn -- "$NO" --fn nosuch "$dr/mono/driver.js" "$dr/poly/driver.js")|$(grep -c -E -e "^  nosuch: NO-VERDICT -- (before|after): no IC site of 'nosuch' in run 1 \\(" "$d/sp.out" || true)" \
+    "2|VERDICT NO-VERDICT|8|1|2"
+  check "bug class: a driver named '-x.js' runs as ./-x.js (never read as a node option): 6 trace argvs end in ' ./-x.js', exit 0 SAME" \
+    "$(spawn -- "$NO" --fn get "$dr/dash/-x.js" "$dr/dash/-x.js")|$(grep -c -e ' \./-x\.js$' "$fk/log" || true)" "0|VERDICT SAME|8|1|6"
+  # relative PATH: node = $d/cwd/nm/node (this cwd) and a rogue nm/node in each driver dir; all 2 + 2R spawns must hit ONE
+  mkdir -p "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"
+  for x in "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"; do cp "$fk/node" "$x/node"; done
+  mkd rpb "$MONO"; mkd rpa "$POLY"
+  got=$(spawn PATH="nm:$mk:$PATH" -- --fn get "$dr/rpb/driver.js" "$dr/rpa/driver.js")
+  check "A9 relative PATH (PATH=nm:...): all 2 + 2R spawns run the ONE binary resolved from the caller's cwd, named absolute in the header" \
+    "${got%|*|*|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "ic-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
+    "1|8|0|1"
+  rm -rf "$d/cwd/nm"
+  # A4 retention: 3 cycles of SAME / DIFF / NO-VERDICT and 1 SIGTERM mid-run leave TMPDIR, cwd and the driver dirs as they were
+  b0=$(ents); got=""
+  for x in 1 2 3; do
+    got="$got#$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono/driver.js")/$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")/$(spawn -- "$NO" --fn get "$dr/rc3/driver.js" "$dr/mono/driver.js")"
+  done
+  got="$got#$(spawn -- "$NO" --fn get "$dr/term/driver.js" "$dr/mono/driver.js")|$(has 'ic-diff: interrupted')"
+  b1=$(ents)
+  check "A4 retention: 3 x (SAME / DIFF / NO-VERDICT) + 1 SIGTERM mid-run (before run 1) -> 1 mktemp each, 0 new entries in TMPDIR, cwd and the driver dirs" \
+    "$got|$b0->$b1" \
+    "$(printf '#0|VERDICT SAME|8|1/1|VERDICT DIFF|8|1/2|VERDICT NO-VERDICT|8|1%.0s' 1 2 3)#2|VERDICT NO-VERDICT|3|1|1|$b0->$b0"
+  check "A9 signal window: a SIGTERM that lands while mktemp -d runs -> exit 2 'interrupted', 2 spawns, the new dir removed (0 entries in TMPDIR)" \
+    "$(spawn ST_MKTERM=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has 'ic-diff: interrupted')|$(find "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
+    "2|VERDICT NO-VERDICT|2|1|1|0"
+  rf() { # LABEL FRAGMENT args...: refused with exit 2, 0 spawns, 0 mktemp, a die line holding FRAGMENT
+    local l="$1" f="$2"; shift 2
+    check "refused before any spawn: $l -> exit 2, 0 spawns, 0 mktemp, '$f'" \
+      "$(spawn -- "$@")|$(grep -F -e "$f" "$d/sp.out" | grep -c '^ic-diff: ' || true)" "2|VERDICT NO-VERDICT|0|0|1"
+  }
+  rf "repeated fn" "fn 'get' is given twice" "$NO" --fn get,get "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "qualified name" "fn must be a short V8 function name (e.g. get, get value; never Store.get), got 'Store.get'" "$NO" --fn Store.get "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "--runs 1" "--runs must be an integer in [2, 20] (null control), got '1'" "$NO" --runs 1 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "--runs 21" "--runs must be an integer in [2, 20] (null control), got '21'" "$NO" --runs 21 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "one DRIVER" "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got 1" "$NO" --fn get "$dr/mono/driver.js"
+  rf "a log flag in --v8-flags" "--v8-flags must not set --log_ic: the script sets" "$NO" --fn get --v8-flags=--log_ic "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a snapshot flag in --v8-flags" "--v8-flags must not set --node-snapshot: the script sets" "$NO" --fn get --v8-flags=--node-snapshot "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with --), got 'x.js'" "$NO" --fn get --v8-flags=x.js "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "unknown option" "unknown option --nod (did you mean --node?)" "$NO" --fn get --nod x "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a node binary that does not exist" "node binary not found: ./nonode" --fn get --node ./nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
+
+  if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
+  echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
+}
+
+# ---------------------------------------------------------------------------------------------
 # options (every check below runs before any node is spawned and before any disk write)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null
@@ -221,7 +618,7 @@ done
 
 if [[ $SELFTEST == 1 ]]; then
   [[ -z "${GOTOPT// /}" && ${#POS[@]} -eq 0 ]] || die "--self-test takes no other argument"
-  die "--self-test is not in this build"
+  if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
 [[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--fn / --v8-flags / --out / --node: a newline is not allowed"
 [[ -n "$FNLIST" ]] || die "need --fn LIST (see --help)"
@@ -289,7 +686,14 @@ else
   eval "set -- $(trap -p EXIT)"; IC_OLD=${3:-}
   # shellcheck disable=SC2064
   trap "ic_rc=\$?; if [[ -n \$IC_TMP ]]; then rm -rf \"\$IC_TMP\"; fi; set +e; (exit \$ic_rc); $IC_OLD" EXIT
-  IC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX") || die "cannot create a private log dir (mktemp -d)"
+  # an INT / TERM while mktemp runs is only NOTED, so the new dir is always named before a die can run (bash 3.2 runs
+  # a pending trap after the assignment anyway; a shell that ran it before would leak the dir); then a noted signal dies
+  # here and the EXIT trap removes the dir
+  IC_SIG=0; trap 'IC_SIG=1' INT TERM
+  IC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX") || IC_TMP=""
+  trap 'die "interrupted"' INT TERM
+  [[ $IC_SIG == 0 ]] || die "interrupted"
+  [[ -n "$IC_TMP" && -d "$IC_TMP" ]] || die "cannot create a private log dir (mktemp -d)"
   mkdir "$IC_TMP/before" "$IC_TMP/after" || die "cannot create the private log dirs in $IC_TMP"
   RUNROOT="$IC_TMP"
 fi
@@ -309,7 +713,7 @@ run_side() { # side dir base k: one node run; sets RUN_RC (driver exit) RUN_LOG 
   local rd="$RUNROOT/$1" out=/dev/null lf n rc=0 ar=0
   local -a LF
   if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi
-  ( cd "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd/run.log" "$3" ) \
+  ( cd "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd/run.log" "./$3" ) \
     >"$out" 2>&1 || rc=$?
   RUN_RC=$rc; RUN_LOG=""; RUN_REC=""
   shopt -s nullglob; LF=("$rd"/isolate-0x*-*-run.log); shopt -u nullglob
