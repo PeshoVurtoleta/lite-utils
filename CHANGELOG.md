@@ -189,7 +189,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `*trace-deopt*`, `*trace-opt*` or `*concurrent-recompilation*` flag, which the script sets, and
   any `*trace-file-names*` flag, which changes the text the records are read from), `--out DIR`
   (keeps `report.txt` and `raw/{before,after}/run.<k>.txt`, addresses and NUL kept; `DIR/raw` must
-  be absent or empty; without `--out` nothing is written to disk), `--self-test`, `-h` (exit 2).
+  be absent or an empty, readable and writable directory and `DIR/report.txt` must not be a symlink;
+  without `--out` nothing is written to disk), `--self-test`, `-h` (exit 2).
   Each driver runs as `node [v8 flags] --trace-deopt-verbose --trace-opt
   --no-concurrent-recompilation DRIVER` with cwd = its directory, NODE_OPTIONS stripped, stderr
   merged, through `tee | tr | awk`; one run per side per k serves every fn, sides alternate.
@@ -358,8 +359,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   are cut verbatim from `src/inlining-budget-diff.sh` and shared with `bytecode-budget.sh`; the
   generated `inlining-budget-diff.sh` stays byte-identical (sha256 740da13b...).
 - `bytecode-budget.sh` / `deopt-diff.sh` header `node` field: the resolved absolute path.
-  `-h` for `--node`: resolved once before any cd, must be an executable file; for `--v8-flags`: each
-  flag is `--` and a letter.
+  `-h` for `--node`: resolved once from the caller's cwd, must be an executable file; for
+  `--v8-flags`: each flag is `--` and a letter.
 - `test/deopt-diff-boundary.test.mjs`: the A4 parity row no longer pins `bytecode-budget.sh` (it leaves the
   Phase 2 freeze, MD-32 (a)); the `inlining-budget-diff.sh` pin (740da13b) stays.
 
@@ -397,19 +398,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     both tools).
   - `--v8-flags` a `---` flag, `--=1` and `--1x` are refused (each flag must be `--` and a letter).
   - An unwritable `report.txt` (a directory, a read-only file) is refused with "--out: cannot write
-    <DIR>/report.txt" before any node spawn. `deopt-diff.sh` known residue (F2: exit 2 after the
-    `--version` spawn, from the later mkdir / write backstop; `bytecode-budget.sh` refuses each of these
-    with 0 spawns, except an unwritable empty raw/ in report / gate mode: not refused, the probes run
-    and it ends NO-VERDICT "driver exited 1 in run 1", exit 2): an absent OUT under an unwritable
-    parent, a dangling-symlink OUT, a `report.txt` that is a dangling symlink into a missing directory,
-    an existing OUT that is not writable but has a writable `report.txt` and no raw/, an unwritable
-    empty raw/.
+    <DIR>/report.txt" before any node spawn. Both tools now refuse each of these with 0 spawns (F2
+    closed; `deopt-diff.sh` used to exit 2 only after the `--version` spawn, and `bytecode-budget.sh`
+    did not refuse an unwritable empty raw/ in report / gate mode): an absent OUT under an unwritable
+    parent, a dangling-symlink OUT, a `report.txt` that is a dangling symlink into a missing
+    directory, an existing OUT that is not writable but has a writable `report.txt` and no raw/, an
+    empty raw/ that is not writable or not searchable (0000, 0600, 0500, or a symlink to one). An
+    unreadable raw/ (0300, or a symlink to one) used to pass the emptiness test: both tools ran it in
+    every mode and exited 0, and `bytecode-budget.sh` report / gate mode overwrote a `<fn>.<k>.txt`
+    already in it; it is now refused with 0 spawns too. `bytecode-budget.sh`: "--out: <OUT>/raw is
+    not readable" / "is not writable". `deopt-diff.sh`: the same readable check, and a walk from
+    `raw/before` up to the first existing path (or a symlink, or `.`) that must be a writable,
+    searchable directory, else "--out: cannot create <OUT>/raw/before and <OUT>/raw/after (<X> is not
+    a writable directory)"; the walk stops at `.`, so a relative `--out` in an unsearchable cwd is
+    refused with 0 spawns.
+  - A `report.txt` that is a symlink (even one pointing inside DIR; the target stays untouched) is
+    refused, both tools: "--out: <DIR>/report.txt is a symlink (refused: the write would follow it)".
+  - A `--node` (`bytecode-budget.sh`) or PATH (both tools) directory whose name ends in a newline now
+    exits 2 with 0 spawns and no raw `cd:` line, as "node binary: cannot resolve the directory of ..."
+    (or "node binary is not an executable file" when the name without its trailing newline is also a
+    directory; `deopt-diff.sh` refuses a `--node` with a newline earlier, as "a newline is not
+    allowed").
   - Printed joins no longer contain `//`.
   - A `--node` path (every mode) or a DRIVER (driver mode) whose `..` follows a symlink, so that its
     logical and physical paths name different files, is refused with 0 spawns;
     `--out` with such a `..` writes into the directory that was checked and the header prints its
     physical path.
-  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (74 tests = 72 rows, `bytecode-budget.sh` 35 /
-  `deopt-diff.sh` 37, plus 2 retention loops; fake nodes, no V8 run; the rows are red on 8070907's
-  scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907 already had: the controls B4B
-  x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is red there). In `npm test`.
+  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (110 tests = 108 rows, `bytecode-budget.sh`
+  53 / `deopt-diff.sh` 55, plus 2 retention loops; fake nodes, no V8 run; the first 72 rows (bb 35 /
+  dd 37) are red on 8070907's scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907
+  already had: the controls B4B x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is
+  red there). In `npm test`.
