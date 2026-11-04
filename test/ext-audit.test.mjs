@@ -1,11 +1,12 @@
 // test/ext-audit.test.mjs -- bytecode-budget.sh and deopt-diff.sh from the OUTSIDE: the external-audit classes
 // B1 (node resolved once), B1b (node must be an executable file), B2 (exported CDPATH), B3 (dash-led names),
-// B4B (--v8-flags shape), M1 (unwritable report.txt), M2 (printed path joins), plus A4 retention.
+// B4B (--v8-flags shape), M1 (unwritable report.txt), M2 (printed path joins), M1b/gA2 (raw/ guard, report.txt symlink, dd walk), plus A4 retention.
 // ORACLE: .handoff/PLAN-ext-audit.md ASSERTIONS A1 + A4 and SPEC (never what a script printed). TIER: DETERMINISTIC
 // (fake nodes written into a per-row temp dir; no V8 spawn, except the two --self-test rows which use the script's
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh and
-// <root>/deopt-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests.
+// <root>/deopt-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests.
+// A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (10 s timeout = red); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
 // FROZEN EXPECTATION (b17-head: bb 99790884, dd db89aba0; PLAN A4): of the 15 rows added by B3b (N12-N18), 12 red and the 3
@@ -14,6 +15,9 @@
 // B2S fix round adds dd N19a/b (`--out -o` fail-open): red on a dd whose guard is only `[[ "$OUT" != - ]] || OUT=./-`.
 // B1e adds the same rows for bb (N19a/b); bb N19a is a CONTROL / regression pin (bb resolves OUT to an absolute path first; green before and after), bb N19b is the red row on 2a653648.
 // N19c (both tools) adds the ref-mode twin of N19b: `--out -o` with ./-o/stage/x present in --before-ref / --after-ref mode.
+// FROZEN EXPECTATION (b22-head: bb 02e44a7d, dd aab8ae9f; PLAN-ext-audit-gA2 A1): of the 28 gA2 rows (N20-N33) exactly 20 red (bb N20-N26 N28 N29;
+// dd N20-N26 N29-N32) and 8 controls green (bb N27 N30 N31 N32 N33; dd N27 N28 N33); the 74 older rows green. The extended A4 retention rows
+// (N20 / N24 / N29 / N31 inputs added) may go red there: the old code overwrites the victim / target and creates S/elsewhere/nowhere. Live after the fix: all green.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -590,11 +594,199 @@ for (const T of TOOLS) {
     });
 
     // ---------------------------------------------------------------------------------------------------------------
-    // A4 retention: 20 cycles of the B1b (x2) / B4B (x4) / M1 / N16 (+ dd N12) inputs with TMPDIR=<S>/tmp leave 0 entries after each
+    // gA2 rows N20-N33 (ORACLE: .handoff/PLAN-ext-audit-gA2.md SPEC / TASK 1-3 / A1 + A3, and MD-34): the --out raw/ guard
+    // (unreadable / unwritable raw/), the report.txt symlink refusal (EVERY symlink, even one pointing inside OUT), dd's
+    // writable-ancestor walk, and the bb --node newline dir. A refused row: exit 2, the exact die line once, 0 spawns, the
+    // victim untouched. Every expected text is the plan's TASK 1 / 2 text (OUT is always absolute and realpath'd here).
+    // Mutants (A1): drop -L -> N24-N26; -L moved after the mkdir -> N24-N26; drop the readable line -> N20-N23; `-r` only
+    // -> N22; drop -w -> N29 (bb); drop `2>/dev/null` -> N28 (bb); `-L` -> `-e` -> N25-N27, N32, M1 (+ dd N12); dd: no walk -> N29-N32, immediate
+    // parent only -> N33, drop `! -L` in the walk -> N31.
+    // ---------------------------------------------------------------------------------------------------------------
+    const asRoot = !!(process.getuid && process.getuid() === 0);
+    const rootSkip = skip || (asRoot ? 'root ignores file modes' : false);
+    const RD = (o) => `--out: ${o}/raw is not readable`;
+    const WRB = (o) => `--out: ${o}/raw is not writable`;
+    const SYM = (o) => `--out: ${o}/report.txt is a symlink (refused: the write would follow it)`;
+    const WALK = (o, x) => `--out: cannot create ${o}/raw/before and ${o}/raw/after (${x} is not a writable directory)`;
+    // setup(R, lock) -> { out, text, check?(R) }; lock(p, mode) chmods p AFTER its contents exist and registers the restore.
+    const refusedRow = (id, desc, root, setup) => test(`${k} ${id} ${desc}`, { skip: root ? rootSkip : skip }, () => {
+        const R = rig(T); const locked = [];
+        const lock = (p, mode) => { chmodSync(p, mode); locked.push(p); };
+        const restore = () => { for (const p of locked) { try { chmodSync(p, 0o755); } catch {} } };
+        try {
+            const c = setup(R, lock);
+            const r = run(T.script, ['--fn', 'add', '--node', R.fk, '--out', c.out, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
+            restore();
+            assert.equal(r.status, 2, r.out);
+            const want = `${P} ${c.text}`;
+            assert.equal(r.lines.filter((l) => l === want).length, 1, `exactly one line "${want}"\n${r.out}`);
+            assert.equal(R.spawns().length, 0, `0 spawns, got:\n${R.spawns().join('\n')}\n${r.out}`);
+            if (c.check) c.check(R);
+        } finally { restore(); rmAll(R.S); }
+    });
+    const keep = (p, want, what) => assert.equal(readFileSync(p, 'utf8'), want, `${what} bytes unchanged`);
+
+    // N20: raw/ 0300 (write+exec, no read) holding a file. Frozen bb: the emptiness test sees nothing and tee overwrites it.
+    refusedRow('N20', 'raw/ mode 0300 holding add.1.txt: exit 2, "raw is not readable", 0 spawns, file bytes unchanged', true, (R, lock) => {
+        const o = join(R.S, 'o20'); mkdirSync(join(o, 'raw'), { recursive: true });
+        writeFileSync(join(o, 'raw', 'add.1.txt'), 'VICTIM\n'); lock(join(o, 'raw'), 0o300);
+        return { out: o, text: RD(o), check: () => keep(join(o, 'raw', 'add.1.txt'), 'VICTIM\n', 'raw/add.1.txt') };
+    });
+    refusedRow('N21', 'raw/ mode 0000 (empty): exit 2, "raw is not readable", 0 spawns', true, (R, lock) => {
+        const o = join(R.S, 'o21'); mkdirSync(join(o, 'raw'), { recursive: true }); lock(join(o, 'raw'), 0o000);
+        return { out: o, text: RD(o) };
+    });
+    refusedRow('N22', 'raw/ mode 0600 (empty, no x): exit 2, "raw is not readable", 0 spawns', true, (R, lock) => {
+        const o = join(R.S, 'o22'); mkdirSync(join(o, 'raw'), { recursive: true }); lock(join(o, 'raw'), 0o600);
+        return { out: o, text: RD(o) };
+    });
+    refusedRow('N23', 'raw -> symlink to a 0300 dir holding a file: exit 2, "raw is not readable", 0 spawns, file bytes unchanged', true, (R, lock) => {
+        const o = join(R.S, 'o23'); mkdirSync(o);
+        const tgt = join(R.S, 'locked23'); mkdirSync(tgt); writeFileSync(join(tgt, 'add.1.txt'), 'VICTIM\n'); lock(tgt, 0o300);
+        symlinkSync(tgt, join(o, 'raw'));
+        return { out: o, text: RD(o), check: () => keep(join(tgt, 'add.1.txt'), 'VICTIM\n', 'locked/add.1.txt') };
+    });
+    // N24-N26 (MD-34): report.txt is a symlink, live or dangling; refused, the target untouched / not created, no OUT/raw.
+    refusedRow('N24', 'report.txt a live symlink to S/target ("KEEP"): exit 2, "is a symlink", 0 spawns, target stays "KEEP", no raw/', false, (R) => {
+        const o = join(R.S, 'o24'); mkdirSync(o);
+        writeFileSync(join(R.S, 'target'), 'KEEP\n'); symlinkSync(join(R.S, 'target'), join(o, 'report.txt'));
+        return { out: o, text: SYM(o), check: () => { keep(join(R.S, 'target'), 'KEEP\n', 'target'); assert.equal(existsSync(join(o, 'raw')), false, 'no OUT/raw'); } };
+    });
+    refusedRow('N25', 'report.txt a dangling relative symlink inside OUT (MD-34): exit 2, "is a symlink", 0 spawns, target not created, no raw/', false, (R) => {
+        const o = join(R.S, 'o25'); mkdirSync(o); symlinkSync('newfile', join(o, 'report.txt'));
+        return { out: o, text: SYM(o), check: () => { assert.equal(existsSync(join(o, 'newfile')), false, 'target not created'); assert.deepEqual(readdirSync(o), ['report.txt']); } };
+    });
+    refusedRow('N26', 'report.txt a dangling symlink into a missing dir: exit 2, "is a symlink", 0 spawns, no raw/, dir not created', false, (R) => {
+        const o = join(R.S, 'o26'); mkdirSync(o);
+        symlinkSync(join(R.S, 'missing', 'x'), join(o, 'report.txt'));
+        return { out: o, text: SYM(o), check: () => { assert.equal(existsSync(join(R.S, 'missing')), false, 'missing dir not created'); assert.equal(existsSync(join(o, 'raw')), false, 'no OUT/raw'); } };
+    });
+
+    // N27 control [mutant `-L` -> `-e`]: a REGULAR existing report.txt and no raw/ is fine.
+    test(`${k} N27 control: regular report.txt, no raw/ -> exit 0, report rewritten, raw/ created`, { skip }, () => {
+        const R = rig(T);
+        try {
+            const o = join(R.S, 'o27'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n');
+            const r = run(T.script, ['--fn', 'add', '--node', R.fk, '--out', o, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
+            assert.equal(r.status, 0, r.out);
+            const rep = readFileSync(join(o, 'report.txt'), 'utf8');
+            assert.ok(rep.length > 0 && rep !== 'old\n', `report.txt rewritten, got ${JSON.stringify(rep)}`);
+            assert.ok(statSync(join(o, 'raw')).isDirectory(), 'raw/ exists');
+            assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}`);
+        } finally { rmAll(R.S); }
+    });
+
+    // N28 [bb mutant: drop `2>/dev/null` on the node-dir cd; dd: control, it refuses a newline in --node earlier]: the real fake
+    // sits in <S>/"nl<newline>"/node; $(dirname) strips the newline, so the cd names <S>/nl, which does not exist.
+    test(`${k} N28${T.dd ? ' (control)' : ''} --node "<S>/nl<newline>/node": exit 2, one ${T.dd ? '"a newline is not allowed"' : '"cannot resolve the directory of"'} line, no raw "cd:" line, 0 spawns`, { skip }, () => {
+        const R = rig(T);
+        try {
+            const nd = `${R.S}/nl\n/node`;
+            mkNode(nd, 'nl', R.log, T);
+            const r = run(T.script, ['--fn', 'add', '--node', nd, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
+            assert.equal(r.status, 2, r.out);
+            const want = T.dd ? 'a newline is not allowed' : 'cannot resolve the directory of';
+            assert.equal(r.lines.filter((l) => l.startsWith(P) && l.includes(want)).length, 1, `exactly one "${want}" line\n${r.out}`);
+            assert.equal(r.lines.filter((l) => /(^|[ :])cd: /.test(l)).length, 0, `no raw "cd:" line\n${r.out}`);
+            assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+        } finally { rmAll(R.S); }
+    });
+
+    // N29 [bb mutant: drop -w; dd mutant: no walk]: raw/ 0500 (r-x, empty) cannot take before/after or the raw files.
+    refusedRow('N29', 'raw/ mode 0500 (empty): exit 2, ' + (T.dd ? '"cannot create ... (<OUT>/raw is not a writable directory)"' : '"raw is not writable"') + ', 0 spawns', true, (R, lock) => {
+        const o = join(R.S, 'o29'); mkdirSync(join(o, 'raw'), { recursive: true }); lock(join(o, 'raw'), 0o500);
+        return { out: o, text: T.dd ? WALK(o, `${o}/raw`) : WRB(o) };
+    });
+    // N30-N32: bb controls (its own mkdir -p refuses with "cannot create <OUT>/raw" before any spawn); dd refuses by the walk.
+    refusedRow('N30', (T.dd ? '' : '(control) ') + 'absent OUT under a 0555 parent: exit 2, ' + (T.dd ? '"cannot create ... (<parent> is not a writable directory)"' : '"cannot create <OUT>/raw"') + ', 0 spawns, OUT not created', true, (R, lock) => {
+        const ro = join(R.S, 'ro30'); mkdirSync(ro); lock(ro, 0o555);
+        const o = join(ro, 'new');
+        return { out: o, text: T.dd ? WALK(o, ro) : `--out: cannot create ${o}/raw`, check: () => assert.equal(existsSync(o), false, 'OUT not created') };
+    });
+    refusedRow('N31', (T.dd ? '' : '(control) ') + 'OUT a dangling symlink: exit 2, ' + (T.dd ? '"cannot create ... (<OUT> is not a writable directory)"' : '"cannot create <OUT>/raw"') + ', 0 spawns, link target not created', false, (R) => {
+        const o = join(R.S, 'dang31'); symlinkSync(join(R.S, 'nowhere31'), o);
+        return { out: o, text: T.dd ? WALK(o, o) : `--out: cannot create ${o}/raw`, check: () => assert.equal(existsSync(join(R.S, 'nowhere31')), false, 'link target not created') };
+    });
+    refusedRow('N32', (T.dd ? '' : '(control) ') + 'OUT mode 0555 with a writable report.txt, no raw/: exit 2, ' + (T.dd ? '"cannot create ... (<OUT> is not a writable directory)"' : '"cannot create <OUT>/raw"') + ', 0 spawns, no raw/', true, (R, lock) => {
+        const o = join(R.S, 'o32'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n'); lock(o, 0o555);
+        return { out: o, text: T.dd ? WALK(o, o) : `--out: cannot create ${o}/raw`, check: () => { assert.equal(existsSync(join(o, 'raw')), false, 'no raw/'); keep(join(o, 'report.txt'), 'old\n', 'report.txt'); } };
+    });
+
+    // N33 control [dd mutant: immediate parent only]: an absent NESTED OUT (S/new/a/b) and a bare relative `--out o` both succeed.
+    test(`${k} N33 control: absent nested OUT S/new/a/b and bare relative --out o -> exit 0, report.txt + raw/ written`, { skip }, () => {
+        const R = rig(T);
+        try {
+            const nested = join(R.S, 'new', 'a', 'b');
+            for (const [out, dir] of [[nested, nested], ['o', join(R.cwd, 'o')]]) {
+                const r = run(T.script, ['--fn', 'add', '--node', R.fk, '--out', out, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
+                assert.equal(r.status, 0, `--out ${out}\n${r.out}`);
+                assert.ok(statSync(join(dir, 'report.txt')).size > 0, `${dir}/report.txt non-empty`);
+                assert.ok(statSync(join(dir, 'raw')).isDirectory(), `${dir}/raw exists`);
+                if (T.dd) { assert.ok(existsSync(join(dir, 'raw', 'before')) && existsSync(join(dir, 'raw', 'after')), 'raw/before + raw/after'); }
+            }
+        } finally { rmAll(R.S); }
+    });
+
+    // N34-N36 (A8; engine review b3-review r1 NITS): the dd walk's three guards, each with a mutant that used to survive.
+    // dd walk: `while [[ ! -e U && ! -L U && U != . ]]` then `[[ -d U && -w U && -x U ]] || die`. bb has no walk: its mkdir -p
+    // refuses with "cannot create <OUT>/raw" (the N30 control text), so each bb row is a CONTROL pinning that existing refusal
+    // (exit 2, that one line, 0 spawns), verified against the live bb root before writing; it asserts nothing the walk adds.
+    // N34 [dd mutant: drop `&& U != .` -> infinite loop -> the 10 s spawn timeout reads as red]: cwd mode 0000 + relative `--out o`.
+    // The cwd is locked from INSIDE the spawn (`cd D && chmod 000 .`), because spawnSync cannot chdir into a 0000 dir.
+    test(`${k} N34${T.dd ? '' : ' (control)'} cwd mode 0000 + relative --out o: exit 2, ${T.dd ? '"(. is not a writable directory)"' : '"cannot create o/raw"'}, 0 spawns, no hang`, { skip: rootSkip }, () => {
+        const R = rig(T);
+        try {
+            const dv = join(R.S, 'driver.mjs'); writeFileSync(dv, ''); // the driver lives OUTSIDE the locked cwd
+            const args = ['--fn', 'add', '--node', R.fk, '--out', 'o', ...drvArgs(T, dv)];
+            const r0 = spawnSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, T.script, ...args], { encoding: 'utf8', timeout: 10000, env: R.env });
+            try { chmodSync(R.cwd, 0o755); } catch {}
+            assert.equal(r0.error, undefined, `no timeout / spawn error: ${r0.error}`);
+            const out = (r0.stdout || '') + (r0.stderr || '');
+            const want = T.dd ? `${P} ${WALK('o', '.')}` : `${P} --out: cannot create o/raw`;
+            assert.equal(r0.status, 2, out);
+            assert.equal(out.split('\n').filter((l) => l === want).length, 1, `exactly one line "${want}"\n${out}`);
+            assert.equal(R.spawns().length, 0, `0 spawns, got:\n${R.spawns().join('\n')}\n${out}`);
+        } finally { try { chmodSync(R.cwd, 0o755); } catch {} rmAll(R.S); }
+    });
+    // N35 [dd mutant: drop `-x U`]: OUT an existing dir of mode 0600 (r/w, no search).
+    refusedRow('N35', (T.dd ? '' : '(control) ') + 'OUT an existing dir of mode 0600: exit 2, ' + (T.dd ? '"cannot create ... (<OUT> is not a writable directory)"' : '"cannot create <OUT>/raw"') + ', 0 spawns', true, (R, lock) => {
+        const o = join(R.S, 'o35'); mkdirSync(o); lock(o, 0o600);
+        return { out: o, text: T.dd ? WALK(o, o) : `--out: cannot create ${o}/raw` };
+    });
+    // N36 [dd mutant: drop `-d U`]: `--out <S>/fx/o` where fx is a regular 0755 file (the first existing ancestor is not a directory).
+    refusedRow('N36', (T.dd ? '' : '(control) ') + '--out S/fx/o, fx a regular 0755 file: exit 2, ' + (T.dd ? '"cannot create ... (<S>/fx is not a writable directory)"' : '"cannot create <OUT>/raw"') + ', 0 spawns', false, (R) => {
+        const fx = join(R.S, 'fx'); writeFileSync(fx, 'x\n'); chmodSync(fx, 0o755);
+        const o = join(fx, 'o');
+        return { out: o, text: T.dd ? WALK(o, fx) : `--out: cannot create ${o}/raw`, check: () => keep(fx, 'x\n', 'fx') };
+    });
+
+    // N37 (A9; engine review b4-review r1): no --node, NODE unset, PATH = "<S>/p/x<newline>:<fake dir>:/usr/bin:/bin". `command -v node`
+    // finds "<S>/p/x<newline>/node" (executable fake); $(dirname) strips the newline, so the node-dir cd names <S>/p/x, which does not
+    // exist. Post-fix contract for BOTH tools: exit 2, 0 spawns, ONE "node binary: cannot resolve the directory of <S>/p/x<newline>/node"
+    // die (the printed path keeps its newline), NO raw "cd:" line. bb: control (2>/dev/null since B2). dd: red on 457687ec (raw cd: line)
+    // until gA2 B4 r2 adds `2>/dev/null` to dd's node-dir cd.
+    test(`${k} N37${T.dd ? '' : ' (control)'} PATH entry "<S>/p/x<newline>" holds node, no --node / NODE: exit 2, one "cannot resolve the directory of" die, no raw "cd:" line, 0 spawns`, { skip }, () => {
+        const R = rig(T);
+        try {
+            const nd = `${R.S}/p/x\n/node`;
+            mkNode(nd, 'nl', R.log, T);
+            const env = baseEnv({ PATH: `${R.S}/p/x\n:${dirname(R.fk)}:/usr/bin:/bin` });
+            const r = run(T.script, ['--fn', 'add', ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env });
+            assert.equal(r.status, 2, r.out);
+            const want = `${P} node binary: cannot resolve the directory of ${nd}\n`;
+            assert.equal(r.out.split(want).length - 1, 1, `exactly one die "${want}"\n${r.out}`);
+            assert.equal(r.out.split('cannot resolve the directory of').length - 1, 1, `no other "cannot resolve" line\n${r.out}`);
+            assert.equal(r.lines.filter((l) => /(^|[ :])cd: /.test(l)).length, 0, `no raw "cd:" line\n${r.out}`);
+            assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+        } finally { rmAll(R.S); }
+    });
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // A4 retention: 20 cycles of the B1b (x2) / B4B (x4) / M1 / N16 (+ dd N12) + gA2 N20 / N24 / N29 / N31 inputs with TMPDIR=<S>/tmp leave 0 entries after each
     // cycle. Regression pin (a refusal path must not leak a mktemp dir); a bare macOS `mktemp -d` ignores TMPDIR, so
     // this pins TMPDIR-honouring leaks only.
     // ---------------------------------------------------------------------------------------------------------------
-    test(`${k} A4 retention: 20 cycles of B1b / B4B / M1 / N16${T.dd ? ' / N12' : ''} leave TMPDIR empty and cwd + elsewhere/ unchanged`, { skip }, () => {
+    test(`${k} A4 retention: 20 cycles of B1b / B4B / M1 / N16${T.dd ? ' / N12' : ''} / N20 / N24 / N29 / N31 leave TMPDIR empty and cwd + elsewhere/ unchanged`, { skip }, () => {
         const R = rig(T);
         try {
             const tmp = join(R.S, 'tmp'); mkdirSync(tmp);
@@ -607,6 +799,11 @@ for (const T of TOOLS) {
             symlinkSync(join(R.S, 'elsewhere', 'sub'), join(R.cwd, 'link'));
             writeFileSync(join(R.S, 'elsewhere', 'd.mjs'), '// real\n');
             writeFileSync(join(R.cwd, 'd.mjs'), '// decoy, different bytes\n');
+            // gA2 (A4): per-cycle inputs N20 (raw 0300 + victim), N24 (report.txt symlink to elsewhere/target), N29 (raw 0500), N31 (OUT dangling
+            // symlink into elsewhere/nowhere). Locked dirs are chmod'ed back after every cycle (and in finally), so none is left at 0300 / 0500.
+            const asRoot = !!(process.getuid && process.getuid() === 0);
+            writeFileSync(join(R.S, 'elsewhere', 'target'), 'KEEP\n');
+            const locked = [];
             const cwdLs = readdirSync(R.cwd).sort().join(','), elseLs = readdirSync(join(R.S, 'elsewhere'), { recursive: true }).sort().join(',');
             for (let c = 0; c < 20; c++) {
                 const inputs = [
@@ -629,12 +826,25 @@ for (const T of TOOLS) {
                     writeFileSync(join(n12, 'report.txt'), 'old\n'); chmodSync(join(n12, 'report.txt'), 0o444);
                     inputs.push(['--fn', 'add', '--node', R.fk, '--out', n12, ...drvArgs(T, d)]);
                 }
+                const g = join(R.S, `ga2-${c}`); mkdirSync(g);
+                const o20 = join(g, 'o20'), o24 = join(g, 'o24'), o29 = join(g, 'o29'), o31 = join(g, 'o31');
+                mkdirSync(o24); symlinkSync(join(R.S, 'elsewhere', 'target'), join(o24, 'report.txt'));
+                symlinkSync(join(R.S, 'elsewhere', 'nowhere'), o31);
+                inputs.push(['--fn', 'add', '--node', R.fk, '--out', o24, ...drvArgs(T, d)], ['--fn', 'add', '--node', R.fk, '--out', o31, ...drvArgs(T, d)]);
+                if (!asRoot) {
+                    mkdirSync(join(o20, 'raw'), { recursive: true }); writeFileSync(join(o20, 'raw', 'add.1.txt'), 'VICTIM\n'); chmodSync(join(o20, 'raw'), 0o300); locked.push(join(o20, 'raw'));
+                    mkdirSync(join(o29, 'raw'), { recursive: true }); chmodSync(join(o29, 'raw'), 0o500); locked.push(join(o29, 'raw'));
+                    inputs.push(['--fn', 'add', '--node', R.fk, '--out', o20, ...drvArgs(T, d)], ['--fn', 'add', '--node', R.fk, '--out', o29, ...drvArgs(T, d)]);
+                }
                 for (const a of inputs) run(T.script, a, { cwd: R.cwd, env });
+                for (const p of locked) chmodSync(p, 0o755); // back first: nothing may be left at 0300 / 0500, and the reads below need it
+                if (!asRoot) assert.equal(readFileSync(join(o20, 'raw', 'add.1.txt'), 'utf8'), 'VICTIM\n', `cycle ${c}: N20 victim bytes changed`);
+                assert.equal(readFileSync(join(R.S, 'elsewhere', 'target'), 'utf8'), 'KEEP\n', `cycle ${c}: N24 target changed`);
                 assert.deepEqual(readdirSync(tmp), [], `cycle ${c}: TMPDIR holds entries`);
                 assert.equal(readdirSync(R.cwd).sort().join(','), cwdLs, `cycle ${c}: cwd listing changed`);
                 assert.equal(readdirSync(join(R.S, 'elsewhere'), { recursive: true }).sort().join(','), elseLs, `cycle ${c}: elsewhere/ listing changed`);
             }
             assert.equal(readdirSync(R.cwd).sort().join(','), cwdLs, 'cwd unchanged');
-        } finally { for (const e of readdirSync(R.S)) if (e.startsWith('ro-')) chmodSync(join(R.S, e), 0o755); rmAll(R.S); }
+        } finally { for (const e of readdirSync(R.S)) if (e.startsWith('ro-')) chmodSync(join(R.S, e), 0o755); for (const e of readdirSync(R.S)) if (e.startsWith('ga2-')) for (const x of ['o20', 'o29']) for (const y of [join(R.S, e, x), join(R.S, e, x, 'raw')]) { try { chmodSync(y, 0o755); } catch {} } rmAll(R.S); }
     });
 }

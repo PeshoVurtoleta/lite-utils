@@ -22,17 +22,19 @@
 #                          NO-VERDICT before any probe.
 #                          Diff mode (optional): as in report mode.
 #   --runs N               probes per function, 2..20 (default 2). Run 1 vs runs 2..N is the null control.
-#   --node BIN             node binary (default: $NODE, else node), resolved ONCE to an absolute path before any cd
-#                          (a bare name through PATH). It must be an executable file, else exit 2 before any node
-#                          spawn ("node binary not found", "node binary is not a file on PATH (...)", "node binary
-#                          is not an executable file").
+#   --node BIN             node binary (default: $NODE, else node), resolved ONCE to an absolute path from the
+#                          caller's cwd (a bare name through PATH). It must be an executable file, else exit 2
+#                          before any node spawn ("node binary not found", "node binary is not a file on PATH
+#                          (...)", "node binary is not an executable file", "node binary: cannot resolve the
+#                          directory of ...").
 #   --v8-flags STR         extra V8 flags for every probe, split on spaces (flags only, each `--` and a letter; any
 #                          *print-bytecode* flag is refused; a max*inlined*bytecode* flag must be --name=N, N an
 #                          integer of 1..9 digits; a reserve*inline*budget* flag must be --name=X, X = N or N.M, N and
 #                          M of 1..9 digits (e.g. 1.2))
 #   --out DIR              keep DIR/report.txt and DIR/raw/<fn>.<k>.txt (raw output of run k, 0x addresses kept;
-#                          a space in fn becomes -). DIR/raw must be absent or empty. Without --out nothing is
-#                          written to disk.
+#                          a space in fn becomes -). DIR/raw must be absent or an empty, readable and writable
+#                          directory; DIR/report.txt must not be a symlink. Without --out nothing is written to
+#                          disk.
 #                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
 #   --diff                 diff mode: probe DRIVER_BEFORE and DRIVER_AFTER (run k of each side, k = 1..N, in turn)
 #                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs, or a
@@ -659,10 +661,14 @@ if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/nu
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
 [[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
-NODE_DIR=$(cd -- "$NODE_DIR" && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 if [[ -n "$OUT" ]]; then
+  # refuse before any write: an unreadable raw/ fools the emptiness test below; a symlinked report.txt redirects the write
+  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
+  [[ ! -e "$OUT/raw" || -w "$OUT/raw" ]] || die "--out: $OUT/raw is not writable"
+  [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   mkdir -p -- "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
   # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L

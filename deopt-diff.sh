@@ -15,17 +15,17 @@
 # Options
 #   --fn LIST          function names, comma separated (required)
 #   --runs N           node runs per side, 2..20 (default 3). Run 1 vs runs 2..N is the null control.
-#   --node BIN         node binary (default: $NODE, else node), resolved ONCE to an absolute path before any cd (a
-#                      bare name through PATH). It must be an executable file, else exit 2 before any node spawn
-#                      ("node binary not found", "node binary is not a file on PATH (...)", "node binary is not an
-#                      executable file").
+#   --node BIN         node binary (default: $NODE, else node), resolved ONCE to an absolute path from the caller's
+#                      cwd (a bare name through PATH). It must be an executable file, else exit 2 before any node
+#                      spawn ("node binary not found", "node binary is not a file on PATH (...)", "node binary is
+#                      not an executable file", "node binary: cannot resolve the directory of ...").
 #   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-deopt*, *trace-opt* or *concurrent-recompilation* flag (the
 #                      script sets them) and any *trace-file-names* flag (it changes the <JSFunction NAME (sfi = ...)>
 #                      text the records are read from)
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
-#                      output of run k, addresses kept). DIR/raw must be absent or empty. Without --out nothing
-#                      is written to disk.
+#                      output of run k, addresses kept). DIR/raw must be absent or an empty, readable and writable
+#                      directory; DIR/report.txt must not be a symlink. Without --out nothing is written to disk.
 #                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
 #   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
 #                      sha; never starting with -). Goes with --after-ref.
@@ -44,8 +44,9 @@
 #                      "ok <label>" or "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0)
 #                      or "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --out take no newline and --fn
-#   no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value.
+#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline
+#   and --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no
+#   =value.
 #   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
 #   ref / file values take no newline.
 #
@@ -1138,8 +1139,13 @@ fi
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
+  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
+  # the mkdir -p below must succeed: walk up from raw/before to the first path that exists (or is a symlink, or `.`: an unsearchable cwd fails -e) and need a writable, searchable dir there
+  OUT_UP="$OUT/raw/before"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
+  [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/before and $OUT/raw/after ($OUT_UP is not a writable directory)"
 fi
 # resolve the binary ONCE, from the caller's cwd: every spawn (--version, each run in its driver dir) runs this
 # absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a path
@@ -1149,7 +1155,7 @@ if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/nu
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
 [[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
-NODE_DIR=$(cd -- "$NODE_DIR" && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 if [[ $STAGED == 0 ]]; then

@@ -379,7 +379,8 @@ for (const [label, args, line, teeth] of MORE_BAD) {
 }
 
 // =====================================================================================================================
-// A3 --out: raw/ must be absent or empty; a refusal spawns nothing and writes nothing (the OUT tree is unchanged)
+// A3 --out: raw/ must be absent or an empty, readable and writable directory, report.txt not a symlink; a refusal
+// spawns nothing and writes nothing (the OUT tree is unchanged)
 // =====================================================================================================================
 function tree(p) {
     if (!existsSync(p)) return 'absent';
@@ -401,7 +402,9 @@ const OUT_BAD = [
     // adversarial: a DANGLING raw symlink passes `! -e` (it follows the link) but `ls -A` prints the link itself, so it is
     // refused before any spawn -- with the misleading reason "is not empty" (QA finding, cosmetic): pin the --out class only
     ['raw is a dangling symlink', (o) => { mkdirSync(o, { recursive: true }); symlinkSync('nowhere', join(o, 'raw')); },
-        'deopt-diff: --out: ', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']],
+        'deopt-diff: --out: ', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die'],
+            // the mkdir walk (gA2 B3) refuses the dangling raw/ too (its nearest -L stop is not a dir): neutralize both guards
+            ['[[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die', 'true || die']],
         // flip: the mutant reaches the --version probe (1 spawn), then mkdir fails
         (r) => { assert.equal(r.spawns, 1, r.log.join('\n')); assert.ok(r.log[0].endsWith('|--version'), r.log.join('\n')); }],
     ['OUT is a regular file', (o) => { writeFileSync(o, 'keep'); }, 'exists and is not a directory',
