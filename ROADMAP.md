@@ -4,7 +4,7 @@
 > For a client who wants to run one script and read the answer, without wiring lite-leak / lite-gc-profiler /
 > lite-perf-gate into a test suite.
 
-Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape is still a proposal).
+Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -89,7 +89,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - `package.json` (no dependencies; `scripts.test` (2026-11-04, b27 u2: spec on stdout, the death reporter on stderr) =
   `node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr 'test/*.test.mjs'`;
   `engines.node` >= 22), `LICENSE`, `CHANGELOG.md` ([Unreleased]), `.gitignore` (`/.handoff/`,
-  `node_modules/`).
+  `node_modules/`, `/audit/` (D-4)).
 - Port LiteSignal `test/94-inlining-budget-diff.test.mjs` to `test/inlining-budget-diff.test.mjs`, pointed at
   `../inlining-budget-diff.sh`: self-test passes with the exact CHECKS count, unmodified copy outside the
   repo passes, every mutant row turns it red.
@@ -168,9 +168,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   not gate on them). Then audit fixes -> Phase 6 docs -> a confirmation pass (every reproduction.mjs
   re-run on the release candidate) -> 1.0.0.
 - AUDIT-READY <script> = every planned group for it DONE (engine review APPROVED; qa where its plan has
-  one), every RULED fix for it landed, no known fail-open open, npm test green, and committed by the
-  maintainer. The burst that gets there writes `AUDIT-READY <script> <commit> <sha256/8 of the root
-  script>` in NEXT.md; the orchestrator then pings the maintainer, who starts that script's audit.
+  one), no DEFERRED or LEAD fix for it without a DONE group (D-4a, D-4b), every RULED fix for it landed,
+  no FAIL-OPEN for it open in NEXT.md "Open blockers / leads" or a PLAN CURRENT LEAD, npm test green,
+  and committed by the maintainer. The burst that gets there writes `AUDIT-READY <script> <commit>
+  <sha256/8 of the root script>` in NEXT.md; the orchestrator then pings the maintainer,
+  who starts that script's audit.
 - Auditors: the maintainer, lite-signal (the scripts it chose), the maintainer's reviewers, the
   orchestrator (triage), and one fresh agent reviewer per script with NO plan or review history (only
   the script, its tests, -h and real node runs). Once all five are through, one cross-script reviewer:
@@ -249,3 +251,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   as it is AUDIT-READY (orchestrator pings the maintainer), in the maintainer's chained FINDINGS.md +
   reproduction.mjs format; every fix proposal is kept and measured by reproduction. Code only until
   1.0.0, no adoption anywhere. Shape: Phase 7 above.
+- D-4a ANSWERED 2026-11-04: bytecode-budget and inlining-budget-diff go to audit "After their fixes land",
+  not now. inlining-budget-diff: its ext-audit hardening is DEFERRED (MD-32) with no group planned, so it
+  cannot become AUDIT-READY until a planner pass scopes an inlining-budget-diff hardening group (B1-class
+  node lookup, CDPATH, `./-driver`, report.txt), scheduled after B-four (same idioms).
+- D-4b ANSWERED 2026-11-04 ("Wait for B-stage"; "Yes, wait for MD-46 too"): bytecode-budget is
+  AUDIT-READY only after the ext-audit B-four batch (MD-36..38, MD-40, MD-42/43, MD-44/45), B-stage (the
+  lib/stage.sh STAGE_DRIVER decoy, a recorded FAIL-OPEN; it also gates deopt-diff) and a group for the
+  MD-46 --v8-flags denylist LEAD are all APPROVED and committed. Any open LEAD for a script blocks it.
