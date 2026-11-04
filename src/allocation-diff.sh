@@ -13,17 +13,30 @@
 #                      semi-space (1 MB) of young allocation in the window, not zero bytes.
 #   --runs N           node runs per side, 2..20 (default 5). Run 1 vs runs 2..N is the null control.
 #   --node BIN         node binary (default: $NODE, else node). Resolved ONCE, from the caller's directory, to an
-#                      absolute path (`command -v`; a function, alias or builtin is refused): the --version probe
-#                      and every run (each in its driver's directory) run that one file, and the head names it.
-#   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each starting with --). Refused,
+#                      absolute path: a bare name through PATH (`command -v`; a function, alias or builtin is
+#                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
+#                      file, else exit 2 before any spawn ("node binary not found", "node binary is not a file on
+#                      PATH (...)", "node binary is not an executable file", "node binary: cannot resolve the
+#                      directory of ...", "node binary: a newline is not allowed in the resolved path"). The
+#                      --version probe and every run (each in its driver's directory) run that one file, and the
+#                      head names it.
+#   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-gc*, *semi-space* or *concurrent-recompilation* flag (the
 #                      script sets the trace and a fixed 1 MB semi-space), any *predictable-gc-schedule* flag (it
-#                      forces both semi-spaces to 4 MB) and --require / --import, bare or =FILE (a preload of
-#                      yours is part of the measured process, and a --require one runs ahead of the guard's
-#                      own; -r is refused as a non-flag)
+#                      forces both semi-spaces to 4 MB), every --require* / --import* / --loader* /
+#                      --experimental-loader* flag, a prefix match (a module of yours, preload or loader, is part of
+#                      the measured process, and a --require one runs ahead of the guard's own; -r is refused as a
+#                      non-flag), every --env-file* / --experimental-config-file* /
+#                      --experimental-default-config-file* flag, a prefix match (it loads environment variables or
+#                      node options from a file into the measured process), and every --eval* / --print* flag, a
+#                      prefix match (node runs that code in the measured process instead of the driver, which
+#                      becomes argv; V8's --print-* flags, e.g. --print-bytecode, go with it; -e / -p are refused as
+#                      non-flags)
 #   --out DIR          keep DIR/report.txt, DIR/raw/<side>/run.<k>.txt (the raw stdout of run k) and
 #                      DIR/raw/<side>/run.<k>.err (its stderr); <side> = before / after, or driver with --zero.
-#                      DIR/raw must be absent or empty; DIR/report.txt must not be a DRIVER. With or without
+#                      DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;
+#                      DIR/report.txt must not be a DRIVER, a symlink or a file with another hard link, and must be
+#                      writable. With or without
 #                      --out, the guard preload and its counts live in a private temp dir under $TMPDIR (else
 #                      /tmp), removed on exit; without --out nothing else is written.
 #   --self-test        canned checks (--trace-gc text through the record awk, the guard preload's sha256, then
@@ -104,6 +117,7 @@
 #   only (this repo has no statistical host).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -627,16 +641,16 @@ FAKE_MKTEMP
   rf "--v8-flags --max-semi-space-size=4" "--v8-flags must not set --max-semi-space-size=4: the script fixes" "$NO" --v8-flags --max-semi-space-size=4 "$dr/y3/driver.js" "$dr/y5/driver.js"
   rf "--v8-flags --predictable-gc-schedule" "--v8-flags must not set --predictable-gc-schedule: it forces" "$NO" --v8-flags --predictable-gc-schedule "$dr/y3/driver.js" "$dr/y5/driver.js"
   rf "--v8-flags --predictable_gc_schedule" "--v8-flags must not set --predictable_gc_schedule: it forces" "$NO" --v8-flags --predictable_gc_schedule "$dr/y3/driver.js" "$dr/y5/driver.js"
-  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with --), got 'foo'" "$NO" --v8-flags foo "$dr/y3/driver.js" "$dr/y5/driver.js"
+  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with -- and a letter), got 'foo'" "$NO" --v8-flags foo "$dr/y3/driver.js" "$dr/y5/driver.js"
   rf "unknown option" "unknown option --nod (did you mean --node?)" "$NO" --nod x "$dr/y3/driver.js" "$dr/y5/driver.js"
   rf "a newline in --out" "--v8-flags / --out / --node: a newline is not allowed" "$NO" --out $'a\nb' "$dr/y3/driver.js" "$dr/y5/driver.js"
   o=""
   for x in --require=./p.js --require --import=./p.mjs --import; do
     o="$o#$(spawn -- "$NO" "--v8-flags=--expose-gc $x" "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags must not set $x" "$d/sp.out" || true)"
   done
-  x="$(spawn -- "$NO" --v8-flags '-r ./p.js' "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags takes flags only (each starts with --), got '-r'" "$d/sp.out" || true)"
+  x="$(spawn -- "$NO" --v8-flags '-r ./p.js' "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags takes flags only (each starts with -- and a letter), got '-r'" "$d/sp.out" || true)"
   check "A14(d) refused before any spawn: --v8-flags --require=F / --require / --import=F / --import (a preload ahead of the guard's) and -r F -> exit 2, 0 spawns" \
-    "$o#$x#$(spawn -- "$NO" --runs 2 --v8-flags '--require-module' --zero "$dr/z0/driver.js" | cut -d'|' -f1)" \
+    "$o#$x#$(spawn -- "$NO" --runs 2 --v8-flags '--experimental-require-module' --zero "$dr/z0/driver.js" | cut -d'|' -f1)" \
     "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1#0"
 
   # --- A5 retention: 3 cycles of SAME / DIFF / NONZERO / NO-VERDICT (x2) without --out -> 1 mktemp each, 0 new entries ---
@@ -659,6 +673,30 @@ FAKE_MKTEMP
   check "MD-33 refused before any spawn: --out DIR whose raw/ is mode 0300 (holding driver/run.1.txt) -> exit 2, 0 spawns, 0 mktemp, 'is not readable', run.1.txt unchanged" \
     "$got|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: --out: $d/ou/raw $x" "$d/sp.out" || true)|$(cat "$d/ou/raw/driver/run.1.txt")|$(ls -A "$d/ou" | tr '\n' ' ')" \
     "2|VERDICT NO-VERDICT|0|0|1|RUN1-BYTES|raw "
+
+  # --- MD-39 (ext-audit A13): a --v8-flags flag that loads environment variables or node options from a file ---
+  o=""
+  for x in --env-file=F --env_file=F --env-file-if-exists=F --experimental-config-file=F --experimental-default-config-file=F; do
+    o="$o#$(spawn -- "$NO" "--v8-flags=--expose-gc $x" "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags must not set $x: it loads environment variables or node options from a file" "$d/sp.out" || true)"
+  done
+  check "MD-39 refused before any spawn: --v8-flags --env-file=F / --env_file=F / --env-file-if-exists=F / --experimental-config-file=F / --experimental-default-config-file=F (environment or node options loaded from a file) -> exit 2, 0 spawns" \
+    "$o" "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1"
+
+  # --- MD-42 (ext-audit A15): a --v8-flags flag that loads a module of yours (a prefix match) ---
+  o=""
+  for x in --loader=F --loader --experimental-loader=F --experimental_loader=F --require-module; do
+    o="$o#$(spawn -- "$NO" "--v8-flags=--expose-gc $x" "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags must not set $x: it loads a module of yours into the measured process" "$d/sp.out" || true)"
+  done
+  check "MD-42 refused before any spawn: --v8-flags --loader=F / --loader / --experimental-loader=F / --experimental_loader=F / --require-module (a module of yours; a prefix match) -> exit 2, 0 spawns" \
+    "$o" "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1"
+
+  # --- MD-44 (ext-audit A17): a --v8-flags flag that runs code of yours in place of the driver (a prefix match) ---
+  o=""
+  for x in --eval=F --eval --print=F --print --print-bytecode; do
+    o="$o#$(spawn -- "$NO" "--v8-flags=--expose-gc $x" "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags must not set $x: it runs code of yours in the measured process" "$d/sp.out" || true)"
+  done
+  check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver; a prefix match) -> exit 2, 0 spawns" \
+    "$o" "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -702,7 +740,7 @@ fi
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
 [[ -z "$V8FLAGS" || ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-  [[ "$f" == --* ]] || die "--v8-flags takes flags only (each starts with --), got '$f'"
+  [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   case "$g" in
     *trace-gc*|*concurrent-recompilation*)
@@ -711,8 +749,12 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       die "--v8-flags must not set $f: the script fixes both semi-spaces at 1 MB (--min-semi-space-size=1 --max-semi-space-size=1)" ;;
     *predictable-gc-schedule*)
       die "--v8-flags must not set $f: it forces both semi-spaces to 4 MB (the script fixes them at 1 MB)" ;;
-    --require|--require=*|--import|--import=*)
-      die "--v8-flags must not set $f: a preload of yours is part of the measured process (a --require one runs ahead of the guard's own --require <tmp>/gcn.cjs)" ;;
+    --require*|--import*|--loader*|--experimental-loader*)
+      die "--v8-flags must not set $f: it loads a module of yours into the measured process (a preload or a module loader; a --require one runs ahead of the guard's own --require <tmp>/gcn.cjs)" ;;
+    --env-file*|--experimental-config-file*|--experimental-default-config-file*)
+      die "--v8-flags must not set $f: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process" ;;
+    --eval*|--print*)
+      die "--v8-flags must not set $f: it runs code of yours in the measured process instead of the driver (node evaluates it; the driver becomes argv and never runs)" ;;
   esac
 done
 if [[ $ZERO == 1 ]]; then
@@ -726,22 +768,36 @@ for ((i = 0; i < ${#POS[@]}; i++)); do
   [[ "${POS[$i]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
   [[ -f "${POS[$i]}" && -r "${POS[$i]}" ]] || die "DRIVER (${SIDES[$i]}) not found (or not a readable file): ${POS[$i]}"
 done
+[[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
+  [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   for ((i = 0; i < ${#POS[@]}; i++)); do   # -ef follows symlinks and sees hard links: refused before any truncation
     [[ ! "$OUT/report.txt" -ef "${POS[$i]}" ]] || die "--out: $OUT/report.txt is the DRIVER (${SIDES[$i]}) ${POS[$i]}"
   done
+  [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
+  [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
+  [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
+  OUT_UP="$OUT/raw/${SIDES[0]}"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
+  [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/${SIDES[0]}${SIDES[1]:+ and $OUT/raw/${SIDES[1]}} ($OUT_UP is not a writable directory)"
 fi
-NODE_RES=$(command -v "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"
+NODE_RES=$NODE_BIN
+if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
-NODE_BIN="$(cd "$(dirname "$NODE_RES")" && pwd)/$(basename "$NODE_RES")"
+[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+[[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 DRV_DIR=(); DRV_BASE=(); DESC=()
 for ((i = 0; i < ${#POS[@]}; i++)); do
-  DRV_DIR[$i]=$(cd "$(dirname "${POS[$i]}")" && pwd); DRV_BASE[$i]=$(basename "${POS[$i]}")
-  DESC[$i]="${DRV_DIR[$i]}/${DRV_BASE[$i]}  sha256/8 $(sha8 "${DRV_DIR[$i]}/${DRV_BASE[$i]}")"
+  DRV_DIR[$i]=$(cd -- "$(dirname -- "${POS[$i]}")" && pwd); DRV_BASE[$i]=$(basename -- "${POS[$i]}")
+  [[ "${DRV_DIR[$i]}/${DRV_BASE[$i]}" -ef "${POS[$i]}" ]] || die "DRIVER (${SIDES[$i]}): cannot resolve the directory of ${POS[$i]} (a symlink before '..'?)"
+  DESC[$i]="${DRV_DIR[$i]%/}/${DRV_BASE[$i]}  sha256/8 $(sha8 "${DRV_DIR[$i]}/${DRV_BASE[$i]}")"
 done
 
 # --- every refusal is above this line; spawns start here: --version, then disk writes, then the runs ---
@@ -756,9 +812,9 @@ TB=${TMPDIR:-/tmp}; [[ "$TB" == /* ]] || TB="$PWD/$TB"
 T=$(mktemp -d "$TB/allocation-diff.XXXXXX") || die "cannot create a temp dir in $TB"
 gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"
 if [[ -n "$OUT" ]]; then
-  for s in "${SIDES[@]}"; do mkdir -p "$OUT/raw/$s" 2>/dev/null || die "--out: cannot create $OUT/raw/$s"; done
-  OUT=$(cd "$OUT" && pwd)
-  REPORT="$OUT/report.txt"; : >"$REPORT"
+  for s in "${SIDES[@]}"; do mkdir -p -- "$OUT/raw/$s" 2>/dev/null || die "--out: cannot create $OUT/raw/$s"; done
+  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
 fi
 say "allocation-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
 if [[ $ZERO == 1 ]]; then

@@ -347,6 +347,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   FAIL), the `-h` text with its revert checks, and 6 rows on the file's own fake node, each with
   revert checks (spawn and mktemp counts, 13 files under `--out`, retention, a `-x.js` driver, the
   verdict fold over fns, `mod` in the verdict key). DETERMINISTIC; no real V8 run.
+- `allocation-diff.sh` (Phase 4 group 1): young-generation GC EVENT COUNTS inside a marked window of a
+  driver, never bytes, on one node binary. `allocation-diff.sh [opts] DRIVER_BEFORE DRIVER_AFTER` (diff
+  mode: exit 0 SAME, 1 DIFF) or `allocation-diff.sh [opts] --zero DRIVER` (gate mode: exit 0 ZERO, 1
+  NONZERO); exit 2 NO-VERDICT. Options: `--zero`, `--runs` 2..20 (default 5), `--node`, `--v8-flags`,
+  `--out DIR`, `--self-test`, `-h` / `--help` (exit 2). ZERO means less than one semi-space (1 MB) of
+  young allocation in the window, not zero bytes. Each run is `node [v8 flags] --trace-gc
+  --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --require <tmp>/gcn.cjs
+  ./<driver>` with cwd = the driver's directory and NODE_OPTIONS stripped; the driver marks the window
+  with the whole lines `@@LITE-MARK start` and `@@LITE-MARK end`. The tool's own guard preload counts
+  the run's GCs and the count must equal the trace's GC-line count. Fails closed (NO-VERDICT) on an
+  unparseable trace, a missing guard count, an old-generation GC in the window, a driver failure and a
+  failed null control (runs 2..N must give run 1's multiset). The `-h` text holds the driver contract,
+  every record and NO-VERDICT reason, and the Not detected list. Tier: the script logic is
+  DETERMINISTIC (`--self-test`, 76 checks, no real node); a verdict on a user driver is STATISTICAL,
+  REPORTED only (no statistical host in this repo).
+- `test/allocation-diff.test.mjs`: `--self-test` exact count (76) on the in-repo script and a copy
+  outside the repo, one row per printed check, self-test mutant rows (each an exact-once edit of a temp
+  copy that must turn the self-test red at its designed rows, with a revert check on the unmutated
+  copy), the exit wiring, `-h` / `--help` exit 2, and refusal rows on the file's own fake node and
+  mktemp shim. 200 tests. DETERMINISTIC; no real V8 run.
 
 ### Changed
 
@@ -483,3 +503,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `test/ic-diff.test.mjs` (`--self-test` prints "self-test: 65 check(s) ok"; the last two checks are
   the node refusals "node binary is not an executable file: ./nonode" and "node binary not found:
   nonode"). In `npm test`.
+
+- `allocation-diff.sh`, external-audit group (exit 2 refusals, all before any node spawn, 0 mktemp, nothing
+  written; the same classes as the `ic-diff.sh` bullet above, plus MD-36 to MD-45). The hot body
+  (`run_side` and the run loop) is unchanged.
+  - `CDPATH` is unset at the top of the script, so no `cd X && pwd` join resolves X through a CDPATH
+    entry.
+  - `--v8-flags`: each flag must be `--` and a letter; `---x` and `--=1` are refused ("--v8-flags takes
+    flags only (each starts with -- and a letter), got '---x'"; was: any `--*`).
+  - MD-39 / MD-40: every `--env-file*`, `--experimental-config-file*` and
+    `--experimental-default-config-file*` flag is refused, a prefix match with `_` read as `-` ("--v8-flags
+    must not set --env-file=x: it loads environment variables or node options from a file (e.g. a
+    NODE_OPTIONS preload) into the measured process"; was: accepted; node read the file into the measured
+    process).
+  - MD-42 / MD-43: every `--require*`, `--import*`, `--loader*` and `--experimental-loader*` flag is
+    refused, a prefix match (`--loader=F`, `--experimental_loader=F`, `--require-module`; one arm). Was:
+    only bare / `=FILE` `--require` and `--import`. A module of yours, preload or loader, is part of the
+    measured process, and a `--require` one runs ahead of the guard's own. `-r` was already refused (as a
+    non-flag, by the old `--*` gate) and is not new.
+  - MD-44 / MD-45: every `--eval*` and `--print*` flag is refused, a prefix match with `_` read as `-`,
+    before any spawn ("--v8-flags must not set --eval=F: it runs code of yours in the measured
+    process instead of the driver (node evaluates it; the driver becomes argv and never runs)"). With one,
+    node ran that code in the measured process and the driver only became argv, while the head named the
+    driver (was: accepted). V8's `--print-*` flags (e.g. `--print-bytecode`) are refused with it; `-e` /
+    `-p` were already refused as non-flags.
+  - A dash-led `--out` is a name: `--out -x` writes `<cwd>/-x` (it used to be read as options by mkdir).
+  - MD-36: a DIR/raw that is a symlink is refused, "--out: <DIR>/raw is a symlink (refused: the writes
+    would follow it)". The check comes right after the readable check, so a dangling raw/ now reads "is a
+    symlink" (it used to read "is not empty (give a new or empty DIR)", also before any spawn) and a
+    symlink to a 0300 directory still reads "is not readable".
+  - MD-37 and the `report.txt` rules: a `report.txt` that is a symlink is refused ("--out: <DIR>/report.txt
+    is a symlink (refused: the write would follow it)"), an unwritable one before any spawn ("--out: cannot
+    write <DIR>/report.txt"), and one with another hard link ("--out: <DIR>/report.txt has another hard link
+    (refused: the write would change that file too)"; the DRIVER `-ef` refusal still covers a hard link to a
+    DRIVER). The write at the point of use is now checked too (same message; it used to end "unexpected
+    error (exit 1)" after the `--version` probe), a backstop for a write that races the checks.
+  - The `--out` walk: from DIR/raw/before (DIR/raw/driver with `--zero`) up to the first path that exists,
+    which must be a writable, searchable directory, else "--out: cannot create <DIR>/raw/before and
+    <DIR>/raw/after (<path> is not a writable directory)" (`--zero`: "... cannot create <DIR>/raw/driver
+    (...)"), before any spawn. It used to be refused only after the `--version` probe. The walk stops at
+    `.`, so a relative DIR with no existing parent is judged in the current directory.
+  - node resolution (`--node`, default `$NODE`, else `node`): a bare name is looked up with `command -v --`;
+    a name with a slash is a path and is never looked up on PATH ("node binary not found: <name>" for a bare
+    name not on PATH). It must pass `-f` and `-x`, else exit 2 ("node binary is not an executable file:
+    <path>"). The resolved path is
+    absolute and the head prints it; a `-` dirname (`--node -/node`) resolves as `./-`; the resolved
+    directory + name must be the same file as the given path (`-ef`), so `--node <link>/../node`, where `..`
+    follows a symlink, is refused. MD-38: a newline in the resolved path is refused ("node binary: a newline
+    is not allowed in the resolved path").
+  - DRIVER: the directory is resolved with `cd --` and the result must be the same file as the given path
+    (`-ef`); a DRIVER whose `..` follows a symlink is refused, "DRIVER (after): cannot resolve the directory
+    of <path> (a symlink before '..'?)".
+  - `OUT_L`: raw/, report.txt and the printed `out` line name one directory: the logical path when it is the
+    same directory as the given `--out`, else the physical one. The header `node`, `before` and `after`
+    paths are joined with `${X%/}`, so a node or DRIVER directly under `/` prints `/<name>`, not `//<name>`.
+  - `--self-test` 73 -> 76 checks: the new last three are MD-39 (env-file / config-file), MD-42 (module
+    loaders) and MD-44 (eval / print).
+  Tier: DETERMINISTIC. Gated in `test/ext-audit-alloc.test.mjs` (50 tests; fake nodes, no V8 run; each
+  refusal row asserts exit 2, the exact die line once, 0 spawns, 0 mktemp and 0 new entries; on
+  73508a2's `allocation-diff.sh` 42 are red and 8 are controls that pin behavior it already had; on the
+  fixed script all 50 are green) and `test/allocation-diff.test.mjs` (200 tests; `--self-test` prints
+  "self-test: 76 check(s) ok"). `test/death-signature.test.mjs` lists the new file among the await-free
+  spawnSync files. In `npm test`.

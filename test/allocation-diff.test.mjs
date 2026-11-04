@@ -20,7 +20,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 73;   // self-test ok lines at B2h (src cf5e5a46 / root a84f1607, sha256); a new check moves this literal
+const C = 76;   // self-test ok lines at B2a (src 00ab0dac / root 8e795263, sha256); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ROOTUSER = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -33,10 +33,10 @@ for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'ED
 for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
 const SRC = readFileSync(SCRIPT, 'utf8');
 function count(src, from) { return src.split(from).length - 1; }
-// the MD-33 guard (B2h, root a84f1607 :802 / src :732), one whole line: the B2h mutant deletes exactly it
+// the MD-33 guard (B2h; root 8e795263 :845 / src 00ab0dac :775), one whole line: the B2h mutant deletes exactly it
 const RAWGUARD = '  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"\n';
 
-// The 73 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 76 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ "A1' records: 2",
     /*  2 */ 'A1 records: every',
@@ -111,6 +111,9 @@ const ROW = [null,
     /* 71 */ 'A14(d) refused before',
     /* 72 */ 'A5 retention: 3',
     /* 73 */ 'MD-33 refused before',
+    /* 74 */ 'MD-39 refused before',
+    /* 75 */ 'MD-42 refused before',
+    /* 76 */ 'MD-44 refused before',
 ];
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
@@ -388,7 +391,9 @@ const B2 = [
     ["R8", [72, 55], "temp dir not removed",
         [["if [[ -n \\\"\\$T\\\" ]]; then rm -rf \\\"\\$T\\\"; fi; ",
           ""]]],
-    ["N1", [56, 57], "--out report.txt == driver check removed",
+    // N1 (PLAN D1 (2)): row 56 only; row 57's od1 / od3 hard link now reaches MD-37 ("has another hard link") with the
+    // -ef loop gone (C-25: the two back each other up), so row 57 belongs to the N1p pair mutant in NEW
+    ["N1", [56], "--out report.txt == driver check removed",
         [["[[ ! \"$OUT/report.txt\" -ef \"${POS[$i]}\" ]] ||",
           "true ||"]]],
     ["N2", [33, 55], "bare mktemp -d",
@@ -398,7 +403,7 @@ const B2 = [
         [["[[ \"$TB\" == /* ]] || TB=\"$PWD/$TB\"",
           "true"]]],
     ["P1", [58], "node not made absolute (A13 fix reverted)",
-        [["NODE_BIN=\"$(cd \"$(dirname \"$NODE_RES\")\" && pwd)/$(basename \"$NODE_RES\")\"",
+        [["NODE_BIN=\"${NODE_DIR%/}/$(basename -- \"$NODE_RES\")\"",
           "NODE_BIN=\"$NODE_RES\""]]],
     ["H1", [59], "-h states default 3",
         [["node runs per side, 2..20 (default 5)",
@@ -428,7 +433,7 @@ const B2 = [
         [["    *predictable-gc-schedule*)\n",
           "    *predictable-gc-schedulex*)\n"]]],
     ["F8", [68, 71], "non-flag accepted",
-        [["[[ \"$f\" == --* ]] || die",
+        [["[[ \"$f\" == --[A-Za-z]* ]] || die",
           "[[ \"$f\" == * ]] || die"]]],
     ["F9", [69], "no did-you-mean hint",
         [["die \"unknown option $a$(hint \"$a\") (see --help)\"",
@@ -436,14 +441,15 @@ const B2 = [
     ["F10", [70], "newline in --out accepted",
         [["[[ \"$V8FLAGS$OUT$NODE_BIN\" != *",
           "[[ \"$V8FLAGS$NODE_BIN\" != *"]]],
-    ["D1", [71], "--require / --import accepted",
-        [["    --require|--require=*|--import|--import=*)\n",
+    // D1-D3 re-pinned (PLAN D2-6 / MD-43): the one widened prefix arm; D3's old "prefix refusal" is now the design
+    ["D1", [71, 75], "--require / --import accepted",
+        [["    --require*|--import*|--loader*|--experimental-loader*)\n",
           "    --requirex)\n"]]],
-    ["D2", [71], "only the =FILE forms refused",
-        [["    --require|--require=*|--import|--import=*)\n",
-          "    --require=*|--import=*)\n"]]],
-    ["D3", [71], "prefix refusal (--require*)",
-        [["    --require|--require=*|--import|--import=*)\n",
+    ["D2", [71, 75], "only the =FILE forms refused",
+        [["    --require*|--import*|--loader*|--experimental-loader*)\n",
+          "    --require=*|--import=*|--loader=*|--experimental-loader=*)\n"]]],
+    ["D3", [75], "loader globs dropped",
+        [["    --require*|--import*|--loader*|--experimental-loader*)\n",
           "    --require*|--import*)\n"]]],
 ];
 // Plan mutants not in the B2 table: M10 (A13 addendum "M10 in B3 = a 4-stage tr no-op": NUL bytes reach the record awk,
@@ -459,6 +465,25 @@ const NEW = [
     // the guard never gives, so the mutant cannot be killed there (skipped at euid 0)
     ['B2h', [73], 'MD-33 unreadable-raw guard line removed',
         [[RAWGUARD, '']]],
+    // D4 / D5 / D6 (PLAN D1 Other changes, D2-6, D3-1): the MD-39 env-file / config-file arm, the MD-42 module arm cut to
+    // its exact forms, the MD-44 eval / print arm; each is the one check (74 / 75 / 76) that gates its arm
+    ['D4', [74], 'env-file / config-file refusal removed',
+        [["    --env-file*|--experimental-config-file*|--experimental-default-config-file*)\n",
+          "    --env-filex)\n"]]],
+    ['D5', [75], 'exact forms only (no prefix match)',
+        [["    --require*|--import*|--loader*|--experimental-loader*)\n",
+          "    --require|--require=*|--import|--import=*|--loader|--loader=*|--experimental-loader|--experimental-loader=*)\n"]]],
+    ['D6', [76], 'eval / print refusal removed',
+        [["    --eval*|--print*)\n",
+          "    --evalx)\n"]]],
+    // N1p (PLAN D1 (2)): the DRIVER -ef loop AND MD-37 (the hard-link refusal) both dropped. Each alone backs the other
+    // up on row 57 (od1 / od3 share one inode), so only the pair kills it; each half alone surviving row 57 is logged
+    // in the B2b evidence, not gated here.
+    ['N1p', [57], '--out report.txt == driver check AND the hard-link check removed',
+        [["[[ ! \"$OUT/report.txt\" -ef \"${POS[$i]}\" ]] ||",
+          "true ||"],
+         ["[[ ! -e \"$OUT/report.txt\" ]] || { RL=",
+          "true || { RL="]]],
 ];
 const MUTANTS = [...B2, ...NEW];
 const NONROOT = new Set(['B2h']);
@@ -657,8 +682,9 @@ const USAGE = (() => {
 const HELP_LINES = [
     'allocation-diff.sh -- young-generation GC EVENT COUNTS inside a marked window of a driver, DRIVER_BEFORE vs',
     '  -h, --help         this text (exit 2)',
-    '                     absolute path (`command -v`; a function, alias or builtin is refused): the --version probe',
-    '                     DIR/raw must be absent or empty; DIR/report.txt must not be a DRIVER. With or without',
+    '                     absolute path: a bare name through PATH (`command -v`; a function, alias or builtin is',
+    '                     DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;',
+    '                     node options from a file into the measured process), and every --eval* / --print* flag, a',
     '  Each value option is given at most once and never empty; --v8-flags / --out / --node and DRIVER paths take no',
     '  newline. --self-test takes no other argument. --zero / --self-test / --help take no =value. An unknown option',
     '  exits 2 with a did-you-mean hint.',
@@ -705,7 +731,8 @@ test(`allocation-diff -h: revert checks (${HELP_TEETH.map((x) => x[0]).join(', '
 // --- refusal rows: one per -h claim the self-test does not gate (B2 review: "Ungated -h claims"). Each form: exit 2,
 // the exact die line, 0 node spawns (a logging fake node wherever a spawn could happen), 0 mktemp, 0 entries written.
 // [label, fn(script), teeth: [name, edits, needs a non-root user?]]. A row marked CLAIM-MISMATCH asserts the ACTUAL
-// behaviour where it differs from the -h claim (a finding; the script is not changed here).
+// behaviour where it differs from the -h claim (a finding; the script is not changed here). None is left at B2b: the
+// two former ones (an alias holding a /, a dangling --out symlink) are refusal rows with teeth.
 const NL = '\n';
 const RAWMSG = (o) => (ROOTUSER ? `--out: ${o}/raw is not empty (give a new or empty DIR)` : `--out: ${o}/raw is not readable`);
 // raw/ mode 0300 holding driver/run.1.txt ("OLD-RESULT"): the B3 review r1 blocker case
@@ -736,21 +763,15 @@ const RF = [
             refused(g, script, ['--zero', g.z], NOTFILE + "node -> alias node='nodex'", { env: { BASH_ENV: join(g.d, 'benv') } });
         }),
         [['node-path-check-removed', [['[[ "$NODE_RES" == */* ]] || die', 'true || die']]]]],
-    // CLAIM-MISMATCH: -h "a function, alias or builtin is refused". An alias whose value holds a `/` passes the
-    // `*/*` check (`command -v` prints "alias node='<path>'"); the head's cd then fails and the probe runs "/node'":
-    // exit 2 "cannot run /node' --version" (fails closed, 0 node spawns, 0 mktemp), not the function / alias refusal.
-    ['CLAIM-MISMATCH an alias holding a / (alias node=<abs fake node>) -> NOT the alias refusal: exit 2 "cannot run /node\' --version", 0 node spawns, 0 mktemp',
+    // An alias whose value holds a `/` passes the `*/*` check (`command -v` prints "alias node='<path>'"); the
+    // executable-file check (B2a --node entry) refuses it before any spawn (was CLAIM-MISMATCH: "cannot run /node'
+    // --version" after the cd failed).
+    ['an alias holding a / (alias node=<abs fake node>) -> refused before any spawn, "not an executable file: alias node=\'<path>\'"',
         (script) => withRig((g) => {
             writeFileSync(join(g.d, 'benv'), `shopt -s expand_aliases\nalias node='${g.node}'\n`);
-            const b0 = g.ents();
-            const r = g.run(script, ['--zero', g.z], { env: { BASH_ENV: join(g.d, 'benv') } });
-            assert.equal(r.status, 2, r.out);
-            assert.equal(r.stdout, '');
-            assert.ok(r.stderr.endsWith("allocation-diff: cannot run /node' --version\nVERDICT NO-VERDICT\n"), r.stderr);
-            assert.doesNotMatch(r.stderr, /not a file on PATH/);
-            assert.deepEqual([r.argv, r.mk], [[], []]);
-            assert.deepEqual(g.ents(), b0);
-        }), []],
+            refused(g, script, ['--zero', g.z], `node binary is not an executable file: alias node='${g.node}'`, { env: { BASH_ENV: join(g.d, 'benv') } });
+        }),
+        [['node-exec-check-removed', [['[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die', 'true || die']]]]],
     ['--out DIR whose raw is not empty (a file, an empty subdir, a dotfile) or is not a directory -> refused',
         (script) => withRig((g) => {
             const o = (n) => join(g.d, n);
@@ -771,7 +792,8 @@ const RF = [
     // MD-33 (A15 / A16 (a) (c)): an unreadable raw/ is refused before any spawn (the B2h guard), never read as empty by
     // `ls -A ... 2>/dev/null` (the fail-open the B3 review r1 found: raw/ 0300 ran and blanked run.1.txt). Each form: exit
     // 2, `--out: <DIR>/raw is not readable`, 0 spawns, 0 mktemp, raw/ contents unchanged. At euid 0 (which reads and
-    // searches any dir) every form holds an entry and is refused as non-empty instead, as self-test row 73 expects.
+    // searches any dir) every form holds an entry and is refused as non-empty instead, as self-test row 73 expects;
+    // there o8 (a raw/ symlink) reads 'is a symlink' (MD-36, checked right after the readable check, PLAN D2-2).
     ['--out DIR whose raw/ is mode 0300 holding driver/run.1.txt (--zero, diff) -> refused before any spawn, "is not readable", run.1.txt bytes unchanged',
         (script) => withRig((g) => raw0300(g, script)),
         [['raw-readable-check-removed', [[RAWGUARD, '']], true]]],
@@ -783,8 +805,8 @@ const RF = [
             }
             mkdirSync(t8); writeFileSync(join(t8, 'f'), 'F8\n'); mkdirSync(o8); symlinkSync(t8, join(o8, 'raw')); g.chmod(t8, 0o300);
             for (const o of [o6, o7, o8]) {
-                refused(g, script, ['--node', g.node, '--runs', '2', '--out', o, '--zero', g.z], RAWMSG(o));
-                refused(g, script, ['--node', g.node, '--runs', '2', '--out', o, g.a, g.b], RAWMSG(o));
+                refused(g, script, ['--node', g.node, '--runs', '2', '--out', o, '--zero', g.z], (ROOTUSER && o === o8 ? `--out: ${o8}/raw is a symlink (refused: the writes would follow it)` : RAWMSG(o)));
+                refused(g, script, ['--node', g.node, '--runs', '2', '--out', o, g.a, g.b], (ROOTUSER && o === o8 ? `--out: ${o8}/raw is a symlink (refused: the writes would follow it)` : RAWMSG(o)));
             }
             for (const p of [join(o6, 'raw'), join(o7, 'raw'), t8]) chmodSync(p, 0o700);
             assert.deepEqual([readdirSync(join(o6, 'raw')), readdirSync(join(o7, 'raw')), readdirSync(t8)], [['f'], ['f'], ['f']]);
@@ -794,19 +816,16 @@ const RF = [
         [['raw-readable-check-removed', [[RAWGUARD, '']], true],
          ['raw-readable-no-x', [['( -r "$OUT/raw" && -x "$OUT/raw" )', '( -r "$OUT/raw" )']], true],
          ['raw-readable-no-r', [['( -r "$OUT/raw" && -x "$OUT/raw" )', '( -x "$OUT/raw" )']], true]]],
-    // CLAIM-MISMATCH: -h "Every refused argument exits 2 before any node is spawned and before anything is written". A
-    // dangling --out symlink is refused only after the --version spawn and the mktemp ("cannot create"; exit 2, fails
-    // closed, nothing written).
-    ['CLAIM-MISMATCH --out DIR a dangling symlink -> past the refusals (1 spawn + 1 mktemp), "cannot create", nothing written',
+    // A dangling --out symlink: the A8 walk (C-11) stops at the link itself (not a directory) and refuses before any
+    // spawn (was CLAIM-MISMATCH: refused only after the --version spawn and the mktemp).
+    ['--out DIR a dangling symlink -> refused before any spawn, "cannot create <od>/raw/driver (<od> is not a writable directory)", nothing written',
         (script) => withRig((g) => {
             const od = join(g.d, 'od');
             symlinkSync(join(g.d, 'nowhere', 'x'), od);
-            const r = g.run(script, ['--node', g.node, '--runs', '2', '--out', od, '--zero', g.z]);
-            assert.equal(r.status, 2, r.out);
-            assert.equal(r.stderr, `allocation-diff: --out: cannot create ${od}/raw/driver\nVERDICT NO-VERDICT\n`);
-            assert.deepEqual([r.argv, r.mk.length], [['--version'], 1]);
+            refused(g, script, ['--node', g.node, '--runs', '2', '--out', od, '--zero', g.z], `--out: cannot create ${od}/raw/driver (${od} is not a writable directory)`);
             assert.equal(existsSync(join(g.d, 'nowhere')), false);
-        }), []],
+        }),
+        [['out-walk-check-removed', [['[[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die', 'true || die']]]]],
     ['--out DIR that exists and is not a directory (a file, a symlink to a file) -> refused, the file intact',
         (script) => withRig((g) => {
             const f = join(g.d, 'of'); writeFileSync(f, 'OF\n');
@@ -904,15 +923,15 @@ const RF = [
         [['driver-check-removed', [['[[ -f "${POS[$i]}" && -r "${POS[$i]}" ]] || die', 'true || die']]],
          ['driver-check-no-f', [['[[ -f "${POS[$i]}" && -r "${POS[$i]}" ]] ||', '[[ -r "${POS[$i]}" ]] ||']]],
          ['driver-check-no-r', [['[[ -f "${POS[$i]}" && -r "${POS[$i]}" ]] ||', '[[ -f "${POS[$i]}" ]] ||']], true]]],
-    ['node not found (--node <abs missing>, --node <bare missing>, NODE=<bare missing>) -> refused',
+    ['node not found (--node <abs missing>: not an executable file; --node <bare missing>, NODE=<bare missing>: not found) -> refused',
         (script) => withRig((g) => {
             const nope = join(g.d, 'nope', 'node');
-            refused(g, script, ['--node', nope, '--zero', g.z], `node binary not found: ${nope}`);
+            refused(g, script, ['--node', nope, '--zero', g.z], `node binary is not an executable file: ${nope}`);
             refused(g, script, ['--node', 'nosuchnode-ad', g.a, g.b], 'node binary not found: nosuchnode-ad');
             refused(g, script, ['--zero', g.z], 'node binary not found: nosuchnode-ad', { env: { NODE: 'nosuchnode-ad' } });
         }),
-        [['node-not-found-fallback', [['NODE_RES=$(command -v "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"',
-            'NODE_RES=$(command -v "$NODE_BIN" 2>/dev/null) || NODE_RES=$NODE_BIN']]]]],
+        [['node-not-found-fallback', [['NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"',
+            'NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || NODE_RES=$NODE_BIN']]]]],
 ];
 for (const [label, fn, teeth] of RF) {
     test(`allocation-diff refused: ${label}`, { skip }, () => { fn(SCRIPT); });
