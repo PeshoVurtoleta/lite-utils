@@ -12,14 +12,23 @@
 #   --fn LIST          function names, comma separated (required)
 #   --runs N           node runs per side, 2..20 (default 3). Run 1 vs runs 2..N is the null control.
 #   --node BIN         node binary (default: $NODE, else node). Resolved ONCE, from the caller's directory, to an
-#                      absolute path (`command -v`; a function, alias or builtin is refused): the probes and every
-#                      trace run (each in its driver's directory) run that one file, and the header names it.
-#   --v8-flags STR     extra V8 flags for every trace run, split on spaces (flags only, each starting with --).
+#                      absolute path: a bare name through PATH (`command -v`; a function, alias or builtin is
+#                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
+#                      file, else exit 2 before any spawn ("node binary not found", "node binary is not a file on
+#                      PATH (...)", "node binary is not an executable file", "node binary: cannot resolve the
+#                      directory of ..."). The probes and every trace run (each in its driver's directory) run that
+#                      one file, and the header names it.
+#   --v8-flags STR     extra V8 flags for every trace run, split on spaces (flags only, each `--` and a letter).
 #                      Refused, with `_` read as `-`: any *log*, *prof*, *concurrent-recompilation*,
 #                      *interpreted-frames-native-stack* or *snapshot* flag. --no-lazy-feedback-allocation is allowed.
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
-#                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent or empty.
-#                      Without --out the logs go to one private temp dir, removed on every exit.
+#                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent, or an
+#                      empty directory that is readable (and searchable); DIR/report.txt must not be a symlink.
+#                      Known gap (F2): a DIR/raw/<side> that cannot be created (e.g. an absent DIR under an unwritable
+#                      parent, a dangling-symlink DIR, an existing unwritable DIR with a writable report.txt and no
+#                      raw/, an empty raw/ that is readable but not writable, or a symlink to one) is refused only
+#                      AFTER the two probes: exit 2 "--out: cannot create DIR/raw/before and DIR/raw/after", nothing
+#                      written. Without --out the logs go to one private temp dir, removed on every exit.
 #   --self-test        canned checks (--log-ic text through the record awk, judge and diff_fn, then this script end
 #                      to end on a fake node that counts spawns and mktemp calls): one "ok <label>" or
 #                      "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0) or
@@ -27,7 +36,8 @@
 #   -h, --help         this text (exit 2)
 #   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline and
 #   --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value. An
-#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write.
+#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write, except
+#   the F2 --out cases above (exit 2 after the two probes, nothing written).
 #
 # DRIVER: exactly two existing readable files (no newline in the path). Each trace run is
 #   `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE <node> [v8 flags] --log-ic --no-concurrent-recompilation
@@ -108,6 +118,7 @@
 #   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -580,9 +591,10 @@ EOF
   rf "one DRIVER" "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got 1" "$NO" --fn get "$dr/mono/driver.js"
   rf "a log flag in --v8-flags" "--v8-flags must not set --log_ic: the script sets" "$NO" --fn get --v8-flags=--log_ic "$dr/mono/driver.js" "$dr/poly/driver.js"
   rf "a snapshot flag in --v8-flags" "--v8-flags must not set --node-snapshot: the script sets" "$NO" --fn get --v8-flags=--node-snapshot "$dr/mono/driver.js" "$dr/poly/driver.js"
-  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with --), got 'x.js'" "$NO" --fn get --v8-flags=x.js "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a non-flag in --v8-flags" "--v8-flags takes flags only (each starts with -- and a letter), got 'x.js'" "$NO" --fn get --v8-flags=x.js "$dr/mono/driver.js" "$dr/poly/driver.js"
   rf "unknown option" "unknown option --nod (did you mean --node?)" "$NO" --fn get --nod x "$dr/mono/driver.js" "$dr/poly/driver.js"
-  rf "a node binary that does not exist" "node binary not found: ./nonode" --fn get --node ./nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a node binary that does not exist" "node binary is not an executable file: ./nonode" --fn get --node ./nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
+  rf "a bare node name not on PATH" "node binary not found: nonode" --fn get --node nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -635,7 +647,7 @@ done
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
 [[ -z "$V8FLAGS" || ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-  [[ "$f" == --* ]] || die "--v8-flags takes flags only (each starts with --), got '$f'"
+  [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   case "$g" in
     *log*|*prof*|*concurrent-recompilation*|*interpreted-frames-native-stack*|*snapshot*)
@@ -646,20 +658,33 @@ done
 [[ "${POS[0]}${POS[1]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
 [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
 [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
+[[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
+  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
+  [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
 fi
 # resolve the binary ONCE, from the caller's cwd: every spawn (probes and trace runs, each trace run in its driver dir)
-# runs this absolute path, so a relative PATH entry can never pick a different node per cwd
-NODE_RES=$(command -v "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"
+# runs this absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a path
+# (never looked up on PATH): it goes straight to the -f / -x check, so a directory is named as such
+NODE_RES=$NODE_BIN
+if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
-NODE_RES="$(cd "$(dirname "$NODE_RES")" && pwd)/$(basename "$NODE_RES")"
-DRV_B_DIR=$(cd "$(dirname "${POS[0]}")" && pwd); DRV_B_BASE=$(basename "${POS[0]}")
-DRV_A_DIR=$(cd "$(dirname "${POS[1]}")" && pwd); DRV_A_BASE=$(basename "${POS[1]}")
-DESC_B="$DRV_B_DIR/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
-DESC_A="$DRV_A_DIR/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
+[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_C="${NODE_DIR%/}/$(basename -- "$NODE_RES")"   # NODE_BIN keeps the user's name: every spawn runs NODE_RES
+[[ "$NODE_C" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_RES=$NODE_C
+DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
+DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+[[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER (before): cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
+[[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER (after): cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
+DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
+DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
 
 # --- every refusal is above this line; spawns start here: --version, --v8-options, then mktemp / OUT mkdir, the runs ---
 GOT_VER=$("${PROBE_ENV[@]}" "$NODE_RES" --version 2>/dev/null) || die "cannot run $NODE_RES --version"
@@ -676,9 +701,10 @@ V8O_SHA=$(printf '%s\n' "$V8O" | grep -E '^[0-9a-f]{8}$' || true)
 
 trap 'die "interrupted"' INT TERM
 if [[ -n "$OUT" ]]; then
-  mkdir -p "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
-  OUT=$(cd "$OUT" && pwd)
-  REPORT="$OUT/report.txt"; : >"$REPORT"
+  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
+  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one
+  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
   RUNROOT="$OUT/raw"
 else
   # the private log dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $?

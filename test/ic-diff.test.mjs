@@ -18,7 +18,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 64;   // self-test ok lines at 127d991 (src 75922772 / root 7fbb7e4a, plan A10); a new check moves this literal
+const C = 65;   // self-test ok lines at gB B2 (src 54452cab / root 7624c7bc, plan A11); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_COMPILE_CACHE would make the fake nodes exit 7;
@@ -26,7 +26,7 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
 
-// The 64 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 65 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -92,6 +92,7 @@ const ROW = [null,
     /* 62 */ 'refused before any spawn: a non-flag',
     /* 63 */ 'refused before any spawn: unknown',
     /* 64 */ 'refused before any spawn: a node',
+    /* 65 */ 'refused before any spawn: a bare',
 ];
 
 function selfTest(path) {
@@ -333,14 +334,14 @@ const B2 = [
         [["|*interpreted-frames-native-stack*|*snapshot*)",
           "|*interpreted-frames-native-stack*)"]]],
     ["M-r-flag", [62], "non-flag in --v8-flags accepted",
-        [["[[ \"$f\" == --* ]] || die",
+        [["[[ \"$f\" == --[A-Za-z]* ]] || die",
           "true || die"]]],
     ["M-r-unknown", [63], "unknown option ignored",
         [["    -*) die \"unknown option $a$(hint \"$a\") (see --help)\" ;;",
           "    -*) ;;"]]],
-    ["M-r-node", [64], "unresolvable --node accepted as given",
-        [["NODE_RES=$(command -v \"$NODE_BIN\" 2>/dev/null) || die \"node binary not found: $NODE_BIN\"",
-          "NODE_RES=$(command -v \"$NODE_BIN\" 2>/dev/null) || NODE_RES=$NODE_BIN"]]],
+    ["M-r-node", [65], "unresolvable --node accepted as given",
+        [["NODE_RES=$(command -v -- \"$NODE_BIN\" 2>/dev/null) || die \"node binary not found: $NODE_BIN\"",
+          "NODE_RES=$(command -v -- \"$NODE_BIN\" 2>/dev/null) || NODE_RES=$NODE_BIN"]]],
 ];
 // Plan M1-M26 not in the B2 table (A1: M1; A2 addendum: M12; A6 S6: M20 = the guess half of "guess / skip", M4 is the
 // skip half). Designed rows from the ASSERTIONS that name them.
@@ -354,6 +355,11 @@ const NEW = [
     ['M20', [12], 'an unresolved pc guessed as the newest code entry, never X (S6)',
         [['if (!h) { x("unresolved pc (no code-creation holds it: compile cache or user snapshot code?)"); next }',
           'if (!h) h = n']]],
+    // A11: the -f/-x and -ef lines backstop each other on a missing file, so the self-test kills them as a PAIR (each
+    // alone survives; test/ext-audit.test.mjs kills each alone)
+    ['M-r-nodefile', [64], 'a missing slash path passes both the -f/-x and -ef checks',
+        [['[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die', 'true || die'],
+         ['[[ "$NODE_C" -ef "$NODE_RES" ]] || die', 'true || die']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -435,7 +441,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 63 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 64 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -477,7 +483,7 @@ const HELP_HAS = [
     '`v8-opts sha256/8 <x>`', 'env -u NODE_OPTIONS <node> --v8-options | shasum -a 256',
     '--no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>',
     'Tier: on a user driver the verdict is STATISTICAL', '--self-test is DETERMINISTIC',
-    'Not detected: two sites of fn that swap states',
+    'Not detected: two sites of fn that swap states', 'a name with a slash is a path, never looked up on PATH',
 ];
 function assertHelp(script) {
     const h = spawnSync('bash', [script, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV });
@@ -698,7 +704,7 @@ const A4 = [
          ['M12', [['TRACE_FLAGS=(--log-ic --no-concurrent-recompilation --no-node-snapshot)', 'TRACE_FLAGS=(--log-ic --no-concurrent-recompilation)']]],
          ['mktemp-per-run', [['  local -a LF\n', '  local -a LF\n  if [[ -z "$OUT" ]]; then rmdir "$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX")"; fi\n']]]]],
     ['A4 --out: 0 mktemp, exactly 13 files (report.txt + raw/<side>/run.<k>.{log,out}), report holds the verdict', a4Out,
-        [['out-mktemp', [['if [[ -n "$OUT" ]]; then\n  mkdir -p "$OUT/raw/before"', 'if [[ -n "$OUT" ]]; then\n  rmdir "$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX")"\n  mkdir -p "$OUT/raw/before"']]],
+        [['out-mktemp', [['if [[ -n "$OUT" ]]; then\n  mkdir -p -- "$OUT/raw/before"', 'if [[ -n "$OUT" ]]; then\n  rmdir "$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX")"\n  mkdir -p -- "$OUT/raw/before"']]],
          ['M-nomv', [['mv -f "${LF[0]}" "$lf" ||', 'cp "${LF[0]}" "$lf" ||']]]]],
     ['A4 retention: 3 x (SAME / DIFF / NO-VERDICT) + 1 SIGTERM mid-run -> 1 mktemp each, 0 new entries in TMPDIR, cwd, driver dirs', a4Retention,
         // teeth (plan A4): red when the trap's rm is removed
