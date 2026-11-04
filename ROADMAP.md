@@ -117,7 +117,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 ### Phase 3 -- deopt-diff.sh -- G1-G3 DONE, G4 open
 - Status 2026-11-03: G1 + G2 DONE 2026-11-02 (verdict core; ref + file modes; qa APPROVED); G3 DONE 2026-11-03
   (REPORTED tier section per --fn; B1-B4 APPROVED, no qa; commits dc02285 + d22a330); G4 open (B0 fixtures
-  done, commit 5ecd79a; B1-B4 open).
+  done, commit 5ecd79a; B1-B4 open). Status 2026-11-04: unchanged; external-audit fixes to this script
+  landed in 12fa753 (ext-audit group A; not a phase group).
 - `--trace-deopt-verbose` + `--trace-opt` (+ `--no-concurrent-recompilation` by default, as inline diff).
 - Verdict lines: function + deopt reason + deopt kind (eager / lazy / soft) + compile unit; addresses,
   bytecode offsets and pc offsets normalized. Multiset compare; null control; guard.
@@ -127,9 +128,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Controls (S-8): a driver that deopts on a type change after `%OptimizeFunctionOnNextCall` (must DIFF
   against the monomorphic driver) and an identical pair (must SAME).
 
-### Phase 4 -- allocation-diff.sh
-- Status 2026-11-03: G1 B1 DONE (records + judge + run_side; commit 2ed1c33); B1g (guard counter) next; MD-31
-  (P4 A10): default --runs 5, set in B2 (the B1 build still defaults to 3).
+### Phase 4 -- allocation-diff.sh -- G1 B1-B3 DONE, B4 open; G2-G3 open
+- Status 2026-11-04: G1 B1-B3 DONE and committed, no qa: B1 (records + judge + run_side; 2ed1c33), B1g
+  (guard counter; a5fe5d5), B2 (self-test 72 checks, full -h, default --runs 5 per MD-31; 8d0001e), B2h
+  (unreadable --out DIR/raw refused before any spawn; 8070907), B3 (test file, self-test pinned at 73;
+  93906aa). B4 (CHANGELOG entry) open; G2 (ref / file modes) and G3 (live controls + fixtures) open.
 - `--trace-gc` with fixed `--max-semi-space-size` (and `--min-semi-space-size`), driver prints
   `@@LITE-MARK start` / `@@LITE-MARK end` on stdout around the steady-state window (same stream as the GC
   trace, so order holds). Count Scavenge / Mark-Compact lines inside the window.
@@ -138,8 +141,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Docs state S-7 plainly: counts, not bytes; a cold window over-reports.
 - Controls: an allocating loop (must be > 0) and a zero-alloc loop (must be 0) at fixed N.
 
-### Phase 5 -- ic-diff.sh
-- Status 2026-11-03: G1 B1 DONE (records + judge + run_side; commit ea8ef48); B2 (self-test + -h) next.
+### Phase 5 -- ic-diff.sh -- G1 B1-B4 DONE, G2-G4 open
+- Status 2026-11-04: G1 B1-B4 DONE and committed, no qa: B1 (records + judge + run_side; ea8ef48), B2
+  (self-test 64 checks + full -h; 127d991), B3 (test file, self-test pinned at 64; 6a58644), B4
+  (CHANGELOG entries; 1fc4128). G2 (ref / file modes), G3 (REPORTED sections), G4 (natives control
+  pair + fixtures) open.
 - TASK 0 (coder, before any plan): probe node v26.8.2 for `--log-ic` output lines and format; record a
   sample as a fixture. If V8 no longer logs IC transitions in a parseable form, the phase stops and the
   maintainer decides (record in NEXT.md).
