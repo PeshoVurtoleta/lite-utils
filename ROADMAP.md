@@ -154,7 +154,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - REPORTED section (absorbs map diff): deprecated maps, dictionary-mode normalizations
   (`--trace-maps` / `--log-maps`, only the lines that name the function's receiver maps).
 
-### Phase 6 -- docs
+### Phase 6 -- docs (after the Phase 7 audit fixes; D-4)
 - README per the suite blueprint (LiteSepforge spine, adapted: one section per script with usage, verdict,
   tier, controls), `llms.txt`, CHANGELOG entries. Each claim tagged with its tier (S-5).
 - Publish shape (D-1): package.json `files[]` / `bin` / `repository`, drop `"private"`; a test pins
@@ -162,17 +162,30 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   who has never seen the suite: requirements (bash >= 3.2, POSIX awk, node), the three run modes,
   exit codes, and how to copy one script vs install the package.
 
-### Phase 7 -- independent audit (maintainer 2026-11-03: "After Phase 6")
-- After Phase 6, before the 1.0.0 release. Shape (orchestrator proposal; the planner may refine it):
-  (a) one fresh reviewer per shipped script (inlining-budget-diff, bytecode-budget, deopt-diff,
-  allocation-diff, ic-diff) with NO plan or review history -- only the script, its tests, README /
-  llms.txt and real node 26.8.2 runs. Its job is to break it: inputs that give a verdict where they
-  should fail closed, files left behind, gates with no teeth (mutants), and -h / README claims with no
-  gate behind them or no tier.
-  (b) one cross-script reviewer: flags, exit codes, refusal wording, header lines, the shared lib/
-  use, and the docs matching the code across all five.
-  (c) findings go through the normal pipeline (coder -> reviewer); re-audit only what changed; then
-  the release.
+### Phase 7 -- rolling audit, per script, BEFORE Phase 6 (D-4, maintainer 2026-11-04; was "After Phase 6")
+- Order: each script is audited as soon as it is AUDIT-READY, while the others are still being coded.
+  Code only until 1.0.0: no adoption anywhere (consumers such as lite-signal audit the scripts; they do
+  not gate on them). Then audit fixes -> Phase 6 docs -> a confirmation pass (every reproduction.mjs
+  re-run on the release candidate) -> 1.0.0.
+- AUDIT-READY <script> = every planned group for it DONE (engine review APPROVED; qa where its plan has
+  one), every RULED fix for it landed, no known fail-open open, npm test green, and committed by the
+  maintainer. The burst that gets there writes `AUDIT-READY <script> <commit> <sha256/8 of the root
+  script>` in NEXT.md; the orchestrator then pings the maintainer, who starts that script's audit.
+- Auditors: the maintainer, lite-signal (the scripts it chose), the maintainer's reviewers, the
+  orchestrator (triage), and one fresh agent reviewer per script with NO plan or review history (only
+  the script, its tests, -h and real node runs). Once all five are through, one cross-script reviewer:
+  flags, exit codes, refusal wording, header lines, the shared lib/ use.
+- Format (the maintainer's practice): gitignored `audit/<YYYY-MM-DD>-<script>/FINDINGS.md` +
+  `reproduction.mjs`, pinned in its header to the commit + sha256/8 audited. A chain, append-only:
+  the first reviewer audits; each next one reads everything before it, CONFIRMS or REJECTS every
+  finding (a rejection carries its own reproduction), and adds new findings. Every reviewer proposes a
+  fix per finding or endorses an existing proposal. A proposal a reviewer denies STAYS in the file with
+  the denial; nothing is deleted.
+- Validation: every proposal is measured, not argued -- built as a candidate, then reproduction.mjs
+  (the finding must show on the audited build and be gone on the candidate) + full npm test. The
+  maintainer rules between the surviving proposals (Q-ids); the winner goes through the normal
+  pipeline (coder -> reviewer), and its reproduction becomes a test row that fails on the audited
+  build. Re-audit only what changed.
 
 ### Post-1.0 research leads (maintainer 2026-11-03: "Yes, please, add them")
 - These are LEADS, not plans. Each would start with a TASK 0 probe on the node of that day (a flag
@@ -232,3 +245,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-7
   (was 0.1.0; maintainer 2026-11-03; Phase 7 audit added 2026-11-03); every consuming module needs
   all five scripts (inlining-budget-diff + the four S-1 ones).
+- D-4 ANSWERED 2026-11-04: rolling audit. Phase 7 moves BEFORE Phase 6: each script is audited as soon
+  as it is AUDIT-READY (orchestrator pings the maintainer), in the maintainer's chained FINDINGS.md +
+  reproduction.mjs format; every fix proposal is kept and measured by reproduction. Code only until
+  1.0.0, no adoption anywhere. Shape: Phase 7 above.
