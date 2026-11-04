@@ -5,7 +5,7 @@
 // (fake nodes written into a per-row temp dir; no V8 spawn, except the two --self-test rows which use the script's
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh,
-// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests.
+// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests.
 // A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (10 s timeout = red); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
@@ -1017,7 +1017,7 @@ for (const T of TOOLS) {
 // =====================================================================================================================
 // ic block (gB B-ic B3; ORACLE: .handoff/PLAN-ext-audit-gB.md SPEC / TASKS 1-6 / TASK 9 / A1 A3 A4, addenda A7 (MD-34) / A8 / A9):
 // ic-diff.sh from the OUTSIDE, the same classes as the bb / dd rows above (same row ids where the class is the same): dd's driver-mode
-// rows (not N13 / N19b / N19c: ic has no file / ref mode; not the dd walk rows N29-N36: TASK 3 gives ic no walk), plus MD33 (raw/ 0300
+// rows (not N13 / N19b / N19c: ic has no file / ref mode), plus MD33 (raw/ 0300
 // holding keep/, raw/ 0600, raw/ a symlink to a 0300 dir; skip at euid 0), SYM (report.txt symlink: live, dangling relative INSIDE
 // OUT (MD-34 "even inside DIR"), dangling into an existing dir), ALIAS (BASH_ENV `alias node='<abs fake>'`), N37 (A9: no raw `cd:` line)
 // and one A4 retention row. Die texts are the dd / bb texts the plan pastes verbatim into ic (prefix "ic-diff:").
@@ -1025,8 +1025,9 @@ for (const T of TOOLS) {
 // assert the run directory). It logs argv to <its dir>/log; a trace run exits 0 and copies ./ic.log (a mono IC log of get) beside
 // the --logfile, so an accepted run is VERDICT SAME, exit 0. Each fake logs into its OWN directory: "which binary ran" = which log.
 // Spawn counts are the sum of every fake's log lines (probes + trace runs; accepted --runs 3 = 2 + 6 = 8, PLAN A3).
-// FROZEN EXPECTATION (b22-head ic 7fbb7e4a, with live bb c3dc7772 + dd 7cd57a02; PLAN-ext-audit.md A10): of the 44 ic rows exactly 32 red and 12 controls green:
-// B1, B1b --node true, B3 driver, B4B control, N2, N3, N4, N8, N11, N15, N18 (the plan's six + five rows ic already satisfies) + F2 (PLAN A10: raw/ 0500 empty pin, documents ic's OPEN F2 gap, green on frozen and live by design). A hand-fixed ic (plan TASKS 1-6 applied to the frozen text): 44 green.
+// gB B-four ic B3 (PLAN-ext-audit-gB-four-ic.md TASK 6 / A4 / A5; MD-47, MD-49): F2 is CLOSED in ic -- the old F2 pin is re-pinned as N29 (F2 closed), plus the dd walk rows N30-N32, N34-N36 (+ N33 control)
+// and the alloc-style class rows MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok) and one RET row (44 -> 65 ic rows). No DRIVER -ef port in ic (MD-49): no N1p analog, no DRV1 row.
+// FROZEN EXPECTATION (HEAD 5e1f7a8 ic; PLAN-ext-audit-gB-four-ic.md A4): exactly 16 red (N29/F2, N30-N32, N34-N36, MD36a/b/n, MD37a, MD38, ENV, MOD, EVAL, RET) and 49 green (controls incl. N33, MD37c, MOD-r, MOD-ok, EVAL-ep, EVAL-ok). Fixed build: 65 green.
 // =====================================================================================================================
 const IC = join(ROOT, 'ic-diff.sh');
 const ICP = 'ic-diff:';
@@ -1063,7 +1064,7 @@ function icRig() {
 function icRows() {
     const asRoot = !!(process.getuid && process.getuid() === 0);
     const rootSkip = skip || (asRoot ? 'root ignores file modes' : false);
-    // Rows red on the frozen ic stay plain red until the fix (suite convention); the 12 controls (green on the frozen ic) are B1, B1b --node true, B3 driver, B4B control, N2, N3, N4, N8, N11, N15, N18, F2.
+    // Rows red on the frozen ic stay plain red until the fix (suite convention); see the header for the 16 red of the B-four ic batch.
     const icTest = (name, fn, root = false) => test(`ic ${name}`, { skip: root ? rootSkip : skip }, () => { const R = icRig(); try { fn(R); } finally { rmAll(R.S); } });
     const A = (R, args, o = {}) => run(IC, ['--fn', 'get', ...args], { cwd: o.cwd || R.cwd, env: { ...(o.env || R.env), TMPDIR: join(R.S, 'mk') } });
     const D = (a, b = a) => [a, b];
@@ -1081,14 +1082,15 @@ function icRows() {
         const restore = () => { for (const p of locked) { try { chmodSync(p, 0o755); } catch {} } };
         try {
             const c = setup(R, lock);
-            const outLs = readdirSync(c.out).sort().join(',');
+            const lsOut = () => { try { return readdirSync(c.out).sort().join(','); } catch (e) { return `<${e.code}>`; } }; // OUT may be absent / a dangling link / under a file (walk rows)
+            const outLs = lsOut();
             const r = A(R, ['--node', R.fk, '--out', c.out, ...D(R.drv('driver.mjs'))]);
             restore();
             assert.equal(r.status, 2, r.out);
             const want = `${ICP} ${c.text}`;
             assert.equal(r.lines.filter((l) => l === want).length, 1, `exactly one line "${want}"\n${r.out}`);
             zero(R, r);
-            assert.equal(readdirSync(c.out).sort().join(','), outLs, 'OUT listing unchanged (0 bytes written)');
+            assert.equal(lsOut(), outLs, 'OUT listing unchanged (0 bytes written)');
             if (c.check) c.check();
         } finally { restore(); }
     }, root);
@@ -1254,23 +1256,61 @@ function icRows() {
         assert.ok(existsSync(join(o, 'raw', 'before')) && existsSync(join(o, 'raw', 'after')), 'raw/before + raw/after');
         assert.equal(R.spawns().length, 8, R.spawns().join('\n'));
     }, false);
-    // F2 (PLAN A10) pin / control, green on frozen AND live: ic has no dd-style A8 walk, so raw/ 0500 (empty) under a writable OUT is refused only by mkdir -p, AFTER the two probes.
-    // Expected from the spec/engine die text (src/ic-diff.sh: "--out: cannot create DIR/raw/before and DIR/raw/after"): exit 2, one die line, exactly 2 spawns (--version, --v8-options). A walk added to ic makes it 0 spawns = red.
-    icTest('F2 raw/ mode 0500 (empty) under a writable OUT: exit 2, one "--out: cannot create" line, exactly 2 spawns (--version, --v8-options), raw/ empty, no report.txt', (R) => {
-        const o = join(R.S, 'of2'); mkdirSync(join(o, 'raw'), { recursive: true }); chmodSync(join(o, 'raw'), 0o500);
-        try {
-            const r = A(R, ['--node', R.fk, '--out', o, ...D(R.drv('driver.mjs'))]);
-            chmodSync(join(o, 'raw'), 0o755);
-            assert.equal(r.status, 2, r.out);
-            const want = `${ICP} --out: cannot create ${o}/raw/before and ${o}/raw/after`;
-            assert.equal(r.lines.filter((l) => l === want).length, 1, `exactly one line "${want}"\n${r.out}`);
-            assert.equal(r.lines.filter((l) => l.includes('--out: cannot create')).length, 1, r.out);
-            assert.deepEqual(R.spawns().sort(), ['--v8-options', '--version'], `exactly 2 spawns, got:\n${R.spawns().join('\n')}`);
-            assert.deepEqual(readdirSync(join(o, 'raw')), [], 'raw/ still empty');
-            assert.equal(existsSync(join(o, 'report.txt')), false, 'no report.txt');
-            assert.deepEqual(readdirSync(join(R.S, 'mk')), [], '<S>/mk empty');
-        } finally { try { chmodSync(join(o, 'raw'), 0o755); } catch {} }
+    // N29 (F2 closed; PLAN gB-four-ic TASK 6): the former F2 pin. raw/ 0500 (empty) under a writable OUT is now refused by the C-11 walk BEFORE any spawn.
+    // Expected from the spec (dd walk text pasted into ic): exit 2, one WALK(o, o/raw) die, 0 spawns, raw/ empty, no report.txt. Old code: 2 spawns + "cannot create ... raw/before and ... raw/after" without the parenthesis = red.
+    const WALK = (o, x) => `--out: cannot create ${o}/raw/before and ${o}/raw/after (${x} is not a writable directory)`;
+    refused('N29 (F2 closed)', 'raw/ mode 0500 (empty) under a writable OUT: exit 2, "cannot create ... (<OUT>/raw is not a writable directory)", 0 spawns, raw/ empty, no report.txt', true, (R, lock) => {
+        const o = join(R.S, 'of2'); mkdirSync(join(o, 'raw'), { recursive: true }); lock(join(o, 'raw'), 0o500);
+        return { out: o, text: WALK(o, `${o}/raw`), check: () => { assert.deepEqual(readdirSync(join(o, 'raw')), [], 'raw/ still empty'); assert.equal(existsSync(join(o, 'report.txt')), false, 'no report.txt'); } };
+    });
+    // N30-N32, N35, N36 (the dd walk rows, same ids): the walk refuses before any spawn. Mutant notes as in the dd block.
+    refused('N30', 'absent OUT under a 0555 parent: exit 2, "cannot create ... (<parent> is not a writable directory)", 0 spawns, OUT not created', true, (R, lock) => {
+        const ro = join(R.S, 'ro30'); mkdirSync(ro); lock(ro, 0o555);
+        const o = join(ro, 'new');
+        return { out: o, text: WALK(o, ro), check: () => assert.equal(existsSync(o), false, 'OUT not created') };
+    });
+    refused('N31', 'OUT a dangling symlink: exit 2, "cannot create ... (<OUT> is not a writable directory)", 0 spawns, link target not created', false, (R) => {
+        const o = join(R.S, 'dang31'); symlinkSync(join(R.S, 'nowhere31'), o);
+        return { out: o, text: WALK(o, o), check: () => assert.equal(existsSync(join(R.S, 'nowhere31')), false, 'link target not created') };
+    });
+    refused('N32', 'OUT mode 0555 with a writable report.txt, no raw/: exit 2, "cannot create ... (<OUT> is not a writable directory)", 0 spawns, no raw/', true, (R, lock) => {
+        const o = join(R.S, 'o32'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n'); lock(o, 0o555);
+        return { out: o, text: WALK(o, o), check: () => { assert.equal(existsSync(join(o, 'raw')), false, 'no raw/'); keep(join(o, 'report.txt'), 'old\n', 'report.txt'); } };
+    });
+    // N33 control [mutant: immediate parent only]: an absent NESTED OUT (S/new/a/b) and a bare relative `--out o` both succeed.
+    icTest('N33 control: absent nested OUT S/new/a/b and bare relative --out o -> exit 0, report.txt + raw/before + raw/after written', (R) => {
+        const nested = join(R.S, 'new', 'a', 'b');
+        for (const [out, dir] of [[nested, nested], ['o', join(R.cwd, 'o')]]) {
+            const r = A(R, ['--node', R.fk, '--out', out, ...D(R.drv('driver.mjs'))]);
+            assert.equal(r.status, 0, `--out ${out}\n${r.out}`);
+            assert.ok(statSync(join(dir, 'report.txt')).size > 0, `${dir}/report.txt non-empty`);
+            assert.ok(existsSync(join(dir, 'raw', 'before')) && existsSync(join(dir, 'raw', 'after')), `${dir}/raw/before + raw/after`);
+        }
+    });
+    // N34 [mutant: drop `&& U != .` -> infinite loop -> the 10 s timeout reads as red]: cwd mode 0000 + relative `--out o`, locked from INSIDE the spawn (spawnSync cannot chdir into 0000).
+    icTest('N34 cwd mode 0000 + relative --out o: exit 2, "(. is not a writable directory)", 0 spawns, no hang', (R) => {
+        const dv = icDriver(join(R.S, 'drvx', 'driver.mjs'));
+        const args = ['--fn', 'get', '--node', R.fk, '--out', 'o', dv, dv];
+        const r0 = spawnSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, IC, ...args], { encoding: 'utf8', timeout: 10000, env: { ...R.env, TMPDIR: join(R.S, 'mk') } });
+        try { chmodSync(R.cwd, 0o755); } catch {}
+        assert.equal(r0.error, undefined, `no timeout / spawn error: ${r0.error}`);
+        const out = (r0.stdout || '') + (r0.stderr || '');
+        const want = `${ICP} ${WALK('o', '.')}`;
+        assert.equal(r0.status, 2, out);
+        assert.equal(out.split('\n').filter((l) => l === want).length, 1, `exactly one line "${want}"\n${out}`);
+        zero(R, { out });
     }, true);
+    // N35 [mutant: drop `-x U`]: OUT an existing dir of mode 0600 (r/w, no search).
+    refused('N35', 'OUT an existing dir of mode 0600: exit 2, "cannot create ... (<OUT> is not a writable directory)", 0 spawns', true, (R, lock) => {
+        const o = join(R.S, 'o35'); mkdirSync(o); lock(o, 0o600);
+        return { out: o, text: WALK(o, o) };
+    });
+    // N36 [mutant: drop `-d U`]: `--out <S>/fx/o` where fx is a regular 0755 file (the first existing ancestor is not a directory).
+    refused('N36', '--out S/fx/o, fx a regular 0755 file: exit 2, "cannot create ... (<S>/fx is not a writable directory)", 0 spawns', false, (R) => {
+        const fx = join(R.S, 'fx'); writeFileSync(fx, 'x\n'); chmodSync(fx, 0o755);
+        const o = join(fx, 'o');
+        return { out: o, text: WALK(o, fx), check: () => keep(fx, 'x\n', 'fx') };
+    });
     // N19a: `--out -o` is a dash-led OUT: a non-empty ./-o/raw is refused (ls must see ./-o, not an option), x unchanged.
     icTest('N19a driver mode --out -o with ./-o/raw/x present: exit 2, one "./-o/raw is not empty" line, 0 spawns, x unchanged', (R) => {
         mkdirSync(join(R.cwd, '-o', 'raw'), { recursive: true }); writeFileSync(join(R.cwd, '-o', 'raw', 'x'), 'keep\n');
@@ -1412,6 +1452,122 @@ function icRows() {
                 assert.equal(readdirSync(join(R.S, 'elsewhere'), { recursive: true }).sort().join(','), elseLs, `cycle ${c}: elsewhere/ listing changed`);
             }
         } finally { for (const p of locked) { try { chmodSync(p, 0o755); } catch {} } for (const e of readdirSync(R.S)) if (e.startsWith('g-')) for (const x of [join(R.S, e, 'ro'), join(R.S, e, 'o33a', 'raw'), join(R.S, e, 'o33b', 'raw')]) { try { chmodSync(x, 0o755); } catch {} } }
+    });
+
+    // gB B-four ic B3 (PLAN-ext-audit-gB-four-ic.md TASK 6, A4, A5; MD-47, MD-49): the alloc-style refusals ported to ic-diff, same ids as the dd / bb block.
+    // Expected texts = the reference allocation-diff.sh arms with the "ic-diff:" prefix (no DRIVER -ef port in ic: MD-49, so no N1p / DRV1 row).
+    const dieOnce = (r, want, what) => {
+        assert.equal(r.status, 2, `${what}: exit 2\n${r.out}`);
+        assert.equal(r.lines.filter((l) => l === want).length, 1, `${what}: exactly one line "${want}"\n${r.out}`);
+    };
+    const SYML = (o) => `${ICP} --out: ${o}/raw is a symlink (refused: the writes would follow it)`;
+    const HARD = (o) => `${ICP} --out: ${o}/report.txt has another hard link (refused: the write would change that file too)`;
+    const MODT = (f) => `${ICP} --v8-flags must not set ${f}: it loads a module of yours into the measured process (a preload or a module loader)`;
+    const ENVT = (f) => `${ICP} --v8-flags must not set ${f}: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process`;
+    const EVALT = (f) => `${ICP} --v8-flags must not set ${f}: it runs code of yours in the measured process instead of the driver (--eval / --print: node evaluates it and the driver becomes argv), or prints V8 internals into the measured run (V8's --print-* flags)`;
+    const MODS = ['--require=F', '--require', '--import=F', '--import', '--loader=F', '--experimental-loader=F', '--experimental_loader=F', '--require-module'];  // --require-module: the arm is a prefix match (ic self-test check 71); kills the exact-forms mutant M42x
+    const ENVS = ['--env-file=F', '--env-file', '--env_file=F', '--experimental-config-file=F', '--experimental-default-config-file'];
+    const EVALS = ['--eval=1', '--eval', '--print=1', '--print', '--print-opt-code', '--print_opt_code'];
+    const flagArgs = (R, f, d) => ['--node', R.fk, '--v8-flags', f, d, d];
+    const flagRow = (id, desc, flags, textOf) => icTest(`${id} ${desc}`, (R) => {
+        const d = R.drv('driver.mjs');
+        for (const f of flags) {
+            const r = A(R, flagArgs(R, f, d));
+            dieOnce(r, textOf(f), f); zero(R, r);
+        }
+    });
+    const acceptedRow = (id, desc, f) => icTest(`${id} (control) ${desc}: accepted, exit 0, >= 2 spawns`, (R) => {
+        const r = A(R, flagArgs(R, f, R.drv('driver.mjs')));
+        assert.equal(r.status, 0, r.out);
+        assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}\n${r.out}`);
+    });
+    const mkSym = (R, at) => { const o = join(at, 'o'); mkdirSync(join(R.S, 'ext'), { recursive: true }); mkdirSync(o, { recursive: true }); symlinkSync(join(R.S, 'ext'), join(o, 'raw')); return o; };
+    const mkDangling = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); symlinkSync(join(R.S, 'nowhere'), join(o, 'raw')); return o; };
+    const mkHard = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); writeFileSync(join(R.S, 'h'), 'KEEP\n'); linkSync(join(R.S, 'h'), join(o, 'report.txt')); return o; };
+    const outArgs = (R, o, d) => ['--node', R.fk, '--out', o, d, d];
+
+    icTest('MD36a raw/ is a symlink to an EMPTY dir: exit 2, "raw is a symlink", 0 spawns, target stays empty', (R) => {
+        const o = mkSym(R, R.S);
+        const r = A(R, outArgs(R, o, R.drv('driver.mjs')));
+        dieOnce(r, SYML(o), 'MD36a'); zero(R, r);
+        assert.deepEqual(readdirSync(join(R.S, 'ext')), [], 'S/ext stays empty');
+    });
+    icTest('MD36b raw/ is a DANGLING symlink: exit 2, "raw is a symlink", 0 spawns, target not created', (R) => {
+        const o = mkDangling(R, R.S);
+        const r = A(R, outArgs(R, o, R.drv('driver.mjs')));
+        dieOnce(r, SYML(o), 'MD36b'); zero(R, r);
+        assert.equal(existsSync(join(R.S, 'nowhere')), false, 'S/nowhere not created');
+    });
+    // a symlink to a NON-empty dir must read "is a symlink" (not "is not empty"): kills a mutant that moves MD-36 after `ls -A` (P36).
+    icTest('MD36n raw/ is a symlink to a NON-empty dir: exit 2, "raw is a symlink" (not "is not empty"), 0 spawns, file unchanged', (R) => {
+        const o = mkSym(R, R.S);
+        writeFileSync(join(R.S, 'ext', 'x'), 'VICTIM\n');
+        const r = A(R, outArgs(R, o, R.drv('driver.mjs')));
+        dieOnce(r, SYML(o), 'MD36n'); zero(R, r);
+        keep(join(R.S, 'ext', 'x'), 'VICTIM\n', 'S/ext/x');
+        assert.deepEqual(readdirSync(join(R.S, 'ext')), ['x'], 'S/ext holds only x');
+    });
+    icTest('MD37a report.txt has a second hard link S/h ("KEEP"): exit 2, "has another hard link", 0 spawns, S/h unchanged', (R) => {
+        const o = mkHard(R, R.S);
+        const r = A(R, outArgs(R, o, R.drv('driver.mjs')));
+        dieOnce(r, HARD(o), 'MD37a'); zero(R, r);
+        keep(join(R.S, 'h'), 'KEEP\n', 'S/h');
+    });
+    icTest('MD37c (control) report.txt with a single link is accepted: exit 0, >= 2 spawns, no "hard link" line', (R) => {
+        const o = join(R.S, 'o'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n');
+        const r = A(R, outArgs(R, o, R.drv('driver.mjs')));
+        assert.equal(r.status, 0, r.out);
+        assert.ok(!r.out.includes('hard link'), r.out);
+        assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}\n${r.out}`);
+    });
+    // MD38: no --node / NODE; the only node is on PATH in "<S>/p/a<NL>b".
+    icTest('MD38 PATH entry "<S>/p/a<newline>b" holds the node: exit 2, "a newline is not allowed in the resolved path", 0 spawns', (R) => {
+        R.node(`${R.S}/p/a\nb/node`);
+        const env = baseEnv({ PATH: `${R.S}/p/a\nb:/usr/bin:/bin` });
+        const r = A(R, [...D(R.drv('driver.mjs'))], { env });
+        dieOnce(r, `${ICP} node binary: a newline is not allowed in the resolved path`, 'MD38'); zero(R, r);
+    });
+    flagRow('ENV', '--v8-flags env-file / config-file forms: exit 2, the "loads environment variables" die, 0 spawns', ENVS, ENVT);
+    flagRow('MOD', '--v8-flags --require / --import / --loader / --experimental-loader forms (also underscore): exit 2, the "loads a module of yours" die, 0 spawns', MODS, MODT);
+    // MOD-r / EVAL-ep: the letter gate already refuses the short forms (no new arm).
+    flagRow('MOD-r', '(control) --v8-flags -r: refused by the letter gate, 0 spawns', ['-r'], (f) => `${ICP} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
+    acceptedRow('MOD-ok', '--v8-flags --experimental-require-module', '--experimental-require-module');
+    flagRow('EVAL', '--v8-flags --eval / --print / --print-* forms (also underscore): exit 2, the MD-47 "runs code of yours" die, 0 spawns', EVALS, EVALT);
+    flagRow('EVAL-ep', '(control) --v8-flags -e / -p: refused by the letter gate, 0 spawns', ['-e', '-p'], (f) => `${ICP} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
+    acceptedRow('EVAL-ok', '--v8-flags --experimental-print-required-tla', '--experimental-print-required-tla');
+
+    // RET (PLAN A5; red on frozen): 20 cycles of the N31, N36, MD36a, MD36b, MD37a, ENV, MOD, EVAL inputs (+ N29, N30 when not root) with TMPDIR=<S>/tmp:
+    // after every cycle TMPDIR has 0 entries, 0 spawns in total, S/h = "KEEP", S/ext empty, S/nowhere and the N31 / N36 targets absent / unchanged.
+    icTest('RET 20 cycles of the N31 / N36 / MD36a / MD36b / MD37a / ENV / MOD / EVAL (+ N29 / N30 when not root) inputs leave TMPDIR empty, S/ext empty, S/h = KEEP, 0 spawns', (R) => {
+        const tmp = join(R.S, 'tmp'); mkdirSync(tmp);
+        const env = { ...R.env, TMPDIR: tmp };
+        const d = R.drv('driver.mjs');
+        const fx = join(R.S, 'fx'); writeFileSync(fx, 'x\n'); chmodSync(fx, 0o755);
+        const locked = [];
+        try {
+            for (let c = 0; c < 20; c++) {
+                const sub = (n) => { const p = join(R.S, `c${c}-${n}`); mkdirSync(p); return p; };
+                const dang = join(sub('n31'), 'dang'); symlinkSync(join(R.S, 'nowhere31'), dang);
+                const inputs = [
+                    outArgs(R, dang, d), outArgs(R, join(fx, `o${c}`), d),
+                    outArgs(R, mkSym(R, sub('a')), d), outArgs(R, mkDangling(R, sub('b')), d), outArgs(R, mkHard(R, sub('c')), d),
+                    flagArgs(R, '--env-file=F', d), flagArgs(R, '--require=F', d), flagArgs(R, '--eval=1', d),
+                ];
+                if (!asRoot) {
+                    const o29 = join(sub('n29'), 'o'); mkdirSync(join(o29, 'raw'), { recursive: true }); chmodSync(join(o29, 'raw'), 0o500); locked.push(join(o29, 'raw'));
+                    const ro = sub('n30'); chmodSync(ro, 0o555); locked.push(ro);
+                    inputs.push(outArgs(R, o29, d), outArgs(R, join(ro, 'new'), d));
+                }
+                for (const a of inputs) assert.equal(run(IC, ['--fn', 'get', ...a], { cwd: R.cwd, env }).status, 2, `cycle ${c}: exit 2 for ${a.join(' ')}`);
+                for (const p of locked.splice(0)) chmodSync(p, 0o755);
+                assert.deepEqual(readdirSync(tmp), [], `cycle ${c}: TMPDIR holds entries`);
+                assert.deepEqual(readdirSync(join(R.S, 'ext')), [], `cycle ${c}: S/ext not empty`);
+                keep(join(R.S, 'h'), 'KEEP\n', `cycle ${c}: S/h`);
+                keep(fx, 'x\n', `cycle ${c}: fx`);
+                assert.equal(existsSync(join(R.S, 'nowhere')) || existsSync(join(R.S, 'nowhere31')), false, `cycle ${c}: symlink target created`);
+                assert.equal(R.spawns().length, 0, `cycle ${c}: 0 spawns, got:\n${R.spawns().join('\n')}`);
+            }
+        } finally { for (const p of locked) { try { chmodSync(p, 0o755); } catch {} } for (const e of readdirSync(R.S)) if (/^c\d+-n(29|30)$/.test(e)) for (const x of [join(R.S, e), join(R.S, e, 'o', 'raw')]) { try { chmodSync(x, 0o755); } catch {} } }
     });
 }
 icRows();

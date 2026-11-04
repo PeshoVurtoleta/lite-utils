@@ -18,7 +18,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 65;   // self-test ok lines at gB B2 (src 54452cab / root 7624c7bc, plan A11); a new check moves this literal
+const C = 72;   // self-test ok lines at gB B-four ic B1 (src 2b4769ad / root bed42c6e, plan TASK 5); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_COMPILE_CACHE would make the fake nodes exit 7;
@@ -26,7 +26,7 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
 
-// The 65 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 72 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -93,6 +93,13 @@ const ROW = [null,
     /* 63 */ 'refused before any spawn: unknown',
     /* 64 */ 'refused before any spawn: a node',
     /* 65 */ 'refused before any spawn: a bare',
+    /* 66 */ 'refused before any spawn: walk',
+    /* 67 */ 'refused before any spawn: MD-36',
+    /* 68 */ 'refused before any spawn: MD-37',
+    /* 69 */ 'refused before any spawn: MD-38',
+    /* 70 */ 'refused before any spawn: MD-40',
+    /* 71 */ 'refused before any spawn: MD-42',
+    /* 72 */ 'refused before any spawn: MD-44',
 ];
 
 function selfTest(path) {
@@ -360,6 +367,43 @@ const NEW = [
     ['M-r-nodefile', [64], 'a missing slash path passes both the -f/-x and -ef checks',
         [['[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die', 'true || die'],
          ['[[ "$NODE_C" -ef "$NODE_RES" ]] || die', 'true || die']]],
+    // gB B-four ic (.handoff/PLAN-ext-audit-gB-four-ic.md TASK 5 / A2, C-25): the B1 scratch mutants, anchors and edits
+    // copied from .handoff/evidence/ext-audit-b4/ic/mutants/make.py (each measured there at exactly 1 FAILED, on its
+    // row). Not here (survive the self-test, killed in test/ext-audit.test.mjs): M42u, M44u, M-walk-dot, M-walk-x,
+    // M-walk-parent, M-links0; P36 (MD-36 after the ls -A line) kills row 67 there too.
+    ['M-walk', [66], 'walk die: `[[ -d ... -x "$OUT_UP" ]] || die` -> `true || die`',
+        [['  [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create',
+          '  true || die "--out: cannot create']]],
+    ['M-walkL', [66], 'walk loop: `&& ! -L "$OUT_UP"` dropped',
+        [['while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done',
+          'while [[ ! -e "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done']]],
+    ['M-walkd', [66], 'walk check: `-d "$OUT_UP" && ` dropped',
+        [['  [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create',
+          '  [[ -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create']]],
+    ['M36', [67], 'MD-36 line: `[[ ! -L "$OUT/raw" ]] ||` -> `true ||`',
+        [['  [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"\n',
+          '  true || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"\n']]],
+    ['M37', [68], 'MD-37 line: the link test -> `true || die ...`',
+        [['  [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die',
+          '  true || die']]],
+    ['M38', [69], 'MD-38 line -> `true`',
+        [["[[ \"$NODE_RES\" != *$'\\n'* ]] || die \"node binary: a newline is not allowed in the resolved path\"\n",
+          'true\n']]],
+    ['M40', [70], 'env-file arm -> `--env-filex)`',
+        [['    --env-file*|--experimental-config-file*|--experimental-default-config-file*)\n',
+          '    --env-filex)\n']]],
+    ['M42', [71], 'preload arm -> `--requirex)`',
+        [['    --require*|--import*|--loader*|--experimental-loader*)\n',
+          '    --requirex)\n']]],
+    ['M42x', [71], 'preload arm -> exact forms',
+        [['    --require*|--import*|--loader*|--experimental-loader*)\n',
+          '    --require|--require=*|--import|--import=*|--loader|--loader=*|--experimental-loader|--experimental-loader=*)\n']]],
+    ['M44', [72], 'eval arm -> `--evalx)`',
+        [['    --eval*|--print*)\n',
+          '    --evalx)\n']]],
+    ['M44x', [72], 'eval arm -> exact forms `--eval|--eval=*|--print|--print=*)`',
+        [['    --eval*|--print*)\n',
+          '    --eval|--eval=*|--print|--print=*)\n']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -441,7 +485,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 64 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 71 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -484,6 +528,8 @@ const HELP_HAS = [
     '--no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>',
     'Tier: on a user driver the verdict is STATISTICAL', '--self-test is DETERMINISTIC',
     'Not detected: two sites of fn that swap states', 'a name with a slash is a path, never looked up on PATH',
+    '--out: cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is',
+    'node binary: a newline is not allowed in the resolved path',
 ];
 function assertHelp(script) {
     const h = spawnSync('bash', [script, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV });

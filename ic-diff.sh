@@ -16,19 +16,27 @@
 #                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
 #                      file, else exit 2 before any spawn ("node binary not found", "node binary is not a file on
 #                      PATH (...)", "node binary is not an executable file", "node binary: cannot resolve the
-#                      directory of ..."). The probes and every trace run (each in its driver's directory) run that
-#                      one file, and the header names it.
+#                      directory of ...", "node binary: a newline is not allowed in the resolved path"). The probes
+#                      and every trace run (each in its driver's directory) run that one file, and the header names it.
 #   --v8-flags STR     extra V8 flags for every trace run, split on spaces (flags only, each `--` and a letter).
 #                      Refused, with `_` read as `-`: any *log*, *prof*, *concurrent-recompilation*,
-#                      *interpreted-frames-native-stack* or *snapshot* flag. --no-lazy-feedback-allocation is allowed.
+#                      *interpreted-frames-native-stack* or *snapshot* flag, every --require* / --import* / --loader* /
+#                      --experimental-loader* flag, a prefix match (a module of yours, preload or loader, is part of
+#                      the measured process), every --env-file* / --experimental-config-file* /
+#                      --experimental-default-config-file* flag, a prefix match (it loads environment variables or
+#                      node options from a file into the measured process), and every --eval* / --print* flag, a
+#                      prefix match (--eval / --print: node runs that code in the measured process instead of the
+#                      driver, which becomes argv; V8's --print-* flags, e.g. --print-bytecode, print V8 internals
+#                      into the measured run). -r / -e / -p are refused as non-flags. --no-lazy-feedback-allocation
+#                      is allowed.
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
 #                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent, or an
-#                      empty directory that is readable (and searchable); DIR/report.txt must not be a symlink.
-#                      Known gap (F2): a DIR/raw/<side> that cannot be created (e.g. an absent DIR under an unwritable
-#                      parent, a dangling-symlink DIR, an existing unwritable DIR with a writable report.txt and no
-#                      raw/, an empty raw/ that is readable but not writable, or a symlink to one) is refused only
-#                      AFTER the two probes: exit 2 "--out: cannot create DIR/raw/before and DIR/raw/after", nothing
-#                      written. Without --out the logs go to one private temp dir, removed on every exit.
+#                      empty, readable and writable directory that is not a symlink; DIR/report.txt must not be a
+#                      symlink or a file with another hard link. DIR/raw/before and DIR/raw/after must be creatable:
+#                      the first existing path above them must be a writable, searchable directory, else exit 2 before
+#                      any spawn "--out: cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is
+#                      not a writable directory)". Without --out the logs go to one private temp dir, removed on
+#                      every exit.
 #   --self-test        canned checks (--log-ic text through the record awk, judge and diff_fn, then this script end
 #                      to end on a fake node that counts spawns and mktemp calls): one "ok <label>" or
 #                      "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0) or
@@ -36,8 +44,7 @@
 #   -h, --help         this text (exit 2)
 #   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline and
 #   --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value. An
-#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write, except
-#   the F2 --out cases above (exit 2 after the two probes, nothing written).
+#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write.
 #
 # DRIVER: exactly two existing readable files (no newline in the path). Each trace run is
 #   `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE <node> [v8 flags] --log-ic --no-concurrent-recompilation
@@ -662,6 +669,49 @@ EOF
   rf "a node binary that does not exist" "node binary is not an executable file: ./nonode" --fn get --node ./nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
   rf "a bare node name not on PATH" "node binary not found: nonode" --fn get --node nonode "$dr/mono/driver.js" "$dr/poly/driver.js"
 
+  # --- ext-audit B-four ic: the --out walk (C-11), MD-36 / MD-37 / MD-38 and the MD-40 / MD-42 / MD-44 --v8-flags arms;
+  # every input is refused before any spawn: exit 2, 0 spawns, 0 mktemp, the die line once (no input needs file modes) ---
+  rq() { # FRAGMENT -> the count of ic-diff: lines in $d/sp.out holding FRAGMENT
+    grep -F -e "$1" "$d/sp.out" | grep -c '^ic-diff: ' || true
+  }
+  local o="" nl="$d/p/a"$'\n'"b"
+  ln -s "$d/nowhere" "$d/o66"; printf 'x\n' >"$d/fx"; chmod 0755 "$d/fx"
+  o="$(spawn -- "$NO" --fn get --out "$d/o66" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--out: cannot create $d/o66/raw/before and $d/o66/raw/after ($d/o66 is not a writable directory)")"
+  o="$o#$(spawn -- "$NO" --fn get --out "$d/fx/o" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--out: cannot create $d/fx/o/raw/before and $d/fx/o/raw/after ($d/fx is not a writable directory)")"
+  check "refused before any spawn: walk --out DIR a dangling symlink / --out F/o under a regular 0755 file F -> exit 2, 0 spawns, 0 mktemp, 'cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is not a writable directory)'" \
+    "$o" "2|VERDICT NO-VERDICT|0|0|1#2|VERDICT NO-VERDICT|0|0|1"
+  mkdir -p "$d/o67a" "$d/e67" "$d/o67b"; ln -s "$d/e67" "$d/o67a/raw"; ln -s "$d/nowhere" "$d/o67b/raw"
+  o="$(spawn -- "$NO" --fn get --out "$d/o67a" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--out: $d/o67a/raw is a symlink (refused: the writes would follow it)")"
+  o="$o#$(spawn -- "$NO" --fn get --out "$d/o67b" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--out: $d/o67b/raw is a symlink (refused: the writes would follow it)")"
+  check "refused before any spawn: MD-36 --out DIR whose raw/ is a symlink to an empty dir / a dangling symlink -> exit 2, 0 spawns, 0 mktemp, 'is a symlink (refused: the writes would follow it)'" \
+    "$o" "2|VERDICT NO-VERDICT|0|0|1#2|VERDICT NO-VERDICT|0|0|1"
+  mkdir -p "$d/o68"; printf 'KEEP\n' >"$d/o68/report.txt"; ln "$d/o68/report.txt" "$d/h"
+  check "refused before any spawn: MD-37 --out DIR whose report.txt has a second hard link -> exit 2, 0 spawns, 0 mktemp, 'has another hard link (refused: the write would change that file too)', the other name still holds KEEP" \
+    "$(spawn -- "$NO" --fn get --out "$d/o68" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--out: $d/o68/report.txt has another hard link (refused: the write would change that file too)")|$(cat "$d/h")" \
+    "2|VERDICT NO-VERDICT|0|0|1|KEEP"
+  mkdir -p "$nl"; cp "$fk/node" "$nl/node"
+  check "refused before any spawn: MD-38 a PATH entry with a newline mid-name (a fake node copy in it) -> exit 2, 0 spawns, 0 mktemp, 'node binary: a newline is not allowed in the resolved path', 0 lines in the copy's log" \
+    "$(spawn PATH="$nl:$mk:$PATH" -- --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "node binary: a newline is not allowed in the resolved path")|$(cat "$nl/log" 2>/dev/null | wc -l | tr -d ' ')" \
+    "2|VERDICT NO-VERDICT|0|0|1|0"
+  o=""
+  for x in --env-file=F --env_file=F --env-file-if-exists=F --experimental-config-file=F --experimental-default-config-file=F; do
+    o="$o#$(spawn -- "$NO" --fn get "--v8-flags=--no-lazy-feedback-allocation $x" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--v8-flags must not set $x: it loads environment variables or node options from a file")"
+  done
+  check "refused before any spawn: MD-40 --v8-flags --env-file=F / --env_file=F / --env-file-if-exists=F / --experimental-config-file=F / --experimental-default-config-file=F (environment or node options loaded from a file) -> exit 2, 0 spawns, 0 mktemp" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3 4 5)"
+  o=""
+  for x in --loader=F --loader --experimental-loader=F --experimental_loader=F --require-module --import=F --require=F; do
+    o="$o#$(spawn -- "$NO" --fn get "--v8-flags=--no-lazy-feedback-allocation $x" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--v8-flags must not set $x: it loads a module of yours into the measured process")"
+  done
+  check "refused before any spawn: MD-42 --v8-flags --loader=F / --loader / --experimental-loader=F / --experimental_loader=F / --require-module / --import=F / --require=F (a module of yours; a prefix match) -> exit 2, 0 spawns, 0 mktemp" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3 4 5 6 7)"
+  o=""
+  for x in --eval=F --eval --print=F --print --print-bytecode; do
+    o="$o#$(spawn -- "$NO" --fn get "--v8-flags=--no-lazy-feedback-allocation $x" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--v8-flags must not set $x: it runs code of yours in the measured process")"
+  done
+  check "refused before any spawn: MD-44 --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns, 0 mktemp" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3 4 5)"
+
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
 }
@@ -722,6 +772,12 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   case "$g" in
     *log*|*prof*|*concurrent-recompilation*|*interpreted-frames-native-stack*|*snapshot*)
       die "--v8-flags must not set $f: the script sets ${TRACE_FLAGS[*]} --logfile itself (no *log*, *prof*, *concurrent-recompilation*, *interpreted-frames-native-stack* or *snapshot* flag)" ;;
+    --require*|--import*|--loader*|--experimental-loader*)
+      die "--v8-flags must not set $f: it loads a module of yours into the measured process (a preload or a module loader)" ;;
+    --env-file*|--experimental-config-file*|--experimental-default-config-file*)
+      die "--v8-flags must not set $f: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process" ;;
+    --eval*|--print*)
+      die "--v8-flags must not set $f: it runs code of yours in the measured process instead of the driver (--eval / --print: node evaluates it and the driver becomes argv), or prints V8 internals into the measured run (V8's --print-* flags)" ;;
   esac
 done
 [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
@@ -733,9 +789,14 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
+  [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
+  [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
+  # the mkdir -p below must succeed: walk up from raw/before to the first path that exists (or is a symlink, or `.`: an unsearchable cwd fails -e) and need a writable, searchable dir there
+  OUT_UP="$OUT/raw/before"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
+  [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/before and $OUT/raw/after ($OUT_UP is not a writable directory)"
 fi
 # resolve the binary ONCE, from the caller's cwd: every spawn (probes and trace runs, each trace run in its driver dir)
 # runs this absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a path
@@ -749,6 +810,7 @@ NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot res
 NODE_C="${NODE_DIR%/}/$(basename -- "$NODE_RES")"   # NODE_BIN keeps the user's name: every spawn runs NODE_RES
 [[ "$NODE_C" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 NODE_RES=$NODE_C
+[[ "$NODE_RES" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
 DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
 [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER (before): cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
