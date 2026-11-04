@@ -18,14 +18,23 @@
 #   --node BIN         node binary (default: $NODE, else node), resolved ONCE to an absolute path from the caller's
 #                      cwd (a bare name through PATH). It must be an executable file, else exit 2 before any node
 #                      spawn ("node binary not found", "node binary is not a file on PATH (...)", "node binary is
-#                      not an executable file", "node binary: cannot resolve the directory of ...").
+#                      not an executable file", "node binary: cannot resolve the directory of ...", "node binary: a
+#                      newline is not allowed in the resolved path").
 #   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-deopt*, *trace-opt* or *concurrent-recompilation* flag (the
-#                      script sets them) and any *trace-file-names* flag (it changes the <JSFunction NAME (sfi = ...)>
-#                      text the records are read from)
+#                      script sets them), any *trace-file-names* flag (it changes the <JSFunction NAME (sfi = ...)>
+#                      text the records are read from), every --require* / --import* / --loader* /
+#                      --experimental-loader* flag, a prefix match (a module of yours, preload or loader, is part of
+#                      the measured process), every --env-file* / --experimental-config-file* /
+#                      --experimental-default-config-file* flag, a prefix match (it loads environment variables or
+#                      node options from a file into the measured process), and every --eval* / --print* flag, a
+#                      prefix match (--eval / --print: node runs that code in the measured process instead of the
+#                      driver, which becomes argv; V8's --print-* flags, e.g. --print-bytecode, print V8 internals
+#                      into the measured run). -r / -e / -p are refused as non-flags
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
 #                      output of run k, addresses kept). DIR/raw must be absent or an empty, readable and writable
-#                      directory; DIR/report.txt must not be a symlink. Without --out nothing is written to disk.
+#                      directory that is not a symlink; DIR/report.txt must not be a symlink or a file with another
+#                      hard link. Without --out nothing is written to disk.
 #                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
 #   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
 #                      sha; never starting with -). Goes with --after-ref.
@@ -1055,6 +1064,38 @@ EOF
       "$g/r14" - --out "$g/r14" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
   fi
 
+  # --- MD-36 / MD-37 (ext-audit B-four dd): --out DIR whose raw/ is a symlink, or whose report.txt has another hard link ---
+  mkdir -p "$d/o36" "$d/e36"; ln -s "$d/e36" "$d/o36/raw"
+  rf "MD-36 --out DIR whose raw/ is a symlink to an empty dir" "/o36/raw is a symlink (refused: the writes would follow it)" \
+    --fn add --out "$d/o36" "$D1" "$D2"
+  mkdir -p "$d/o37"; printf 'KEEP\n' >"$d/o37/report.txt"; ln "$d/o37/report.txt" "$d/h37"
+  rf "MD-37 --out DIR whose report.txt has a second hard link" \
+    "/o37/report.txt has another hard link (refused: the write would change that file too)" --fn add --out "$d/o37" "$D1" "$D2"
+
+  # --- MD-39 (ext-audit A13): a --v8-flags flag that loads environment variables or node options from a file ---
+  local o=""
+  for x in --env-file=F --env_file=F --env-file-if-exists=F --experimental-config-file=F --experimental-default-config-file=F; do
+    o="$o#$(spawn - --fn add "--v8-flags=--allow-natives-syntax $x" "$D1" "$D2")|$(grep -c -F -e "deopt-diff: --v8-flags must not set $x: it loads environment variables or node options from a file" "$d/sp.out" || true)"
+  done
+  check "MD-39 refused before any spawn: --v8-flags --env-file=F / --env_file=F / --env-file-if-exists=F / --experimental-config-file=F / --experimental-default-config-file=F (environment or node options loaded from a file) -> exit 2, 0 spawns" \
+    "$o" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
+
+  # --- MD-42 (ext-audit A15): a --v8-flags flag that loads a module of yours (a prefix match) ---
+  o=""
+  for x in --loader=F --loader --experimental-loader=F --experimental_loader=F --require-module --import=F --require=F; do
+    o="$o#$(spawn - --fn add "--v8-flags=--allow-natives-syntax $x" "$D1" "$D2")|$(grep -c -F -e "deopt-diff: --v8-flags must not set $x: it loads a module of yours into the measured process" "$d/sp.out" || true)"
+  done
+  check "MD-42 refused before any spawn: --v8-flags --loader=F / --loader / --experimental-loader=F / --experimental_loader=F / --require-module / --import=F / --require=F (a module of yours; a prefix match) -> exit 2, 0 spawns" \
+    "$o" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
+
+  # --- MD-44 / MD-47 (ext-audit A17): a --v8-flags flag that runs code of yours in place of the driver, or V8's --print-* ---
+  o=""
+  for x in --eval=F --eval --print=F --print --print-bytecode; do
+    o="$o#$(spawn - --fn add "--v8-flags=--allow-natives-syntax $x" "$D1" "$D2")|$(grep -c -F -e "deopt-diff: --v8-flags must not set $x: it runs code of yours in the measured process" "$d/sp.out" || true)"
+  done
+  check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns" \
+    "$o" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
+
   rm -rf "$d"
   if [[ -n "$old" ]]; then trap -- "$old" EXIT; else trap - EXIT; fi
   echo
@@ -1124,6 +1165,12 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
       die "--v8-flags must not set $f: the script sets --trace-deopt-verbose --trace-opt --no-concurrent-recompilation itself" ;;
     *trace-file-names*)
       die "--v8-flags must not set $f: it changes the <JSFunction NAME (sfi = ...)> text the records are read from" ;;
+    --require*|--import*|--loader*|--experimental-loader*)
+      die "--v8-flags must not set $f: it loads a module of yours into the measured process (a preload or a module loader)" ;;
+    --env-file*|--experimental-config-file*|--experimental-default-config-file*)
+      die "--v8-flags must not set $f: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process" ;;
+    --eval*|--print*)
+      die "--v8-flags must not set $f: it runs code of yours in the measured process instead of the driver (--eval / --print: node evaluates it and the driver becomes argv), or prints V8 internals into the measured run (V8's --print-* flags)" ;;
   esac
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
@@ -1140,9 +1187,11 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
+  [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
+  [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
   # the mkdir -p below must succeed: walk up from raw/before to the first path that exists (or is a symlink, or `.`: an unsearchable cwd fails -e) and need a writable, searchable dir there
   OUT_UP="$OUT/raw/before"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
   [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/before and $OUT/raw/after ($OUT_UP is not a writable directory)"
@@ -1158,6 +1207,7 @@ NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
 NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+[[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 if [[ $STAGED == 0 ]]; then
   DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
   DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")

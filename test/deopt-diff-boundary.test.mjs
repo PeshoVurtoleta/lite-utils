@@ -379,8 +379,9 @@ for (const [label, args, line, teeth] of MORE_BAD) {
 }
 
 // =====================================================================================================================
-// A3 --out: raw/ must be absent or an empty, readable and writable directory, report.txt not a symlink; a refusal
-// spawns nothing and writes nothing (the OUT tree is unchanged)
+// A3 --out (-h, C-13): DIR/raw must be absent or an empty, readable and writable directory that is not a symlink;
+// DIR/report.txt must not be a symlink or a file with another hard link. A refusal spawns nothing and writes nothing
+// (the OUT tree is unchanged)
 // =====================================================================================================================
 function tree(p) {
     if (!existsSync(p)) return 'absent';
@@ -398,15 +399,14 @@ const OUT_BAD = [
         'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']]],
     ['raw is a symlink to a non-empty dir', (o) => {
         mkdirSync(o, { recursive: true }); mkdirSync(join(o, 'elsewhere')); writeFileSync(join(o, 'elsewhere', 'f'), 'y'); symlinkSync('elsewhere', join(o, 'raw'));
-    }, 'is not empty (give a new or empty DIR)', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die']]],
-    // adversarial: a DANGLING raw symlink passes `! -e` (it follows the link) but `ls -A` prints the link itself, so it is
-    // refused before any spawn -- with the misleading reason "is not empty" (QA finding, cosmetic): pin the --out class only
+    }, 'is a symlink (refused: the writes would follow it)', [['[[ ! -L "$OUT/raw" ]] || die', 'true || die']]],
+    // adversarial: a DANGLING raw symlink passes `! -e` (it follows the link). On macOS `ls -A` on a dangling symlink
+    // lists the link name, so without MD-36 a dangling raw/ reads "is not empty"; MD-36, placed before the `ls -A`
+    // test, is what makes it "is a symlink"
     ['raw is a dangling symlink', (o) => { mkdirSync(o, { recursive: true }); symlinkSync('nowhere', join(o, 'raw')); },
-        'deopt-diff: --out: ', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', 'true || die'],
-            // the mkdir walk (gA2 B3) refuses the dangling raw/ too (its nearest -L stop is not a dir): neutralize both guards
-            ['[[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die', 'true || die']],
-        // flip: the mutant reaches the --version probe (1 spawn), then mkdir fails
-        (r) => { assert.equal(r.spawns, 1, r.log.join('\n')); assert.ok(r.log[0].endsWith('|--version'), r.log.join('\n')); }],
+        'is a symlink (refused: the writes would follow it)', [['[[ ! -L "$OUT/raw" ]] || die', 'true || die']],
+        // flip: the MD-36-less mutant still refuses before any spawn, with the old "is not empty" line
+        (r) => { assert.equal(r.spawns, 0, r.log.join('\n')); assert.ok(r.out.includes('is not empty (give a new or empty DIR)'), r.out); }],
     ['OUT is a regular file', (o) => { writeFileSync(o, 'keep'); }, 'exists and is not a directory',
         [['[[ ! -e "$OUT" || -d "$OUT" ]] || die', 'true || die']]],
     ['OUT/raw is a regular file', (o) => { mkdirSync(o, { recursive: true }); writeFileSync(join(o, 'raw'), 'keep'); }, '/raw exists and is not a directory',

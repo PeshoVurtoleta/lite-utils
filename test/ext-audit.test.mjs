@@ -5,7 +5,7 @@
 // (fake nodes written into a per-row temp dir; no V8 spawn, except the two --self-test rows which use the script's
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh,
-// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests.
+// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests.
 // A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (10 s timeout = red); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
@@ -21,7 +21,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, readdirSync, existsSync, statSync, copyFileSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, readdirSync, existsSync, statSync, copyFileSync, realpathSync, symlinkSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -785,6 +785,166 @@ for (const T of TOOLS) {
             assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
         } finally { rmAll(R.S); }
     });
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // gB B-four dd B3 + bb B3 (PLAN-ext-audit-gB-four-dd.md TASK 7 + D1, PLAN-ext-audit-gB-four-bb.md TASK 6; MD-47, MD-48). Both tools:
+    // the alloc-style refusals ported to deopt-diff and bytecode-budget. Expected texts are the reference allocation-diff.sh arms
+    // (MD-36 / MD-37 / MD-38 and the v8-flags arms), prefixed with the tool's own "<label>:" (bb without alloc's "; a --require one ..." clause).
+    // Red on the frozen dd (HEAD 716daa9): MD36a MD36b MD36n MD37a MD38 ENV MOD EVAL RET. Controls (green on frozen): MD37c MOD-r MOD-ok EVAL-ep EVAL-ok.
+    // Red on the frozen bb (HEAD 716daa9 / bb c3dc7772): the same set plus MD38n. MD38n for dd is a control (dd's own --node newline gate).
+    // bb MD-37 carries the MD-48 `-f` guard: a directory report.txt still reads "cannot write" (row M1), not "has another hard link".
+    // bb EVAL uses --print-opt-code (EVALS has no --print-bytecode: bb's own *print-bytecode* refusal fires first).
+    // RET decision (D1-2): RED on frozen (all A4 classes, 0 spawns per refused input), not restricted to already-refused inputs.
+    // ---------------------------------------------------------------------------------------------------------------
+    {
+        const dieOnce = (r, want, what) => {
+            assert.equal(r.status, 2, `${what}: exit 2\n${r.out}`);
+            assert.equal(r.lines.filter((l) => l === want).length, 1, `${what}: exactly one line "${want}"\n${r.out}`);
+        };
+        const SYM = (o) => `${P} --out: ${o}/raw is a symlink (refused: the writes would follow it)`;
+        const HARD = (o) => `${P} --out: ${o}/report.txt has another hard link (refused: the write would change that file too)`;
+        const MODT = (f) => `${P} --v8-flags must not set ${f}: it loads a module of yours into the measured process (a preload or a module loader)`;
+        const ENVT = (f) => `${P} --v8-flags must not set ${f}: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process`;
+        const EVALT = (f) => `${P} --v8-flags must not set ${f}: it runs code of yours in the measured process instead of the driver (--eval / --print: node evaluates it and the driver becomes argv), or prints V8 internals into the measured run (V8's --print-* flags)`;
+        const MODS = ['--require=F', '--require', '--import=F', '--import', '--loader=F', '--experimental-loader=F', '--experimental_loader=F'];
+        const ENVS = ['--env-file=F', '--env-file', '--env_file=F', '--experimental-config-file=F', '--experimental-default-config-file'];
+        const EVALS = ['--eval=1', '--eval', '--print=1', '--print', '--print-opt-code', '--print_opt_code'];
+        const flagArgs = (R, f, d) => ['--fn', 'add', '--node', R.fk, '--v8-flags', f, ...drvArgs(T, d)];
+        const flagRow = (id, desc, flags, textOf) => test(`${k} ${id} ${desc}`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const d = R.drv('driver.mjs');
+                for (const f of flags) {
+                    const r = run(T.script, flagArgs(R, f, d), { cwd: R.cwd, env: R.env });
+                    dieOnce(r, textOf(f), f);
+                    assert.equal(R.spawns().length, 0, `${f}: 0 spawns, got:\n${R.spawns().join('\n')}\n${r.out}`);
+                }
+            } finally { rmAll(R.S); }
+        });
+        const acceptedRow = (id, desc, f) => test(`${k} ${id} (control) ${desc}: accepted, exit 0, >= 2 spawns`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const r = run(T.script, flagArgs(R, f, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                assert.equal(r.status, 0, r.out);
+                assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}\n${r.out}`);
+            } finally { rmAll(R.S); }
+        });
+        // Setup shared by the MD-36 / MD-37 rows and RET: returns the OUT dir `o` (under dir `at`) prepared for the class.
+        const mkSym = (R, at) => { const o = join(at, 'o'); mkdirSync(join(R.S, 'ext'), { recursive: true }); mkdirSync(o, { recursive: true }); symlinkSync(join(R.S, 'ext'), join(o, 'raw')); return o; };
+        const mkDangling = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); symlinkSync(join(R.S, 'nowhere'), join(o, 'raw')); return o; };
+        const mkHard = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); writeFileSync(join(R.S, 'h'), 'KEEP\n'); linkSync(join(R.S, 'h'), join(o, 'report.txt')); return o; };
+        const outArgs = (R, o, d) => ['--fn', 'add', '--node', R.fk, '--out', o, ...drvArgs(T, d)];
+
+        test(`${k} MD36a raw/ is a symlink to an EMPTY dir: exit 2, "raw is a symlink", 0 spawns, target stays empty`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const o = mkSym(R, R.S);
+                const r = run(T.script, outArgs(R, o, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                dieOnce(r, SYM(o), 'MD36a');
+                assert.deepEqual(readdirSync(join(R.S, 'ext')), [], 'S/ext stays empty');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        test(`${k} MD36b raw/ is a DANGLING symlink: exit 2, "raw is a symlink", 0 spawns, target not created`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const o = mkDangling(R, R.S);
+                const r = run(T.script, outArgs(R, o, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                dieOnce(r, SYM(o), 'MD36b');
+                assert.equal(existsSync(join(R.S, 'nowhere')), false, 'S/nowhere not created');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        // D1-1: a symlink to a NON-empty dir must read "is a symlink" (not "is not empty"): kills a mutant that moves MD-36 after `ls -A` (P36).
+        test(`${k} MD36n raw/ is a symlink to a NON-empty dir: exit 2, "raw is a symlink" (not "is not empty"), 0 spawns, file unchanged`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const o = mkSym(R, R.S);
+                writeFileSync(join(R.S, 'ext', 'x'), 'VICTIM\n');
+                const r = run(T.script, outArgs(R, o, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                dieOnce(r, SYM(o), 'MD36n');
+                assert.equal(readFileSync(join(R.S, 'ext', 'x'), 'utf8'), 'VICTIM\n', 'S/ext/x bytes unchanged');
+                assert.deepEqual(readdirSync(join(R.S, 'ext')), ['x'], 'S/ext holds only x');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        test(`${k} MD37a report.txt has a second hard link S/h ("KEEP"): exit 2, "has another hard link", 0 spawns, S/h unchanged`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const o = mkHard(R, R.S);
+                const r = run(T.script, outArgs(R, o, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                dieOnce(r, HARD(o), 'MD37a');
+                assert.equal(readFileSync(join(R.S, 'h'), 'utf8'), 'KEEP\n', 'S/h bytes unchanged');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        test(`${k} MD37c (control) report.txt with a single link is accepted: exit 0, >= 2 spawns, no "hard link" line`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const o = join(R.S, 'o'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n');
+                const r = run(T.script, outArgs(R, o, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                assert.equal(r.status, 0, r.out);
+                assert.ok(!r.out.includes('hard link'), r.out);
+                assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}\n${r.out}`);
+            } finally { rmAll(R.S); }
+        });
+        // MD38: no --node / NODE; the only node is on PATH in "<S>/p/a<NL>b" (--node cannot reach this check: the "--fn / --v8-flags / --out / --node" newline gate refuses it first).
+        test(`${k} MD38 PATH entry "<S>/p/a<newline>b" holds the node: exit 2, "a newline is not allowed in the resolved path", 0 spawns`, { skip }, () => {
+            const R = rig(T);
+            try {
+                mkNode(`${R.S}/p/a\nb/node`, 'nl', R.log, T);
+                const env = baseEnv({ PATH: `${R.S}/p/a\nb:/usr/bin:/bin` });
+                const r = run(T.script, ['--fn', 'add', ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env });
+                dieOnce(r, `${P} node binary: a newline is not allowed in the resolved path`, 'MD38');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        // MD38n: --node "<S>/a<NL>b/node" (an existing fake). bb: MD-38 line (red on the frozen bb). dd: control, dd's own --node newline gate.
+        test(`${k} MD38n --node "<S>/a<newline>b/node": exit 2, ${T.dd ? '(control) the --fn / --v8-flags / --out / --node newline refusal' : '"a newline is not allowed in the resolved path"'}, 0 spawns`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const nd = `${R.S}/a\nb/node`;
+                mkNode(nd, 'nl', R.log, T);
+                const r = run(T.script, ['--fn', 'add', '--node', nd, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
+                dieOnce(r, T.dd ? `${P} --fn / --v8-flags / --out / --node: a newline is not allowed` : `${P} node binary: a newline is not allowed in the resolved path`, 'MD38n');
+                assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        flagRow('ENV', '--v8-flags env-file / config-file forms: exit 2, the "loads environment variables" die, 0 spawns', ENVS, ENVT,);
+        flagRow('MOD', '--v8-flags --require / --import / --loader / --experimental-loader forms (also underscore): exit 2, the "loads a module of yours" die, 0 spawns', MODS, MODT,);
+        // MOD-r / EVAL-ep: the letter gate ("each starts with -- and a letter") already refuses the short forms (no new arm).
+        flagRow('MOD-r', '(control) --v8-flags -r: refused by the letter gate, 0 spawns', ['-r'], (f) => `${P} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
+        acceptedRow('MOD-ok', '--v8-flags --experimental-require-module', '--experimental-require-module');
+        flagRow('EVAL', '--v8-flags --eval / --print / --print-* forms (also underscore): exit 2, the MD-47 "runs code of yours" die, 0 spawns', EVALS, EVALT,);
+        flagRow('EVAL-ep', '(control) --v8-flags -e / -p: refused by the letter gate, 0 spawns', ['-e', '-p'], (f) => `${P} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
+        acceptedRow('EVAL-ok', '--v8-flags --experimental-print-required-tla', '--experimental-print-required-tla');
+
+        // RET (A4 retention, D1-2: red on frozen). 20 cycles of the MD36a / MD36b / MD37a / ENV / MOD / EVAL inputs with TMPDIR=<S>/tmp:
+        // 0 TMPDIR entries after every cycle, S/ext empty, S/h = "KEEP", S/nowhere absent, and 0 spawns in total.
+        test(`${k} RET 20 cycles of the MD36a / MD36b / MD37a / ENV / MOD / EVAL inputs leave TMPDIR empty, S/ext empty, S/h = KEEP, 0 spawns`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const tmp = join(R.S, 'tmp'); mkdirSync(tmp);
+                const env = { ...R.env, TMPDIR: tmp };
+                const d = R.drv('driver.mjs');
+                for (let c = 0; c < 20; c++) {
+                    const sub = (n) => { const p = join(R.S, `c${c}-${n}`); mkdirSync(p); return p; };
+                    const inputs = [
+                        outArgs(R, mkSym(R, sub('a')), d),
+                        outArgs(R, mkDangling(R, sub('b')), d),
+                        outArgs(R, mkHard(R, sub('c')), d),
+                        flagArgs(R, '--env-file=F', d), flagArgs(R, '--require=F', d), flagArgs(R, '--eval=1', d),
+                    ];
+                    for (const a of inputs) assert.equal(run(T.script, a, { cwd: R.cwd, env }).status, 2, `cycle ${c}: exit 2 for ${a.join(' ')}`);
+                    assert.deepEqual(readdirSync(tmp), [], `cycle ${c}: TMPDIR holds entries`);
+                    assert.deepEqual(readdirSync(join(R.S, 'ext')), [], `cycle ${c}: S/ext not empty`);
+                    assert.equal(readFileSync(join(R.S, 'h'), 'utf8'), 'KEEP\n', `cycle ${c}: S/h changed`);
+                    assert.equal(existsSync(join(R.S, 'nowhere')), false, `cycle ${c}: S/nowhere created`);
+                    assert.equal(R.spawns().length, 0, `cycle ${c}: 0 spawns, got:\n${R.spawns().join('\n')}`);
+                }
+            } finally { rmAll(R.S); }
+        });
+    }
 
     // ---------------------------------------------------------------------------------------------------------------
     // A4 retention: 20 cycles of the B1b (x2) / B4B (x4) / M1 / N16 (+ dd N12) + gA2 N20 / N24 / N29 / N31 inputs with TMPDIR=<S>/tmp leave 0 entries after each

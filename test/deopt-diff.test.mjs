@@ -15,7 +15,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 84;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13); a new check moves this literal
+const CHECKS = 89;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
+                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44); a new check moves this literal
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
 const ENV = { ...process.env };
@@ -194,17 +195,38 @@ const TIER_MUTANTS = [
     ['TW6-awk-rc-not-tested', [['if [[ $rc == 0 && -n "$out" ]]; then', 'if [[ -n "$out" ]]; then']], [TR(11)]],
     ['TW7-first-line-test-only', [['[[ "$rest" == *$\'\\n\'* ]] || break;', 'break;']], [TR(12)]],
 ];
+// The B-four dd refusal mutant table (.handoff/PLAN-ext-audit-gB-four-dd.md TASK 5, ASSERTION A2): each of M36, M37, M40,
+// M42, M44 turns the self-test red on EXACTLY its one check (85-89), never another; the edit sites are those of the
+// approved B1 mutants (.handoff/evidence/ext-audit-b4/dd/a2/). M36 / M37 neutralize the MD-36 / MD-37 test; M40 / M42 /
+// M44 delete the env-file / module / eval-print arm of the --v8-flags case.
+const MD39 = '    --env-file*|--experimental-config-file*|--experimental-default-config-file*)\n      die "--v8-flags must not set $f: it loads environment variables or node options from a file (e.g. a NODE_OPTIONS preload) into the measured process" ;;\n';
+const MD42 = '    --require*|--import*|--loader*|--experimental-loader*)\n      die "--v8-flags must not set $f: it loads a module of yours into the measured process (a preload or a module loader)" ;;\n';
+const MD44 = '    --eval*|--print*)\n      die "--v8-flags must not set $f: it runs code of yours in the measured process instead of the driver (--eval / --print: node evaluates it and the driver becomes argv), or prints V8 internals into the measured run (V8\'s --print-* flags)" ;;\n';
+const OUT_MUTANTS = [
+    ['M36-raw-symlink-test-off', [['  [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink', '  true || die "--out: $OUT/raw is a symlink']],
+        ['refused before any spawn: MD-36 --out DIR whose raw/ is a symlink']],
+    ['M37-report-hard-link-test-off', [['[[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die', 'true || die']],
+        ['refused before any spawn: MD-37 --out DIR whose report.txt has a second hard link']],
+    ['M40-env-file-arm-deleted', [[MD39, '']], ['MD-39 refused before any spawn: --v8-flags --env-file=F']],
+    ['M42-module-arm-deleted', [[MD42, '']], ['MD-42 refused before any spawn: --v8-flags --loader=F']],
+    ['M44-eval-print-arm-deleted', [[MD44, '']], ['MD-44 refused before any spawn: --v8-flags --eval=F']],
+];
 // Controls (must SURVIVE: W1 / W2 on the pre-r2 rec() body that swallowed an awk failure -- that is the gap W1 / W2 close)
 const CONTROLS = [
     ['C1-W1-on-old-rec', [W1, [REC_NEW, REC_OLD]]],
     ['C2-W2-on-old-rec', [W2, [REC_NEW, REC_OLD]]],
 ];
 
-// red = exit 1 and the summary line; every designed row is among the FAIL lines (by label prefix)
-function assertKilled(name, r, rows) {
+// red = exit 1 and the summary line; every designed row is among the FAIL lines (by label prefix). exact: the FAIL
+// lines are the designed rows and nothing else ("<rows> check(s) FAILED")
+function assertKilled(name, r, rows, exact = false) {
     assert.equal(r.status, 1, `mutant ${name} survived: ${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
     const fl = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
+    if (exact) {
+        assert.match(r.stdout, new RegExp(`^self-test: ${rows.length} check\\(s\\) FAILED$`, 'm'), `mutant ${name}: not exactly its row(s)\n${fl.join('\n')}`);
+        assert.equal(fl.length, rows.length, `mutant ${name}: ${fl.length} FAIL line(s), designed ${rows.length}\n${fl.join('\n')}`);
+    }
     for (const row of rows) {
         assert.ok(fl.some((l) => l.startsWith('FAIL ' + row)),
             `mutant ${name}: expected a FAIL line starting "${row}"\n${fl.join('\n')}`);
@@ -212,6 +234,7 @@ function assertKilled(name, r, rows) {
 }
 
 assert.equal(MUTANTS.length, 36, 'the mutant table holds the 29 + 7 rows of the plan');
+assert.equal(OUT_MUTANTS.length, 5, 'the B-four dd mutant table holds M36, M37, M40, M42, M44 (TASK 5)');
 assert.equal(TIER_MUTANTS.length, 16, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4))');
 // The mutant self-tests are independent, so they run in parallel (6 at a time) from module load; each test awaits its own.
 let active = 0;
@@ -239,10 +262,11 @@ function launch(name, edits) {
 }
 const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
+const OKILLS = skip ? null : OUT_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const SURV = skip ? null : CONTROLS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
-function killRows(table, kills) { table.forEach(([name, , rows], i) => {
-    test(`deopt-diff --self-test MUST FAIL on mutant ${name}`, { skip }, async () => {
-        assertKilled(name, await kills[i], rows);
+function killRows(table, kills, exact = false) { table.forEach(([name, , rows], i) => {
+    test(`deopt-diff --self-test MUST FAIL on mutant ${name}${exact ? ' (exactly its designed row)' : ''}`, { skip }, async () => {
+        assertKilled(name, await kills[i], rows, exact);
     });
     // revert check: the unmutated script must NOT satisfy the same assertion (one shared baseline run)
     test(`deopt-diff mutant ${name}: revert check (the unmutated run fails the same assertion)`, { skip }, () => {
@@ -251,11 +275,12 @@ function killRows(table, kills) { table.forEach(([name, , rows], i) => {
         for (const row of rows) {
             assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, `prefix "${row}" must match exactly one self-test row`);
         }
-        assert.throws(() => assertKilled(name, base(), rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
+        assert.throws(() => assertKilled(name, base(), rows, exact), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
 }); }
 killRows(MUTANTS, KILLS);
 killRows(TIER_MUTANTS, TKILLS);
+killRows(OUT_MUTANTS, OKILLS, true);
 CONTROLS.forEach(([name], i) => {
     test(`deopt-diff --self-test control ${name} must SURVIVE`, { skip }, async () => {
         const r = await SURV[i];

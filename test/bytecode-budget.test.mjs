@@ -19,7 +19,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 49;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); with --fixtures C + 24 = 73)
+const C = 54;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); with --fixtures C + 24 = 78)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
@@ -114,8 +114,14 @@ const MUTANTS = [
     ['cap-off', ' && length($3) <= 9 {', ' {', 'a length has 1..9 digits'],
     ['cap-8', 'length($3) <= 9', 'length($3) <= 8', 'a length has 1..9 digits'],
     ['cap-10', 'length($3) <= 9', 'length($3) <= 10', 'a length has 1..9 digits'],
+    // ext-audit B-four bb (plan TASK 5 / A2): each kills exactly one of self-test checks 50-54, in order
+    ['M36-raw-symlink-off', '[[ ! -L "$OUT/raw" ]]', 'true', 'MD-36 refused before any spawn', true],
+    ['M37-report-hardlink-off', '[[ ! -f "$OUT/report.txt" ]]', 'true', 'MD-37 refused before any spawn', true],
+    ['M40-env-file-arm-off', '--env-file*|--experimental-config-file*|--experimental-default-config-file*)', '--never-x)', 'MD-39/40 refused before any spawn', true],
+    ['M42-module-arm-off', '--require*|--import*|--loader*|--experimental-loader*)', '--never-x)', 'MD-42 refused before any spawn', true],
+    ['M44-eval-arm-off', '--eval*|--print*)', '--never-x)', 'MD-44 refused before any spawn', true],
 ];
-for (const [name, from, to, failing] of MUTANTS) {
+for (const [name, from, to, failing, exact] of MUTANTS) {
     test(`bytecode-budget --self-test MUST FAIL on mutant ${name}`, { skip }, () => {
         const dir = mkdtempSync(join(tmpdir(), `bb-${name}-`));
         try {
@@ -123,6 +129,10 @@ for (const [name, from, to, failing] of MUTANTS) {
             assert.equal(r.status, 1, `mutant ${name} survived: ${r.stdout}${r.stderr}`);
             assert.ok(r.stdout.split('\n').some((l) => l.startsWith('FAIL ') && l.includes(failing)),
                 `mutant ${name}: expected a FAIL line naming "${failing}"\n${r.stdout}`);
+            if (exact) {
+                assert.match(r.stdout, /^self-test: 1 check\(s\) FAILED$/m, `mutant ${name}: must kill exactly one check\n${r.stdout}`);
+                assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('FAIL ')).length, 1, `mutant ${name}: exactly one FAIL line\n${r.stdout}`);
+            }
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
