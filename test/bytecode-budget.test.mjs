@@ -1,7 +1,7 @@
 // test/bytecode-budget.test.mjs -- ../bytecode-budget.sh: self-test, mutants, gate rows (fake node), live rows.
 // Oracle: .handoff/PLAN-phase2.md ASSERTIONS A2-A5, not the implementation. Expected lengths come from the
 // fixture README census (add 6, mid 211, big 628, read 6,5,6,6, dup 6,19, lazy none), not from a script run.
-import { test, after } from 'node:test';
+import { test, beforeEach, after } from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -9,6 +9,11 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');

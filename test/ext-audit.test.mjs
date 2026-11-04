@@ -18,13 +18,18 @@
 // FROZEN EXPECTATION (b22-head: bb 02e44a7d, dd aab8ae9f; PLAN-ext-audit-gA2 A1): of the 28 gA2 rows (N20-N33) exactly 20 red (bb N20-N26 N28 N29;
 // dd N20-N26 N29-N32) and 8 controls green (bb N27 N30 N31 N32 N33; dd N27 N28 N33); the 74 older rows green. The extended A4 retention rows
 // (N20 / N24 / N29 / N31 inputs added) may go red there: the old code overwrites the victim / target and creates S/elsewhere/nowhere. Live after the fix: all green.
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, readdirSync, existsSync, statSync, copyFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(process.env.EXT_AUDIT_ROOT || join(HERE, '..'));

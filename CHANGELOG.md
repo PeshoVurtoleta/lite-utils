@@ -328,7 +328,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   + 1 files. The header carries `v8-opts sha256/8 <x>` (the hash of the `--v8-options` byte stream),
   REPORTED, never part of the verdict. Tier: on a user driver the verdict is STATISTICAL (IC states
   follow warm-up, GC and tier-up timing; run it under the host quiet lock) and gated nowhere;
-  `--self-test` is DETERMINISTIC. `--self-test` (64 checks, no real node): canned node v26.8.2
+  `--self-test` is DETERMINISTIC. `--self-test` (65 checks, no real node): canned node v26.8.2
   `--log-ic` text through the record awk, judge and diff_fn (records, every X reason, the
   basename-collision and keyed-Symbol rows), then the script end to end on a fake node that counts
   spawns and mktemp calls (spawn budget, exact probe argvs, env stripped on every spawn, 13 files under
@@ -339,8 +339,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `-h`): after a run with != 1 isolate file, those files stay in the run dir and later runs of that side
   count them too (still NO-VERDICT). Not yet in this group: ref / file modes, per-kind IC totals and
   `--deterministic`, the map section (G3), the natives control pair and node fixtures (G4).
-- `test/ic-diff.test.mjs`: `--self-test` exact count (64), an unmodified-copy baseline, a row table
-  that names each printed check, 64 self-test mutant rows (each an exact-once edit of a temp copy
+- `test/ic-diff.test.mjs`: `--self-test` exact count (65), an unmodified-copy baseline, a row table
+  that names each printed check, 65 self-test mutant rows (each an exact-once edit of a temp copy
   that must turn the self-test red on its designed rows, each with a revert check on the unmutated
   copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs, is
   host-semantics and not in the table), the exit wiring (a flipped expectation gives exit 1 and one
@@ -363,6 +363,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--v8-flags`: each flag is `--` and a letter.
 - `test/deopt-diff-boundary.test.mjs`: the A4 parity row no longer pins `bytecode-budget.sh` (it leaves the
   Phase 2 freeze, MD-32 (a)); the `inlining-budget-diff.sh` pin (740da13b) stays.
+- `npm test` runs `test/death-reporter.mjs` on stderr next to spec on stdout. A test-file child that dies prints
+  `FILE DIED <file> exitCode=<x> signal=<y> after=<ms>ms`; a file that dies after a failed subtest (node then hides
+  its exit status) prints `exitCode=unknown signal=unknown`. Ordinary passing or failing tests print nothing. The
+  await-free spawnSync files (`ext-audit`, `build`, `bytecode-budget`, `bytecode-budget-stage`,
+  `bytecode-budget-diff-boundary`, `inlining-budget-diff`) yield in a `beforeEach` so a death names the last test
+  that passed; their test counts are unchanged. Gated in `npm test` by `test/death-signature.test.mjs` (7 tests,
+  DETERMINISTIC).
 
 ### Fixed
 
@@ -424,8 +431,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     logical and physical paths name different files, is refused with 0 spawns;
     `--out` with such a `..` writes into the directory that was checked and the header prints its
     physical path.
-  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (110 tests = 108 rows, `bytecode-budget.sh`
+  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (154 tests in the file, 44 of them the
+  `ic-diff.sh` block below; the bb / dd block is 110 = 108 rows, `bytecode-budget.sh`
   53 / `deopt-diff.sh` 55, plus 2 retention loops; fake nodes, no V8 run; the first 72 rows (bb 35 /
   dd 37) are red on 8070907's scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907
   already had: the controls B4B x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is
   red there). In `npm test`.
+
+- `ic-diff.sh`, external-audit group (exit 2 refusals, all before any node spawn unless a bullet says
+  otherwise; the same classes as the bullet above, plus the node / DRIVER resolution rules). F2 stays
+  OPEN in `ic-diff.sh`: the "F2 closed" wording above covers `bytecode-budget.sh` and `deopt-diff.sh`
+  only.
+  - `CDPATH` is unset at the top of the script, so no `cd X && pwd` join resolves X through a CDPATH
+    entry.
+  - `--v8-flags`: each flag must be `--` and a letter; `---x` and `--=1` are refused ("--v8-flags takes
+    flags only (each starts with -- and a letter), got '---x'").
+  - A dash-led `--out` is a name: `--out -x` writes `<cwd>/-x` (it used to be read as options by mkdir).
+  - DIR/raw must be absent, or an empty directory that is readable (and searchable): an unreadable raw/
+    (0300) used to pass the emptiness test; it is now refused, "--out: <DIR>/raw is not readable".
+  - A `report.txt` that is a symlink is refused (maintainer decision MD-34), with the same message as
+    `bytecode-budget.sh` / `deopt-diff.sh`: "--out: <DIR>/report.txt is a symlink (refused: the write
+    would follow it)". An unwritable `report.txt` (a directory) is refused before any spawn: "--out:
+    cannot write <DIR>/report.txt"; the write at the point of use is now checked too (same message; it
+    used to end "unexpected error (exit 1)" after the two probes), a backstop for a write that races
+    the check.
+  - node resolution: a bare name is looked up on PATH; a name with a slash is a path and is never looked
+    up on PATH (`--node ./node` with node only on PATH: "node binary is not an executable file:
+    ./node"); it must pass `-f` and `-x`, else exit 2 ("node binary not found: <name>" for a bare name
+    not on PATH). A `-` dirname (`--node -/node`) resolves as `./-`. The resolved directory + name must
+    be the same file as the given path (`-ef`): `--node <link>/../node`, where `..` follows a symlink,
+    is refused. The header prints the absolute path.
+  - DRIVER: a dash-led file name reaches node as `./<name>` (unchanged; the header prints
+    `<dir>/-x.js`); `--` is not an end-of-options marker (unchanged; unknown option, exit 2). A DRIVER
+    whose `..` follows a symlink is refused, "DRIVER (before): cannot resolve the directory of <path>
+    (a symlink before '..'?)".
+  - `OUT_L`: raw/, report.txt and the printed `out` line name one directory: the logical path when it
+    is the same directory as the given `--out`, else the physical one. `--out <link>/../outd`, where
+    `..` follows a symlink and an `outd` also exists at the logical path, used to put raw/ in the
+    physical directory and report.txt in the logical one, and printed the logical one.
+  - The header `node`, `before` and `after` paths are joined with `${X%/}`, so a node or DRIVER directly
+    under `/` prints `/<name>`, not `//<name>`; refusal messages still print `--out` as given (`--out
+    DIR/` prints "DIR//raw ...").
+  - F2 stays OPEN: a DIR/raw/<side> that cannot be created (e.g. an absent DIR under an unwritable
+    parent, a dangling-symlink DIR, an existing unwritable DIR with a writable `report.txt` and no
+    raw/, an empty raw/ that is readable but not writable, or a symlink to one) is refused only AFTER
+    the two probes (`--version`, `--v8-options`): exit 2 "--out: cannot create DIR/raw/before and
+    DIR/raw/after", nothing written. The list is not closed (`-h` says the same).
+  Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (the ic block: 44 tests = 43 rows + 1 A4
+  retention loop; fake nodes, no V8 run; on 12fa753's `ic-diff.sh` (7fbb7e4a) 32 are red and 12 are
+  controls that pin behavior it already had, among them the F2 pin row, which is green on both) and
+  `test/ic-diff.test.mjs` (`--self-test` prints "self-test: 65 check(s) ok"; the last two checks are
+  the node refusals "node binary is not an executable file: ./nonode" and "node binary not found:
+  nonode"). In `npm test`.

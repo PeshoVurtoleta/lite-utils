@@ -2,13 +2,18 @@
 // No V8 spawn here (every self-test sub-run passes --node false or a fake node): the real before / after trace runs are STATISTICAL / REPORTED tier and never part of
 // npm test. The self-test runs the script's own awk programs and refusal paths; the must-fail rows prove
 // that it has teeth (each mutant of the script must turn the self-test red).
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'inlining-budget-diff.sh');
 const CHECKS = 43;   // every `check` call in self_test(); a new check moves this literal

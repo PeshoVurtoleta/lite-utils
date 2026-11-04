@@ -6,7 +6,7 @@
   "type": "module",
   "sideEffects": false,
   "scripts": {
-    "test": "node --test --test-reporter=spec 'test/*.test.mjs'",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr 'test/*.test.mjs'",
     "build": "bash build.sh"
   },
   "engines": {

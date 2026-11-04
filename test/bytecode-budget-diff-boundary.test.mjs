@@ -2,7 +2,7 @@
 // Oracle: the Phase 2 group 2a ASSERTIONS A1-A4 + the usage header's diff statements, not the code.
 // Each row is red on the frozen a26e9f15 base (`git show b376a5a:bytecode-budget.sh`, no --diff) or on the
 // mutant it names. The A1 parity rows use that base as the oracle, so they are red on their named mutants.
-import { test, after } from 'node:test';
+import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,11 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');

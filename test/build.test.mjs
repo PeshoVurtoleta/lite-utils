@@ -1,7 +1,7 @@
 // test/build.test.mjs -- build.sh drift gate (A3), fail-closed aborts (A4), determinism / retention (A5).
 // Oracle: the build.sh contract in .handoff/PLAN-phase1.md TASK 3, not the implementation. Every case builds
 // into a temp dir; anything that mutates src/ or lib/ works on a copy of the repo, never the live tree.
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
@@ -10,6 +10,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;

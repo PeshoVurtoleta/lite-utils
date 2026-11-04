@@ -8,7 +8,7 @@
 // if an `import './X'` sibling is absent from its cwd), so the module BYTES decide the verdict:
 // expected values are hand-derived from the fixture contents (r1 = 211, r2 = 212), not from running the script.
 // A5 (self-test counts) rows are at the end of this file (they use the B2 check names).
-import { test, after } from 'node:test';
+import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -16,6 +16,11 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
+// 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
+// test's report, so it would lose the last pass; proven by test/death-signature.test.mjs teeth, b27 u2-instr).
+beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');

@@ -86,7 +86,8 @@ belong here.
 Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, per the suite pipeline.
 
 ### Phase 0 -- scaffold + lock current behavior (cheap win)
-- `package.json` (no dependencies; `scripts.test` = `node --test --test-reporter=spec 'test/*.test.mjs'`;
+- `package.json` (no dependencies; `scripts.test` (2026-11-04, b27 u2: spec on stdout, the death reporter on stderr) =
+  `node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr 'test/*.test.mjs'`;
   `engines.node` >= 22), `LICENSE`, `CHANGELOG.md` ([Unreleased]), `.gitignore` (`/.handoff/`,
   `node_modules/`).
 - Port LiteSignal `test/94-inlining-budget-diff.test.mjs` to `test/inlining-budget-diff.test.mjs`, pointed at
