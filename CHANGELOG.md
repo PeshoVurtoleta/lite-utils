@@ -212,7 +212,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is DETERMINISTIC (canned trace text and a fake node that counts spawns); a verdict on a user
   driver is STATISTICAL (deopts follow tier-up timing; run it under the host quiet lock). Gated in
   `npm test` by `test/deopt-diff.test.mjs` (137 tests; 141 after MD-46, 145 after CI on Linux, 146 after the b38 cap
-  row, 150 after b39 NUL-LEAK): the exact self-test count (89; 92 after MD-46), an unmodified copy outside the repo,
+  row, 150 after b39 NUL-LEAK, 152 after b40 TIMEOUT-ATTRIB):
+  the exact self-test count (89; 92 after MD-46), an unmodified copy outside the repo,
   36 mutants of the script, each of which must turn its own self-test row red (and each with a revert row: the kill
   assertion fails on the unmutated run), 5 more (OUT_MUTANTS M36, M37, M40, M42, M44, the B-four refusals: each
   kills exactly one of checks 85-89, plus a revert row), a 16-row tier mutant table (G1-G6, V1-V3, TW1-TW7: each
@@ -475,12 +476,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   uses it too (cap 120000 ms). A4's 40 sequential spawns now carry a 60000 ms cap each (worst case 40 min per
   row, was 280 min, over the 120-minute job cap). The cap is sized from the 2 logged macOS legs of CI run
   42056284029 only (the whole A4 row took at most 7.7 s there, jobs 127345428176 and 127345428628); the other 6
-  legs' logs were not kept. One new row "run() cap" (50 -> 51 tests).
+  legs' logs were not kept. One new row "run() cap" (50 -> 51 tests; 52 after b40 V8N).
 - STAGE-NITS (burst 39, test side only): `deopt-diff-stage.test.mjs` F_LIVE now asserts the fake node's `./calls` is
   `6` (2R at the default RUNS=3; the probes exit before the counter), which kills the arm-after-counter fake-node
   mutants the old row let pass. The fake-node header comments of `deopt-diff-boundary`, `deopt-diff-stage` and
   `deopt-diff-stage-boundary` now describe the `--v8-options` arm as coded; `bytecode-budget-stage-boundary` row 9
-  names in its failure message whether the 60 s wait ran out or the self-test exited before the SIGINT;
+  names in its failure message whether the 60 s wait ran out or the self-test exited before the SIGINT
+  (reworded in burst 40, STN);
   `bytecode-budget-diff-boundary` has a comment on the A1 parity term. Test titles and counts are unchanged in all
   five files.
 - EA3-NITS (burst 39, comments only): the `ext-audit.test.mjs` MD-51 comment now says the MOD / EVAL refusal rows
@@ -498,7 +500,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   event loop past the async timer. Caps now: the 5 --fixtures runs 780 s, the mutant runs 540 s (3x the
   CI-modelled worst case, the cap rule); each of the 5 runs' rows logs its loop-timed run ms. The real
   durations are UNVERIFIED until the next CI run prints them. Known limit: the timer can still mark such a run
-  timed out (a false red only, never a false pass).
+  timed out (a false red only, never a false pass) (fixed in burst 40, TIMEOUT-ATTRIB).
 - BBA4 (burst 39, test side only): the `bytecode-budget.test.mjs` A4 `--v8-flags` refusal row with `--out` checked
   only `raw/` and `report.txt`; both runs now assert the exact sorted recursive listing of OUT, derived from the
   script's `--out` block: report mode `raw`, `report.txt`; diff mode `raw`, `raw/after`, `raw/before`, `report.txt`
@@ -513,6 +515,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`v8fl_check` moved after the hashed `--v8-options` probe): the self-test fails exactly its designed rows 73 and
   74 (+ revert row). Rig: the fake node exits early on `--v8-options` when `fk/opts_rc` exists; `run()` takes an
   optional node and returns stderr. `ic-diff.sh` unchanged. `ic-diff.test.mjs`: 177 -> 181 tests.
+- TIMEOUT-ATTRIB (burst 40, test side only; not yet confirmed by CI, needs a push): `deopt-diff.test.mjs` `runOne`
+  no longer marks a run as timed out when it exited before its cap timer ran (a run that exits only after the first
+  poll phase past its cap is still killed and marked, with its real exit status). The cap timer now waits one
+  `setImmediate` and kills / marks `timedOut` only if the child's 'exit' has not arrived by then (a flag on 'close'
+  did not work: 'exit' is delivered in the poll phase and 'close' later). That closes the b39 CI-FIX known limit
+  (a run that exited while the loop was blocked could be marked timed out). `timeoutMsg` names its run
+  ("self-test" or "e2e run") and prints "exit status <n>, no signal" when the signal is null. Each mutant MUST FAIL
+  row logs "<name> mutant run: <ms> ms of its <cap> ms cap". New rows: a blocked-loop row (red on HEAD's `runOne`)
+  and a `timeoutMsg` row; the e2e E-row revert checks call `noTimeout` outside `assert.throws`, so a timeout there
+  is red and not a pass; the e2e cap is one const, `E2E_CAP` (60000 ms). `deopt-diff.test.mjs`: 150 -> 152 tests.
+  Known limits: the libuv phase order was run on macOS only (node 26.3.1 and 26.8.2); on Linux (where the b39 rows
+  failed) and on node 22 / 24 it is REASONED, not run; the Linux `ps` path of the new row is not yet confirmed by
+  CI; the row's 1.0 s sleep is fixed, not derived from the cap.
+- V8N (burst 40, test side only; not yet confirmed by CI, needs a push): `test/v8flags.test.mjs` runs the live
+  `node --v8-options` spawn through `liveV8Options(node, cap = LIVE_CAP)`, which refuses a cap that is not a
+  positive integer before any spawn (cap 0 is spawnSync's "no timeout", an unbounded hang that `--test-timeout`
+  cannot interrupt). A hang already failed by name since b39 ("live node --v8-options timed out after <cap> ms
+  (killed by SIGTERM)"); the new "live cap" row pins that message on `liveV8Options`, the helper the live spawn
+  calls.
+  The `run()` ENOENT check now matches the exact WORK path, so a TMPDIR containing a space no longer reads red.
+  `v8flags.test.mjs`: 51 -> 52 tests. Not run: Linux CI, node 22 / 24, the whole file under a spaced TMPDIR.
+- STN (burst 40, test side only): `deopt-diff-stage.test.mjs` F_LIVE title, comment and message now name driver
+  call 3 (node spawn 5; spawns 1-2 are `--version` and `--v8-options`). `bytecode-budget-stage-boundary` row 9
+  `sigCheck` checks `killed` first and names the no-SIGINT cause: the ~60 s wait ran out; exited after the awk
+  shim blocked on "names"; or exited with no ready file (the self-test ended before that call, or the shim guard
+  did not match it). The two exit messages carry the exit code and signal.
+  This replaces the b39 STAGE-NITS wording (which named only the 60 s wait or an early exit before the
+  SIGINT). Pass / fail is unchanged in every state (112 synthetic states
+  compared). One `deopt-diff-stage` title text changed (the row and its teeth twin); counts unchanged
+  (`deopt-diff-stage` 65, `bytecode-budget-stage-boundary` 64). The outside-SIGKILL path to the
+  after-ready arm is coder-run only (6 trials), not reviewer-reproduced.
+- ADV2 (burst 40, test side only): the `allocation-diff.test.mjs` tier mutant V2 now lists its designed rows as
+  36, 71, 77, 78 (was 36, 78), re-derived on a V2 mutant self-test where exactly those 4 rows FAIL (each breaks a
+  spawn count or the spawn log; row 77's log reads `--v8-options` alone). V1 was checked and is unchanged (16, 71,
+  77, 78). Test count unchanged. Not run: V2 on a real Linux host.
 
 ### Changed
 
