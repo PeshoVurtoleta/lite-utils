@@ -18,7 +18,7 @@
 // FROZEN EXPECTATION (b27-head, allocation-diff.sh a84f1607; PLAN A5): every row red except the 8 controls B4B-ok, MD37c, N33, N18,
 // B1, DRV1, MOD-ok, EVAL-ok (flipped to MOD-node / EVAL-node at G5; red on a84f1607). More than one OTHER row green on the frozen script is a planner DELTA, not a reason to change an expectation here.
 // MD-46 G5 (ASSERTIONS A3): on the b35 before build (HEAD 4e364c6) the red set is exactly B4B-ok, B3 -/node, B3 -n/node, B3 -nd, MD37c, N33, B1, MOD-node, EVAL-node, F15 x3, V8-ok, V8R; every other row green. After the B1 build (TASKS 1-4) and G5: all rows green. Rows that need file modes (M1, M1b, N29, N30, N32, N35, N34, and those parts of the A4
-// row) skip at euid 0. N34 hangs on a walk without "!= ." (10 s spawn timeout = red).
+// row) skip at euid 0. N34 hangs on a walk without "!= ." (the 10 s spawn cap fails it by name = red).
 // Mutants this file is designed to kill (PLAN TASK 7): unset CDPATH after the include (B2 self-test), `--*` gate (B4B), no env arm
 // (ENV), no dash guard (B3 -o), no MD-36 (MD36a/b), no SYM (SYM), no write check (M1/M1b), no MD-37 / MD-37 fail-open (MD37a/b), no
 // walk (N29-N32), walk without `!= .` / `-x` / `-d` / `! -L` (N34 / N35 / N36 / N31), no -f/-x (B1b, ALIAS), no node -ef (N14), no `-`
@@ -28,6 +28,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import {
     mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, readdirSync, existsSync, statSync,
     copyFileSync, realpathSync, symlinkSync, linkSync, unlinkSync,
@@ -103,10 +104,10 @@ function rig() {
     const pathOf = (...front) => [...front, join(d, 'mk'), join(d, 'bin'), process.env.PATH].join(':');
     const run = (args, o = {}) => {
         resetLogs();
-        const r = spawnSync(BASH, [o.script || SCRIPT, ...args], {
-            encoding: 'utf8', timeout: 120000, cwd: o.cwd || join(d, 'cwd'),
+        const r = capSync(BASH, [o.script || SCRIPT, ...args], {
+            encoding: 'utf8', cwd: o.cwd || join(d, 'cwd'),
             env: { ...ENV, PATH: pathOf(), TMPDIR: join(d, 'tmp'), ...(o.env || {}) },
-        });
+        }, 120000, 'allocation-diff run');
         const argv = [...fakes].flatMap((fd) => lines(join(fd, 'log')));
         return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', out: (r.stdout || '') + (r.stderr || ''), lines: ((r.stdout || '') + (r.stderr || '')).split('\n'), argv, mk: lines(mkl), error: r.error };
     };
@@ -215,7 +216,7 @@ row('B2 CDPATH=. bash sub/allocation-diff.sh --self-test exits 0', () => {
     try {
         mkdirSync(join(S, 'sub')); copyFileSync(SCRIPT, join(S, 'sub', 'allocation-diff.sh'));
         // cap 480000 (was 300000): CI run 42056284029, this one spawn took 153.8 s (macOS node 26.8.2) / 131.5 s (macOS node 22)
-        const r = spawnSync(BASH, ['sub/allocation-diff.sh', '--self-test'], { encoding: 'utf8', timeout: 480000, cwd: S, env: { ...ENV, CDPATH: '.', TMPDIR: S } });
+        const r = capSync(BASH, ['sub/allocation-diff.sh', '--self-test'], { encoding: 'utf8', cwd: S, env: { ...ENV, CDPATH: '.', TMPDIR: S } }, 480000, 'allocation-diff --self-test (B2)');
         const out = (r.stdout || '') + (r.stderr || '');
         assert.equal(r.status, 0, out.split('\n').slice(-25).join('\n'));
     } finally { rmSync(S, { recursive: true, force: true }); }
@@ -501,14 +502,17 @@ row('N33 control: absent nested OUT S/new/a/b and bare relative --out o -> exit 
         assert.equal(r.mk.length, 1, r.mk.join('\n'));
     }
 });
-// N34 [mutant: walk without `!= .` -> infinite loop -> the 10 s spawn timeout reads as red]: cwd mode 0000 + relative `--out o`. The cwd is locked
+// N34 [mutant: walk without `!= .` -> infinite loop -> the 10 s spawn cap fails the row by name, "N34 run timed out after 10000 ms"]: cwd mode 0000 + relative `--out o`. The cwd is locked
 // from INSIDE the spawn (`cd D && chmod 000 .`), because spawnSync cannot chdir into a 0000 dir.
 row('N34 cwd mode 0000 + relative --out o: exit 2, "(. is not a writable directory)", 0 spawns, no hang', (g) => {
     const args = N(g, '--out', 'o', ...D(g));
     const b0 = g.ents();
-    const r0 = spawnSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', g.cwd, BASH, SCRIPT, ...args],
-        { encoding: 'utf8', timeout: 10000, env: { ...ENV, PATH: g.pathOf(), TMPDIR: join(g.d, 'tmp') } });
-    try { chmodSync(g.cwd, 0o755); } catch { /* restore */ }
+    // the restore runs in finally: capSync throws by name on the cap, and the rig cleanup needs a searchable cwd
+    let r0;
+    try {
+        r0 = capSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', g.cwd, BASH, SCRIPT, ...args],
+            { encoding: 'utf8', env: { ...ENV, PATH: g.pathOf(), TMPDIR: join(g.d, 'tmp') } }, 10000, 'N34 run');
+    } finally { try { chmodSync(g.cwd, 0o755); } catch { /* restore */ } }
     assert.equal(r0.error, undefined, `no timeout / spawn error: ${r0.error}`);
     const out = (r0.stdout || '') + (r0.stderr || '');
     assert.equal(r0.status, 2, out);

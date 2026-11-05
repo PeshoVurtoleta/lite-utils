@@ -14,8 +14,9 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, relative } from 'node:path';
+import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
 const C = 75;   // self-test ok lines at MD-46 G4 B1 ic (src de09b3e3 / root 7c0d3dbf, PLAN-md46 G4 TASK 5); a new check moves this literal
@@ -106,7 +107,7 @@ const ROW = [null,
 ];
 
 function selfTest(path) {
-    return spawnSync('bash', [path, '--self-test'], { encoding: 'utf8', timeout: 300000, env: ENV });
+    return capSync('bash', [path, '--self-test'], { encoding: 'utf8', env: ENV }, 300000, `ic-diff --self-test (${basename(path)})`);
 }
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
 function rowLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL ')); }
@@ -126,15 +127,25 @@ function variant(dir, name, edits) {
 }
 
 // --- row 1: the in-repo script; row 2: an unmodified copy outside the repo (os.tmpdir), the mutants' baseline ---
+// a capped run that threw (timed out / spawn error, by name) is cached as its error: every later row rethrows it at
+// once instead of rerunning a 300 s self-test
 let ROOT = null;
-function root() { if (!ROOT) ROOT = selfTest(SCRIPT); return ROOT; }
+let ROOT_ERR = null;
+function root() {
+    if (ROOT_ERR) throw ROOT_ERR;
+    if (!ROOT) { try { ROOT = selfTest(SCRIPT); } catch (e) { ROOT_ERR = e; throw e; } }
+    return ROOT;
+}
 let BASE = null;
+let BASE_ERR = null;
 let BASE_DIR = null;
 function base() {
     if (BASE) return BASE;
+    if (BASE_ERR) throw BASE_ERR;
     const dir = mkdtempSync(join(tmpdir(), 'icd-base-'));
     BASE_DIR = dir;
     try { BASE = selfTest(variant(dir, 'baseline', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']])); }
+    catch (e) { BASE_ERR = e; throw e; }
     finally { rmSync(dir, { recursive: true, force: true }); }
     return BASE;
 }
@@ -433,8 +444,10 @@ assert.equal(new Set(MUTANTS.map((m) => m[0])).size, MUTANTS.length, 'mutant ids
 // plan TASK 6 (A2 / A6 / A7): M1-M26 all present (M7 also as M7b)
 for (let i = 1; i <= 26; i++) assert.ok(MUTANTS.some((m) => m[0] === `M${i}`), `M${i} is in the table`);
 
-// red = exit 1, the FAILED summary, every designed row among the FAIL lines (by label prefix)
+// red = exit 1, the FAILED summary, every designed row among the FAIL lines (by label prefix). A run its cap killed
+// fails BY NAME first (noTimeout), never as "survived" (status null).
 function assertKilled(name, r, rows) {
+    noTimeout(r, `mutant ${name}: ${r.what}`);
     assert.equal(r.status, 1, `mutant ${name} survived: ${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
     const fl = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
@@ -453,9 +466,12 @@ function runOne(path) {
         const c = spawn('bash', [path, '--self-test'], { env: ENV });
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the self-test's EXIT trap then removes its own mktemp dir
-        const t = setTimeout(() => c.kill('SIGTERM'), 300000);
+        const h = armCap(c, 300000, 'SIGTERM');
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        c.on('close', (status) => { clearTimeout(t); res({ status, stdout: out, stderr: err }); });
+        c.on('close', (status, signal) => {
+            h.clear();
+            res({ status, signal, stdout: out, stderr: err, timedOut: h.timedOut, cap: h.cap, what: `ic-diff --self-test (${basename(path)})` });
+        });
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most PAR dirs
@@ -477,6 +493,7 @@ const EW = [
     ['EWb-summary-ignores-fails', [EW1, ['if [[ $fails -eq 0 && $oks -gt 0 ]]; then', 'if [[ $oks -gt 0 ]]; then']]],
 ];
 function assertWired(r) {
+    noTimeout(r);
     assert.notEqual(r.status, 0, r.stdout + r.stderr);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     const fl = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
@@ -503,7 +520,8 @@ MUTANTS.forEach(([name, rows, desc], i) => {
         assertKilled(name, await kills()[i], rows);
     });
     test(`ic-diff mutant ${name}: revert check (the unmutated copy fails the same kill assertion)`, { skip }, () => {
-        assert.throws(() => assertKilled(name, base(), rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
+        const b = base();
+        assert.throws(() => assertKilled(name, b, rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
 });
 
@@ -511,9 +529,11 @@ test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1,
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
-    assert.throws(() => assertWired(base()), assert.AssertionError);
+    const b = base();
+    assert.throws(() => assertWired(b), assert.AssertionError);
     for (const i of [1, 2]) {
         const r = await wires()[i];
+        noTimeout(r);
         assert.equal(r.status, 0, `${EW[i][0]}: the wiring mutant must exit 0 (else it does not test the wiring)\n${r.stdout}`);
         assert.throws(() => assertWired(r), assert.AssertionError, EW[i][0]);
     }
@@ -559,9 +579,12 @@ const HELP_HAS = [
     '--out: cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is',
     'node binary: a newline is not allowed in the resolved path',
 ];
-function assertHelp(script) {
-    const h = spawnSync('bash', [script, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV });
-    const hh = spawnSync('bash', [script, '--help'], { encoding: 'utf8', timeout: 60000, env: ENV });
+// the two capped runs, made OUTSIDE any assert.throws (a by-name timeout must not read as a kill)
+function helpRuns(script) {
+    return [capSync('bash', [script, '-h'], { encoding: 'utf8', env: ENV }, 60000, `ic-diff -h (${basename(script)})`),
+        capSync('bash', [script, '--help'], { encoding: 'utf8', env: ENV }, 60000, `ic-diff --help (${basename(script)})`)];
+}
+function assertHelp([h, hh]) {
     assert.equal(h.status, 2, h.stdout + h.stderr);
     assert.equal(hh.status, 2, hh.stdout + hh.stderr);
     assert.equal(h.stderr, '');
@@ -573,14 +596,15 @@ function assertHelp(script) {
     assert.doesNotMatch(h.stdout, /^VERDICT /m);
 }
 test('ic-diff -h / --help: exit 2, the usage on stdout (stderr empty), key lines, every X and NO-VERDICT reason', { skip }, () => {
-    assertHelp(SCRIPT);
+    assertHelp(helpRuns(SCRIPT));
 });
 test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row', { skip }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'icd-h-'));
     try {
         for (const [n, to] of [['h-exit0', 'usage; exit 0 ;;'], ['h-stderr', 'usage >&2; exit 2 ;;']]) {
             const p = variant(dir, n, [['usage; exit 2 ;;', to]]);   // outside throws: a bad anchor is a row error, never a kill
-            assert.throws(() => assertHelp(p), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+            const hr = helpRuns(p);
+            assert.throws(() => assertHelp(hr), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
         }
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -593,6 +617,10 @@ test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row'
 // whose name does not start with '-' as node would read it, copy ./ic.log to isolate-0x1000-<pid>-<basename of
 // --logfile> beside the --logfile path, ./term -> SIGTERM to its parent (the script), exit ./rc or 0. Canned log:
 // node v26.8.2 lines (recheck2 mono capture, path shortened), get's LoadIC site final 1 (mono) or 1 then P (poly).
+// the capped A4 run's name: a revert check runs fn(p) INSIDE assert.throws (each fn interleaves runs and asserts), so its
+// predicate rethrows this run's by-name timeout / spawn error instead of counting it as a kill (capSync's two messages)
+const A4_RUN = 'ic-diff A4 run';
+function capErr(e) { return e instanceof Error && (e.message.startsWith(`${A4_RUN} timed out after `) || e.message.startsWith(`${A4_RUN} spawn error `)); }
 const V8V = 'v8-version,14,6,202,34,-node.28,0';
 const CC_GET = 'code-creation,JS,10,98536,0x3bcd762b6930,5,get file:///w/drv.js:2:13,0x29a78805a970,~';
 const L01 = 'LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,';
@@ -640,10 +668,10 @@ function rig() {
     // NODE = the --node value (default: the fake's absolute path)
     const run = (script, args, node = join(fk, 'node')) => {
         writeFileSync(join(fk, 'log'), ''); writeFileSync(join(d, 'mk.log'), '');
-        const r = spawnSync('bash', [script, '--node', node, ...args], {
-            encoding: 'utf8', timeout: 120000, cwd: join(d, 'cwd'),
+        const r = capSync('bash', [script, '--node', node, ...args], {
+            encoding: 'utf8', cwd: join(d, 'cwd'),
             env: { ...ENV, PATH: mk + ':' + process.env.PATH, TMPDIR: join(d, 'tmp'), NODE_OPTIONS: '--st-probe', NODE_COMPILE_CACHE: join(d, 'cc') },
-        });
+        }, 120000, A4_RUN);
         const lines = (f) => readFileSync(f, 'utf8').split('\n').filter(Boolean);
         return { status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, stderr: r.stderr, argv: lines(join(fk, 'log')), mk: lines(join(d, 'mk.log')) };
     };
@@ -836,7 +864,7 @@ for (const [label, fn, teeth] of A4) {
         try {
             for (const [n, edits] of teeth) {
                 const p = variant(dir, n, edits);   // outside throws: a bad anchor is a row error, never a kill
-                assert.throws(() => fn(p), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, `teeth ${n}`);
+                assert.throws(() => fn(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, `teeth ${n}`);
             }
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
