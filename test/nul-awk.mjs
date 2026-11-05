@@ -22,9 +22,36 @@
 //                             Test-only: it lets a macOS run pin the probe's NUL-clean branch and the shim on top of a
 //                             NUL-clean awk (the Linux case). A real 0xFF byte in the input would read as a NUL.
 // Needs perl (Essential on Debian / Ubuntu as perl-base; /usr/bin/perl on macOS); absent -> throws (fail closed).
+// nulTmpDir(prefix)        -> a fresh mkdtemp dir under os.tmpdir() (the shim dir of a test file), removed on 'exit' AND
+//                             on SIGINT / SIGTERM (b39 NL: 'exit' never fires on a default-action signal, so a killed test
+//                             process leaked one dd-nul-* / ad-nul-* dir). On the signal: its own signal listeners come off
+//                             first (so the re-raise cannot loop back into this handler; any OTHER SIGINT / SIGTERM listener
+//                             would see the signal twice and decide the exit -- none exists today), the dir is removed (rm
+//                             force: idempotent; a failed rm still re-raises), then the SAME signal is re-raised at this
+//                             process, so it still dies by that signal (status null, signal SIGINT / SIGTERM, as with no
+//                             listener at all).
+//                             LIMIT: the handler runs only when the process next yields to the event loop (after every
+//                             spawnSync in the current synchronous turn; under node --test the runner may exit first and the
+//                             file runs on until then); SIGKILL is never cleaned.
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, chmodSync, realpathSync, existsSync } from 'node:fs';
+import { writeFileSync, chmodSync, realpathSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+const NUL_SIGNALS = ['SIGINT', 'SIGTERM'];
+export function nulTmpDir(prefix) {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    const rm = () => rmSync(dir, { recursive: true, force: true });
+    const onSignal = (sig) => {
+        for (const s of NUL_SIGNALS) process.removeListener(s, onSignal);
+        process.removeListener('exit', rm);
+        try { rm(); } catch { /* the re-raise below must still happen */ }
+        process.kill(process.pid, sig);
+    };
+    process.on('exit', rm);
+    for (const s of NUL_SIGNALS) process.on(s, onSignal);
+    return dir;
+}
 
 // the absolute path of the FILE `name` on pathVar (bash `type -P`: never a function, alias or builtin), or ''
 export function whichOn(name, pathVar, env = process.env) {

@@ -9,11 +9,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { probeAwk, buildNulCutAwk, buildNulCleanAwk } from './nul-awk.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
 const CHECKS = 92;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
@@ -34,8 +34,8 @@ for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k
 // control row runs the UNMUTATED self-test under it, and the pin rows below test it (test/nul-awk.mjs).
 const NUL_MUTANTS = new Set(['T1-tr-replaced-by-cat', 'Rf-tr-after-awk']);
 const NUL = skip ? null : probeAwk(ENV);
-const NULDIR = skip ? null : mkdtempSync(join(tmpdir(), 'dd-nul-'));
-if (NULDIR) process.on('exit', () => rmSync(NULDIR, { recursive: true, force: true }));
+// b39 NL: nulTmpDir removes it on exit AND on SIGINT / SIGTERM (then re-raises), so a killed run leaks no dd-nul-* dir
+const NULDIR = skip ? null : nulTmpDir('dd-nul-');
 const NULSHIM = skip ? null : buildNulCutAwk(NULDIR, ENV);
 const NULENV = skip ? null : { ...ENV, PATH: NULSHIM.dir + ':' + ENV.PATH };
 const envFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULENV : ENV);
@@ -293,7 +293,12 @@ let active = 0;
 const waiting = [];
 function gate() { return new Promise((res) => { const go = () => { active++; res(); }; if (active < 6) go(); else waiting.push(go); }); }
 function release() { active--; const w = waiting.shift(); if (w) w(); }
-const RUN_CAP = 180000;   // the per-run cap of the mutant runs (unchanged); a run gets its own cap via runOne / launch
+// A run is timed on the event loop, and a spawnSync row blocks it: the timer then fires before the close event of a run
+// that already ended (timers run first). RUN_CAP 540000 (was 180000; 3x 165.6 s = 496.8 s, rounded up to 60000): CI run
+// 42087141421, the first 6 mutant runs end only when the loop frees after the two spawnSync rows "every check passes" +
+// "an unmodified copy" = 106.1 + 59.4 = 165.6 s (ubuntu node 24, job 127455187537; 164.4 s ubuntu node 26, job
+// 127455187797; 104.3-140.6 s on the other 6 legs), and T1 / Rf run under the NUL shim like NBASE (114.0-165.3 s)
+const RUN_CAP = 540000;   // the per-run cap of the mutant runs; a run gets its own cap via runOne / launch
 function runOne(path, extra = [], env = ENV, cap = RUN_CAP) {
     return new Promise((res) => {
         const c = spawn('bash', [path, '--self-test', ...extra], { env });
@@ -426,6 +431,77 @@ test('nul-awk shim on an EMULATED NUL-clean awk (the Linux case on any host): th
         assert.equal(awkRun(cut.awk, ['{ print }'], 'a\0b\nc\n').out, 'a\nc\n');
     } finally { rmSync(dd, { recursive: true, force: true }); }
 });
+// >>> b39 NL gate: the shim dir survives no SIGINT / SIGTERM (test/nul-awk.mjs nulTmpDir). ORACLE: the dir path the
+// child printed and the kernel's report of how the child died (close code / signal), never the helper's own word. A
+// child node imports the helper, builds the shim in nulTmpDir(), prints `READY <dir>` once DIR/awk is written, then
+// blocks until its stdin ends; the parent signals it on that line (no sleep), or (the exit row) ends its stdin. TMPDIR = a private dir the parent removes, so a red run (the
+// dir leaked) leaves nothing in the host tmpdir. HEAD's inline 'exit'-only rm fails both signal rows (the dir is left);
+// a cleanup that does not re-raise fails them too (the child survives to the cap, or exits with a code).
+const NUL_AWK_JS = join(dirname(fileURLToPath(import.meta.url)), 'nul-awk.mjs');
+const NULSIG_CAP = 60000;   // new cap = the b38 rule's floor (60000 ms): these rows are new and have no CI timing yet
+const NULSIG_CHILD = [
+    'const { nulTmpDir, buildNulCutAwk } = await import(process.argv[1]);',
+    "const d = nulTmpDir('dd-nulsig-'); buildNulCutAwk(d, process.env);",
+    "process.stdout.write('READY ' + d + '\\n');",
+    "process.stdin.on('end', () => process.exit(0)); process.stdin.resume();",
+    'setInterval(() => {}, 1 << 30);',
+].join('\n');
+function nulSigRun(sig) {   // sig null: no signal; the parent ends the child's stdin after READY and it exits 0
+    const td = mkdtempSync(join(tmpdir(), 'dd-nulsigt-'));
+    return new Promise((done) => {
+        const ch = spawn(process.execPath, ['--input-type=module', '-e', NULSIG_CHILD, pathToFileURL(NUL_AWK_JS).href],
+            { env: { ...ENV, TMPDIR: td }, stdio: ['pipe', 'pipe', 'pipe'] });
+        let out = '', err = '', dir = null, built = false, timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; ch.kill('SIGKILL'); }, NULSIG_CAP);
+        ch.stdout.setEncoding('utf8'); ch.stderr.setEncoding('utf8');
+        ch.stderr.on('data', (c) => { err += c; });
+        ch.stdout.on('data', (c) => {
+            out += c;
+            const m = dir === null && /^READY (\/[^\n]*)\n/.exec(out);
+            if (m) { dir = m[1]; built = existsSync(join(dir, 'awk')); if (sig) ch.kill(sig); else ch.stdin.end(); }
+        });
+        ch.on('close', (code, signal) => {
+            clearTimeout(timer);
+            const left = dir !== null && existsSync(dir);
+            const ents = readdirSync(td);
+            rmSync(td, { recursive: true, force: true });
+            done({ code, signal, dir, built, left, ents, out, err, timedOut, td });
+        });
+    });
+}
+function nulSigReady(r) {
+    assert.ok(!r.timedOut, `child alive after ${NULSIG_CAP} ms: the signal was swallowed (no re-raise)\n${r.out}${r.err}`);
+    assert.ok(r.dir !== null && r.dir.startsWith(r.td + '/dd-nulsig-') && r.built, `a READY line naming the built shim dir: ${JSON.stringify(r.out)} ${r.err}`);
+}
+for (const sig of ['SIGINT', 'SIGTERM']) {
+    test(`nulTmpDir: a ${sig}-killed test process removes its shim dir and still dies by ${sig} (status null, signal ${sig})`, { skip }, async () => {
+        const r = await nulSigRun(sig);
+        nulSigReady(r);
+        assert.deepEqual({ code: r.code, signal: r.signal }, { code: null, signal: sig }, `${r.out}${r.err}`);
+        assert.equal(r.left, false, `${r.dir} left behind after ${sig}`);
+        assert.deepEqual(r.ents, [], 'nothing left in the private TMPDIR');
+    });
+}
+test('nulTmpDir: a normal exit still removes the shim dir (the exit handler), exit 0', { skip }, async () => {
+    const r = await nulSigRun(null);
+    nulSigReady(r);
+    assert.deepEqual({ code: r.code, signal: r.signal }, { code: 0, signal: null }, `${r.out}${r.err}`);
+    assert.equal(r.left, false, `${r.dir} left behind after exit`);
+    assert.deepEqual(r.ents, [], 'nothing left in the private TMPDIR');
+});
+test('nulTmpDir pin: deopt-diff / allocation-diff take NULDIR from the helper (no inline mkdtemp, no exit-only rm)', { skip }, () => {
+    const dirT = dirname(fileURLToPath(import.meta.url));
+    for (const [file, p] of [['deopt-diff.test.mjs', 'dd'], ['allocation-diff.test.mjs', 'ad']]) {
+        const src = readFileSync(join(dirT, file), 'utf8');
+        const lines = src.split('\n');
+        assert.equal(lines.filter((l) => l === "const NULDIR = skip ? null : nulTmpDir('" + p + "-nul-');").length, 1, `${file}: NULDIR from nulTmpDir, once`);
+        assert.equal(lines.filter((l) => /^const NULDIR\b/.test(l)).length, 1, `${file}: one NULDIR`);
+        assert.equal(lines.filter((l) => /^import \{[^}]*\bnulTmpDir\b[^}]*\} from '\.\/nul-awk\.mjs';$/.test(l)).length, 1, `${file}: imports nulTmpDir`);
+        assert.equal(src.split("tmpdir(), '" + p + "-nul-'").length - 1, 0, `${file}: no inline mkdtemp of the shim dir`);
+        assert.equal(lines.filter((l) => /process\.on\('exit'[^\n]*NULDIR/.test(l)).length, 0, `${file}: no exit-only rm of NULDIR`);
+    }
+});
+// <<< b39 NL gate
 test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy passes all ${CHECKS} checks, the NUL rows included`, { skip }, async (t) => {
     const r = await NBASE;
     t.diagnostic(`NUL control ran ${r.ms} ms of its ${r.cap} ms cap`);   // the CI log then measures NBASE
@@ -502,16 +578,26 @@ const FIX_MUTANTS = [
 ];
 const IFALSE = [['  if [[ -n "$FIXTURES" ]]; then\n    local FXD', '  if false; then\n    local FXD']];
 const FXARGS = ['--fixtures', FIX];
-const FBASE = skip ? null : launch('baseline-fix', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], FXARGS);
-const FKILLS = skip ? null : FIX_MUTANTS.map(([name, edits]) => launch(name, edits, FXARGS));
-const IKILL = skip ? null : launch('ifalse', IFALSE, FXARGS);
+// FIX_CAP 780000 for the 5 --fixtures runs (was RUN_CAP 180000; 3x 253.7 s = 761.0 s, rounded up to 60000): CI run
+// 42087141421, ubuntu node 24 (job 127455187537: ifalse, M1, M3, S1) and node 26 (job 127455187797: M1, M3) failed
+// "timed out after 180000 ms" with their output COMPLETE (ok + FAIL = 109 rows, ifalse 92, the summary line printed):
+// they ended while the spawnSync rows "--fixtures FIX" + "--fixtures COPY" (79.4 + 87.1 s, ubuntu 24) blocked the loop.
+// Bound per leg = FIX + COPY + the longer of the two (one --fixtures run): 253.7 s ubuntu 24, 248.9 s ubuntu 26,
+// 88.5-215.2 s on the other 6 legs. Each row logs its run ms (loop-timed, so a blocked loop counts) for the next CI run.
+const FIX_CAP = 780000;
+const FBASE = skip ? null : launch('baseline-fix', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], FXARGS, ENV, FIX_CAP);
+const FKILLS = skip ? null : FIX_MUTANTS.map(([name, edits]) => launch(name, edits, FXARGS, ENV, FIX_CAP));
+const IKILL = skip ? null : launch('ifalse', IFALSE, FXARGS, ENV, FIX_CAP);
+const fxMs = (t, name, r) => t.diagnostic(`${name} --fixtures run: ${r.ms} ms of its ${r.cap} ms cap`);
 for (const p of [FBASE, IKILL, ...(FKILLS || [])]) if (p) p.catch(() => {});
 
 test(`deopt-diff --self-test --fixtures FIX: exit 0, ${CHECKS} + ${FIXTURE_ROWS} ok rows, ${FIXTURE_ROWS} 'ok fixture ' rows, last line 'self-test: ${FIXN} check(s) ok'`, { skip }, () => {
     assertFixturesOk(selfTest(SCRIPT, FXARGS));
 });
-test('deopt-diff --self-test --fixtures FIX: an unmodified copy outside the repo passes (baseline for the fixture mutants)', { skip }, async () => {
-    assertFixturesOk(await FBASE);
+test('deopt-diff --self-test --fixtures FIX: an unmodified copy outside the repo passes (baseline for the fixture mutants)', { skip }, async (t) => {
+    const r = await FBASE;
+    fxMs(t, 'baseline-fix', r);
+    assertFixturesOk(r);
 });
 test('deopt-diff --self-test --fixtures COPY (FIX without deopt.txt) -> exit 1 and a FAIL fixture deopt.txt line', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'dd-fx-'));
@@ -527,8 +613,10 @@ test('deopt-diff --fixtures missing-file row: revert check (the full FIX run fai
     noTimeout(b);
     assert.throws(() => assertMissingDeopt(b), assert.AssertionError);
 });
-test(`deopt-diff --self-test --fixtures MUST FAIL the C + F count on mutant ifalse (the fixture block never runs)`, { skip }, async () => {
-    assertCountKill(await IKILL);
+test(`deopt-diff --self-test --fixtures MUST FAIL the C + F count on mutant ifalse (the fixture block never runs)`, { skip }, async (t) => {
+    const r = await IKILL;
+    fxMs(t, 'ifalse', r);
+    assertCountKill(r);
 });
 test('deopt-diff mutant ifalse: revert check (the unmutated --fixtures run fails the same assertion)', { skip }, async () => {
     const b = await FBASE;
@@ -536,8 +624,10 @@ test('deopt-diff mutant ifalse: revert check (the unmutated --fixtures run fails
     assert.throws(() => assertCountKill(b), assert.AssertionError);
 });
 FIX_MUTANTS.forEach(([name, , rows], i) => {
-    test(`deopt-diff --self-test --fixtures MUST FAIL on mutant ${name} (its designed fixture rows)`, { skip }, async () => {
-        assertKilled(name, await FKILLS[i], rows);
+    test(`deopt-diff --self-test --fixtures MUST FAIL on mutant ${name} (its designed fixture rows)`, { skip }, async (t) => {
+        const r = await FKILLS[i];
+        fxMs(t, name, r);
+        assertKilled(name, r, rows);
     });
     test(`deopt-diff mutant ${name} --fixtures: revert check (the unmutated run fails the same assertion)`, { skip }, async () => {
         const b = await FBASE;

@@ -18,7 +18,7 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { probeAwk, buildNulCutAwk } from './nul-awk.mjs';
+import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
 const C = 78;   // self-test ok lines at b36 G5 B3 (src eb9de455 / root cd94100c, sha256; 76 at B2a 00ab0dac / 8e795263,
@@ -39,8 +39,8 @@ for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
 // control row runs the UNMUTATED self-test under it (test/nul-awk.mjs; its full pin rows are in deopt-diff.test.mjs).
 const NUL_MUTANTS = new Set(['M10']);
 const NUL = skip ? null : probeAwk(ENV);
-const NULDIR = skip ? null : mkdtempSync(join(tmpdir(), 'ad-nul-'));
-if (NULDIR) process.on('exit', () => rmSync(NULDIR, { recursive: true, force: true }));
+// b39 NL: nulTmpDir removes it on exit AND on SIGINT / SIGTERM (then re-raises), so a killed run leaks no ad-nul-* dir
+const NULDIR = skip ? null : nulTmpDir('ad-nul-');
 const NULSHIM = skip ? null : buildNulCutAwk(NULDIR, ENV);
 const nulFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULSHIM.dir : null);
 const SRC = readFileSync(SCRIPT, 'utf8');
