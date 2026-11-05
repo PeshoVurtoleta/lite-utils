@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -411,7 +411,9 @@ const NEW = [
     // flag runs) and row 74 (the synopsis-only list is never read); moved after the OUT / mktemp block (accepted runs
     // unchanged) -> rows 54, 73-75 (OUT / mktemp before the refusal or the hashed probe);
     // v8fl_read's env strip dropped (the anchor is the INCLUDED lib text, once in the root) -> row 36 (the fake exits 7
-    // on the allowlist read when NODE_OPTIONS reaches it)
+    // on the allowlist read when NODE_OPTIONS reaches it); moved after the hashed --v8-options probe, before the INT /
+    // TERM trap (b36 ic B2 review NIT 2) -> rows 73-74 only (row 75's K3 die still fires: the read order swaps, the
+    // spawn count and the die text do not)
     ['M-v8fl-call', [73, 74], 'v8fl_check call deleted (no allowlist read, no refusal)',
         [['\nv8fl_check "$NODE_RES"\n', '\n']]],
     ['M-v8fl-late', [54, 73, 74, 75], 'v8fl_check moved after the OUT / mktemp block (accepted runs unchanged)',
@@ -420,6 +422,10 @@ const NEW = [
     ['M-v8fl-env', [36], 'v8fl_read env strip dropped (NODE_OPTIONS / NODE_COMPILE_CACHE reach the allowlist read)',
         [['  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?\n',
           '  raw=$("$1" --v8-options 2>/dev/null) || rc=$?\n']]],
+    ['M-v8fl-afterhash', [73, 74], 'v8fl_check moved after the hashed --v8-options probe, before the INT / TERM trap',
+        [['\nv8fl_check "$NODE_RES"\n', '\n'],
+         ['\n[[ "$V8O_SHA" =~ ^[0-9a-f]{8}$ ]] || die "cannot hash the $NODE_RES --v8-options output"\n',
+          '\n[[ "$V8O_SHA" =~ ^[0-9a-f]{8}$ ]] || die "cannot hash the $NODE_RES --v8-options output"\nv8fl_check "$NODE_RES"\n']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -605,7 +611,7 @@ function rig() {
     const bash = process.env.BASH && process.env.BASH.startsWith('/') ? process.env.BASH : '/bin/bash';
     writeFileSync(join(fk, 'node'), [`#!${bash}`, 'd=$(dirname "$0")', 'printf "%s\\n" "$*" >>"$d/log"',
         'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi',
-        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) printf "Synopsis:\\n  a4 fake\\n  --lazy-feedback-allocation (Allocate feedback vectors lazily)\\n        type: bool  default: --lazy-feedback-allocation\\n"; exit 0 ;; esac',
+        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) if [ -f "$d/opts_rc" ]; then exit "$(cat "$d/opts_rc")"; fi; printf "Synopsis:\\n  a4 fake\\n  --lazy-feedback-allocation (Allocate feedback vectors lazily)\\n        type: bool  default: --lazy-feedback-allocation\\n"; exit 0 ;; esac',
         'lf=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; done; last="${!#}"',
         'case "$last" in -*) echo "bad option: $last" >&2; exit 9 ;; esac',
         '[ -f "$last" ] || { echo "no driver: $last" >&2; exit 9; }',
@@ -630,15 +636,16 @@ function rig() {
         dashb: drv('dashb', '-x.js', MONO), dasha: drv('dasha', '-y.js', MONO),
         ks0: drv('ks0', 'driver.js', [V8V, CC_GET, KS0, ''].join('\n')), ksg: drv('ksg', 'driver.js', [V8V, CC_GET, KSG, ''].join('\n')),
     };
-    // one run of SCRIPT with NODE_OPTIONS + NODE_COMPILE_CACHE set, PATH = shim first, TMPDIR = d/tmp, cwd = d/cwd
-    const run = (script, args) => {
+    // one run of SCRIPT with NODE_OPTIONS + NODE_COMPILE_CACHE set, PATH = shim first, TMPDIR = d/tmp, cwd = d/cwd;
+    // NODE = the --node value (default: the fake's absolute path)
+    const run = (script, args, node = join(fk, 'node')) => {
         writeFileSync(join(fk, 'log'), ''); writeFileSync(join(d, 'mk.log'), '');
-        const r = spawnSync('bash', [script, '--node', join(fk, 'node'), ...args], {
+        const r = spawnSync('bash', [script, '--node', node, ...args], {
             encoding: 'utf8', timeout: 120000, cwd: join(d, 'cwd'),
             env: { ...ENV, PATH: mk + ':' + process.env.PATH, TMPDIR: join(d, 'tmp'), NODE_OPTIONS: '--st-probe', NODE_COMPILE_CACHE: join(d, 'cc') },
         });
         const lines = (f) => readFileSync(f, 'utf8').split('\n').filter(Boolean);
-        return { status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, argv: lines(join(fk, 'log')), mk: lines(join(d, 'mk.log')) };
+        return { status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, stderr: r.stderr, argv: lines(join(fk, 'log')), mk: lines(join(d, 'mk.log')) };
     };
     // every entry (recursive) under TMPDIR, cwd and the driver dirs
     const ents = () => {
@@ -647,7 +654,7 @@ function rig() {
         for (const p of [join(d, 'tmp'), join(d, 'cwd'), dr]) walk(p);
         return acc.sort();
     };
-    return { d, D, run, ents, tmp: join(d, 'tmp'), done: () => rmSync(d, { recursive: true, force: true }) };
+    return { d, D, fk, run, ents, tmp: join(d, 'tmp'), done: () => rmSync(d, { recursive: true, force: true }) };
 }
 function verdicts(out) { return out.split('\n').filter((l) => l.startsWith('VERDICT ')); }
 
@@ -765,6 +772,31 @@ function modRow(script) {
         assert.ok(L.includes('  before=0 after=1  get' + TB + 'KeyedStoreIC' + TB + '[]' + TB + '1 .GROW'), r.out);
     } finally { g.done(); }
 }
+// --node <relative> (b35 G4 B1 review NIT 2): the allowlist read runs the RESOLVED absolute path, so its die names it.
+// Every --v8-options call of the fake exits 1 (fk/opts_rc; the exact argv assert pins the single read) under
+// --node ../fk/node from cwd d/cwd -> exit 2, stdout empty, stderr = the die line + VERDICT NO-VERDICT, 2 spawns
+// (--version, --v8-options), 0 mktemp; the die path is absolute, exists, is the fake (realpath), and the relative
+// ../fk/node appears nowhere
+function relNodeDie(script) {
+    const g = rig();
+    try {
+        writeFileSync(join(g.fk, 'opts_rc'), '1\n');
+        const r = g.run(script, ['--fn', 'get', g.D.mono, g.D.mono], '../fk/node');
+        assert.equal(r.status, 2, r.out);
+        assert.equal(r.stdout, '', r.out);
+        const L = r.stderr.split('\n').filter(Boolean);
+        assert.equal(L.length, 2, r.out);
+        const m = /^ic-diff: cannot run (.+) --v8-options$/.exec(L[0]);
+        assert.ok(m, r.out);
+        assert.ok(m[1].startsWith('/'), `the die names a relative path: ${m[1]}`);
+        assert.ok(existsSync(m[1]), r.out);
+        assert.equal(realpathSync(m[1]), realpathSync(join(g.fk, 'node')), r.out);
+        assert.equal(L[1], 'VERDICT NO-VERDICT', r.out);
+        assert.ok(!r.out.includes('../fk/node'), r.out);
+        assert.deepEqual(r.argv, ['--version', '--v8-options']);
+        assert.equal(r.mk.length, 0, r.mk.join('\n'));
+    } finally { g.done(); }
+}
 
 const A4 = [
     ['A4 / K1: R=3 -> 9 spawns (the 3 probes first, --no-node-snapshot once per trace argv), mktemp -d once; R=2 -> 7; R=20 -> 43', a4Spawns,
@@ -793,6 +825,9 @@ const A4 = [
         // teeth: v_ms drops the mod (X13); IC_AWK never keeps it (X13b)
         [['X13', [['"\\t" $5 ($6 != "" ? " " $6 : "") }', '"\\t" $5 }']]],
          ['X13b', [['MOD[k] = $10;', 'MOD[k] = "";']]]]],
+    ['--node <relative> + the allowlist --v8-options read exits 1 -> exit 2, the die names the ABSOLUTE resolved path, 2 spawns, 0 mktemp', relNodeDie,
+        // teeth: the allowlist read runs the caller's --node value, not the resolved path (b35 G4 B1 review NIT 2)
+        [['M-v8fl-bin', [['\nv8fl_check "$NODE_RES"\n', '\nv8fl_check "$NODE_BIN"\n']]]]],
 ];
 for (const [label, fn, teeth] of A4) {
     test(`ic-diff ${label}`, { skip }, () => { fn(SCRIPT); });
