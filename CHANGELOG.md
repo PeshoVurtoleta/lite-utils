@@ -212,13 +212,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is DETERMINISTIC (canned trace text and a fake node that counts spawns); a verdict on a user
   driver is STATISTICAL (deopts follow tier-up timing; run it under the host quiet lock). Gated in
   `npm test` by `test/deopt-diff.test.mjs` (137 tests; 141 after MD-46, 145 after CI on Linux, 146 after the b38 cap
-  row): the exact self-test count (89; 92 after MD-46), an unmodified copy outside the repo, 36 mutants of the
-  script, each of which must turn its own self-test row red (and each with a revert row: the kill assertion fails on
-  the unmutated run), 5 more (OUT_MUTANTS M36, M37, M40, M42, M44, the B-four refusals: each kills exactly one of
-  checks 85-89, plus a revert row), a 16-row tier mutant table (G1-G6, V1-V3, TW1-TW7: each must turn its designed T
-  row(s) red, each with a revert row), 2 controls that must survive (an awk crash the old records helper swallowed),
-  `-h`, and 3 end-to-end rows on a fake node with their revert rows (a glued `[completed compiling` line,
-  `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
+  row, 150 after b39 NUL-LEAK): the exact self-test count (89; 92 after MD-46), an unmodified copy outside the repo,
+  36 mutants of the script, each of which must turn its own self-test row red (and each with a revert row: the kill
+  assertion fails on the unmutated run), 5 more (OUT_MUTANTS M36, M37, M40, M42, M44, the B-four refusals: each
+  kills exactly one of checks 85-89, plus a revert row), a 16-row tier mutant table (G1-G6, V1-V3, TW1-TW7: each
+  must turn its designed T row(s) red, each with a revert row), 2 controls that must survive (an awk crash the old
+  records helper swallowed), `-h`, and 3 end-to-end rows on a fake node with their revert rows (a glued `[completed
+  compiling` line, `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
   `test/deopt-diff-boundary.test.mjs` (111 tests) adds outside rows, each with a mutant row that must turn
   it red: retention over 3 cycles of SAME / DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a
   logging mktemp shim stay empty; 7 spawns each, 8 after MD-46), the self-test leaving 0 dirs (also when killed by
@@ -368,14 +368,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `-h`): after a run with != 1 isolate file, those files stay in the run dir and later runs of that side
   count them too (still NO-VERDICT). Not yet in this group: ref / file modes, per-kind IC totals and
   `--deterministic`, the map section (G3), the natives control pair and node fixtures (G4).
-- `test/ic-diff.test.mjs` (171 tests; 177 after MD-46): `--self-test` exact count (72; 75 after MD-46), an
-  unmodified-copy baseline, a row table that names each printed check, 76 self-test mutant rows (each an exact-once
-  edit of a temp copy that must turn the self-test red on its designed rows, each with a revert check on the
-  unmutated copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs, is
-  host-semantics and not in the table), the exit wiring (a flipped expectation gives exit 1 and one
-  FAIL), the `-h` text with its revert checks, and 6 rows on the file's own fake node, each with
-  revert checks (spawn and mktemp counts, 13 files under `--out`, retention, a `-x.js` driver, the
-  verdict fold over fns, `mod` in the verdict key). DETERMINISTIC; no real V8 run.
+- `test/ic-diff.test.mjs` (171 tests; 177 after MD-46, 181 after b39 ICN): `--self-test` exact count (72; 75 after
+  MD-46), an unmodified-copy baseline, a row table that names each printed check, 80 self-test mutant rows (each
+  an exact-once edit of a temp copy that must turn the self-test red on its designed rows, each with a revert
+  check on the unmutated copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs,
+  is host-semantics and not in the table), the exit wiring (a flipped expectation gives exit 1 and one FAIL), the
+  `-h` text with its revert checks, and 7 rows on the file's own fake node, each with revert checks (spawn and
+  mktemp counts, 13 files under `--out`, retention, a `-x.js` driver, the verdict fold over fns, `mod` in the
+  verdict key, `--node <relative>` + a failed allowlist read). DETERMINISTIC; no real V8 run.
 - `allocation-diff.sh` (Phase 4 group 1): young-generation GC EVENT COUNTS inside a marked window of a
   driver, never bytes, on one node binary. `allocation-diff.sh [opts] DRIVER_BEFORE DRIVER_AFTER` (diff
   mode: exit 0 SAME, 1 DIFF) or `allocation-diff.sh [opts] --zero DRIVER` (gate mode: exit 0 ZERO, 1
@@ -438,14 +438,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI-TIMEOUT (burst 38, test side only; not yet confirmed by CI, needs a push): on CI run 42056284029 (218bb48) the
   `deopt-diff.test.mjs` NUL-shim control run was killed at its 180 s cap on the macOS node 22 and node 26.8.2 legs,
   and the plain self-test row used about 90% of its 120 s cap. Per-run caps in `test/deopt-diff.test.mjs`: plain
-  self-test 360 s, the NUL-shim control run 900 s, mutant runs stay 180 s; a run its cap kills now fails as "timed
+  self-test 360 s, the NUL-shim control run 900 s, mutant runs stay 180 s (b39 CI-FIX: 540 s, the 5 --fixtures runs
+  780 s); a run its cap kills now fails as "timed
   out after <cap> ms" (one gate row: a 5 s fake self-test at a 300 ms cap must time out, at 60000 ms it must exit 0,
   which is the +1 test) and the NUL control row logs its elapsed ms. Per-spawn caps raised where one spawn used 50%
   or more of its cap on that run: `deopt-diff-boundary` fxRow and selfTestRun 240 s, `ext-audit-alloc` B2 480 s,
   `v8flags` run() 420 s. The rule was a new cap of at least 3x the longest CI row, rounded up to a multiple of 60 s,
   at most 900 s. `package.json` "test" now runs `node --test --test-timeout=1800000` (maintainer ruling Q-TT1,
-  2026-11-05: 30 min per test), so a hung async test fails by name instead of using up the 120-minute CI job. No
-  script, lib or hot path changed.
+  2026-11-05: 30 min per test; b39 Q-TT2: `--test-timeout=3600000`, 60 min, which node 22 applies per test file), so
+  a hung async test fails by name instead of using up the 120-minute CI job (at 60 min only in a file that starts
+  early enough, see CI-FIX). No script, lib or hot path changed.
 - SIGINT-FLAKE (burst 38, test side only): `bytecode-budget-stage-boundary` row 9 (`--self-test` SIGINT after its
   first ok line -> killed by SIGINT, its temp dir left behind) failed once on CI (b692aa0, node 22) with code=0
   because the signal could land after the self-test had finished. The row now puts an awk PATH shim first and sends
@@ -457,6 +459,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - EA-NITS (burst 38, test side only): the `ext-audit.test.mjs` ic and bb `--v8-flags` allowlist refusal rows also
   pin `VERDICT NO-VERDICT` exactly once and 0 stdout bytes; a dead ic `acceptedRow` helper was removed. The file
   stays at 224 tests.
+- NUL-LEAK (burst 39, test side only): the NUL awk shim dir of the dd / ad test files (`dd-nul-*` in
+  `test/deopt-diff.test.mjs`, `ad-nul-*` in `test/allocation-diff.test.mjs`) was removed on 'exit' only, which
+  never fires on a default-action signal, so a SIGINT / SIGTERM-killed test process leaked it. Both files now take
+  it from the new `nulTmpDir(prefix)` in `test/nul-awk.mjs`, which also removes it on SIGINT / SIGTERM (its own
+  listeners come off first, then the dir is removed, then the same signal is re-raised, so the process still dies by
+  that signal). Four new rows in `test/deopt-diff.test.mjs` pin it (146 -> 150 tests). Not covered: SIGKILL is never
+  cleaned, and the handler runs only when the process next yields to the event loop (after every spawnSync in the
+  current synchronous turn; under `node --test` the runner may exit first and the file runs on until then). Another
+  SIGINT listener in the same process would see the signal twice; none exists today.
+- V8-TIMEOUT (burst 39, test side only; not yet confirmed by CI, needs a push): `test/v8flags.test.mjs` `run()`
+  results now go through one check, so A5 M5 no longer passes on a driver that hung until its spawnSync timeout
+  (status null): a timeout fails as "<what> timed out after <cap> ms (killed by SIGTERM)", any other spawn error as
+  "<what> spawn error <code>", and a per-call cap must be a positive integer. The live `node --v8-options` spawn
+  uses it too (cap 120000 ms). A4's 40 sequential spawns now carry a 60000 ms cap each (worst case 40 min per
+  row, was 280 min, over the 120-minute job cap). The cap is sized from the 2 logged macOS legs of CI run
+  42056284029 only (the whole A4 row took at most 7.7 s there, jobs 127345428176 and 127345428628); the other 6
+  legs' logs were not kept. One new row "run() cap" (50 -> 51 tests).
+- STAGE-NITS (burst 39, test side only): `deopt-diff-stage.test.mjs` F_LIVE now asserts the fake node's `./calls` is
+  `6` (2R at the default RUNS=3; the probes exit before the counter), which kills the arm-after-counter fake-node
+  mutants the old row let pass. The fake-node header comments of `deopt-diff-boundary`, `deopt-diff-stage` and
+  `deopt-diff-stage-boundary` now describe the `--v8-options` arm as coded; `bytecode-budget-stage-boundary` row 9
+  names in its failure message whether the 60 s wait ran out or the self-test exited before the SIGINT;
+  `bytecode-budget-diff-boundary` has a comment on the A1 parity term. Test titles and counts are unchanged in all
+  five files.
+- EA3-NITS (burst 39, comments only): the `ext-audit.test.mjs` MD-51 comment now says the MOD / EVAL refusal rows
+  run for every tool in TOOLS (it said "v8fl tools"), and the `ext-audit-alloc.test.mjs` b27 FROZEN EXPECTATION
+  comment names its controls as they were then (MOD-ok / EVAL-ok, flipped to MOD-node / EVAL-node at G5). No code
+  line changed; `ext-audit.test.mjs` stays at 224 tests.
+- CI-FIX (burst 39, test side only; not yet confirmed by CI, needs a push): CI run 42087141421 (9b18f5d) was red on
+  3 of 8 legs. (a) macOS node 22: node 22 applies `--test-timeout` per test FILE, and `allocation-diff.test.mjs`
+  took 28.7-36.8 min on the 7 CI legs that finished the file (the macOS node 22 leg was killed at 30.0 min), so
+  the 30-minute Q-TT1 bound killed it; maintainer ruling Q-TT2 (2026-11-05):
+  `package.json` "test" runs `--test-timeout=3600000` (60 min). The bound is honest only in part: a hung file
+  fails by name only if it starts early enough for its 60 min to end inside the 120-minute job (the macOS `npm
+  test` takes about an hour). (b) ubuntu node 24 / 26: the `deopt-diff.test.mjs` --fixtures mutant rows failed
+  with "timed out after 180000 ms" after their runs had already finished, because two spawnSync rows blocked the
+  event loop past the async timer. Caps now: the 5 --fixtures runs 780 s, the mutant runs 540 s (3x the
+  CI-modelled worst case, the cap rule); each of the 5 runs' rows logs its loop-timed run ms. The real
+  durations are UNVERIFIED until the next CI run prints them. Known limit: the timer can still mark such a run
+  timed out (a false red only, never a false pass).
+- BBA4 (burst 39, test side only): the `bytecode-budget.test.mjs` A4 `--v8-flags` refusal row with `--out` checked
+  only `raw/` and `report.txt`; both runs now assert the exact sorted recursive listing of OUT, derived from the
+  script's `--out` block: report mode `raw`, `report.txt`; diff mode `raw`, `raw/after`, `raw/before`, `report.txt`
+  (the refusal comes before any other write, so an extra or a missing entry is red). Mutants on private copies: an
+  extra file in report mode, an extra file or a `stage/` dir in diff mode, a skipped `report.txt` each turn it red
+  (HEAD's row passed the first three). The comment of the 25-token row now says its regex takes every `  --name (`
+  line of the excerpt (any type; 14 today, floor >= 13) and checks no type. Titles unchanged: 162 tests.
+- ICN (burst 39, test side only): `ic-diff.test.mjs` gains the A4 row relNodeDie (+ revert row): `--node ../fk/node`
+  from a sibling cwd, the fake's `--v8-options` read exits 1 -> exit 2, empty stdout, stderr exactly the die +
+  `VERDICT NO-VERDICT`, argv `--version`, `--v8-options`, 0 mktemp, and the die names the ABSOLUTE resolved path.
+  The mutant M-v8fl-bin (`v8fl_check "$NODE_RES"` -> `"$NODE_BIN"`) turns it red. New mutant M-v8fl-afterhash
+  (`v8fl_check` moved after the hashed `--v8-options` probe): the self-test fails exactly its designed rows 73 and
+  74 (+ revert row). Rig: the fake node exits early on `--v8-options` when `fk/opts_rc` exists; `run()` takes an
+  optional node and returns stderr. `ic-diff.sh` unchanged. `ic-diff.test.mjs`: 177 -> 181 tests.
 
 ### Changed
 
