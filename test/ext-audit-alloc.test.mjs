@@ -16,7 +16,7 @@
 // VERDICT SAME, exit 0. It also answers --v8-options with the G1 fixture (test/fixtures/v8flags/v8-options.v26.8.2.txt, read loop, no fork). Accepted diff --runs 3 = --version + --v8-options + 6 = 8 spawns and 1 mktemp (PLAN-md46 G5 A2). Each refused row: exit 2, stdout empty,
 // stderr exactly the die line + VERDICT NO-VERDICT, 0 spawns, 0 mktemp, 0 new entries anywhere under the row's directory.
 // FROZEN EXPECTATION (b27-head, allocation-diff.sh a84f1607; PLAN A5): every row red except the 8 controls B4B-ok, MD37c, N33, N18,
-// B1, DRV1, MOD-node, EVAL-node (named MOD-ok / EVAL-ok at b27). More than one OTHER row green on the frozen script is a planner DELTA, not a reason to change an expectation here.
+// B1, DRV1, MOD-ok, EVAL-ok (flipped to MOD-node / EVAL-node at G5; red on a84f1607). More than one OTHER row green on the frozen script is a planner DELTA, not a reason to change an expectation here.
 // MD-46 G5 (ASSERTIONS A3): on the b35 before build (HEAD 4e364c6) the red set is exactly B4B-ok, B3 -/node, B3 -n/node, B3 -nd, MD37c, N33, B1, MOD-node, EVAL-node, F15 x3, V8-ok, V8R; every other row green. After the B1 build (TASKS 1-4) and G5: all rows green. Rows that need file modes (M1, M1b, N29, N30, N32, N35, N34, and those parts of the A4
 // row) skip at euid 0. N34 hangs on a walk without "!= ." (10 s spawn timeout = red).
 // Mutants this file is designed to kill (PLAN TASK 7): unset CDPATH after the include (B2 self-test), `--*` gate (B4B), no env arm

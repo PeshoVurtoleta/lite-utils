@@ -915,7 +915,7 @@ for (const T of TOOLS) {
         flagRow('MOD', '--v8-flags --require / --import / --loader / --experimental-loader forms (also underscore): exit 2, the "loads a module of yours" die, 0 spawns', MODS, MODT,);
         // MOD-r / EVAL-ep: the letter gate ("each starts with -- and a letter") already refuses the short forms (no new arm).
         flagRow('MOD-r', '(control) --v8-flags -r: refused by the letter gate, 0 spawns', ['-r'], (f) => `${P} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
-        // MD-51 (v8fl tools): a node option is not a V8 flag of this node's --v8-options list -> refused after --version + one --v8-options read.
+        // MD-51 (every tool in TOOLS; a future v8fl:false tool gets red rows = fails closed): a node option is not a V8 flag of this node's --v8-options list -> refused after --version + one --v8-options read.
         // bb only (PLAN-md46 G3 ASSERTION A1): the line VERDICT NO-VERDICT once (in stdout + stderr joined) and 0 stdout bytes are pinned too.
         // stderr is NOT pinned exactly (A1 says "stderr exactly the die line + `VERDICT NO-VERDICT`"; run() joins stdout + stderr, so an
         // extra stderr line passes). dd: G2 A2 and dd -h state neither, so dd rows pin only the die / spawns / probes.
