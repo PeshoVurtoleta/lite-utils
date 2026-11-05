@@ -68,7 +68,7 @@ function rig(dir, drivers) {
     writeFileSync(join(fk, 'node'), [`#!${process.env.BASH || '/bin/bash'}`, 'd=$(dirname "$0")',
         'printf "%s|%s\\n" "$(basename "$PWD")" "$*" >>"$d/log"',
         'if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi',
-        'case "$1" in --version) echo v26.8.2; exit 0 ;; esac',
+        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) echo "  --allow-natives-syntax (allow natives syntax)"; echo "        type: bool  default: --no-allow-natives-syntax"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; esac',
         'if [ -f ./trace.txt ]; then cat ./trace.txt; fi', 'if [ -f ./rc ]; then exit "$(cat ./rc)"; fi', 'exit 0', ''].join('\n'));
     chmodSync(join(fk, 'node'), 0o755);
     writeFileSync(join(fk, 'log'), '');
@@ -99,7 +99,7 @@ const STD = {
 
 // =====================================================================================================================
 // A5 retention: 3 cycles of SAME, DIFF and NO-VERDICT without --out; cwd, a private TMPDIR and the mktemp shim log
-// hold 0 entries afterwards, the driver dirs are unchanged, every run spawns 1 + 2 x 3 = 7 times.
+// hold 0 entries afterwards, the driver dirs are unchanged, every run spawns 2 + 2 x 3 = 8 times.
 // =====================================================================================================================
 const CYCLE = [
     // [label, before, after, exit, VERDICT, own line]
@@ -136,14 +136,14 @@ function assertCycles(c) {
         assert.equal(r.status, exit, `${label} run ${i}: ${r.out}`);
         assert.deepEqual(r.verdicts, [vline], r.out);
         assert.ok(r.lines.includes(own), `${label} run ${i}: missing "${own}"\n${r.out}`);
-        assert.equal(r.spawns, 7, `${label} run ${i}: 1 --version + 2 x 3 runs\n${r.log.join('\n')}`);
+        assert.equal(r.spawns, 8, `${label} run ${i}: --version + --v8-options + 2 x 3 runs\n${r.log.join('\n')}`);
     });
     assert.deepEqual(c.cwd, [], 'cwd holds entries after 9 runs without --out');
     assert.deepEqual(c.tmpdir, [], 'the private TMPDIR holds entries');
     assert.deepEqual(c.shim, [], 'driver mode called mktemp');
     assert.ok(c.drvSame, 'a driver dir changed');
 }
-test('A5: 3 cycles x SAME / DIFF / NO-VERDICT without --out -> exits 0/1/2, 7 spawns each; cwd, TMPDIR, mktemp log empty', { skip }, () => {
+test('A5: 3 cycles x SAME / DIFF / NO-VERDICT without --out -> exits 0/1/2, 8 spawns each; cwd, TMPDIR, mktemp log empty', { skip }, () => {
     assertCycles(cycles(SCRIPT));
 });
 // teeth 1: tee keeps the raw output in cwd when --out is absent (the "nothing is written without --out" claim)
@@ -237,7 +237,7 @@ test('A5 teeth: mutant trap-without-rm -> a SIGTERM mid self-test leaves the log
 // (every teeth row builds its mutant OUTSIDE assert.throws: an anchor that does not match exactly once is an error of the
 // row, never a kill)
 // =====================================================================================================================
-// A3 boundary: --runs edges (spawns 1 + 2R, sides alternating before / after per k, argv and cwd per run)
+// A3 boundary: --runs edges (spawns 2 + 2R, sides alternating before / after per k, argv and cwd per run)
 // =====================================================================================================================
 function runsRow(script, runs) {
     const dir = tmp('dd-runs-');
@@ -250,8 +250,8 @@ function runsRow(script, runs) {
 function assertRuns(r, R) {
     assert.equal(r.status, 1, r.out);
     assert.deepEqual(r.verdicts, ['VERDICT DIFF'], r.out);
-    assert.equal(r.spawns, 1 + 2 * R, r.log.join('\n'));
-    const want = ['cwd|--version'];
+    assert.equal(r.spawns, 2 + 2 * R, r.log.join('\n'));
+    const want = ['cwd|--version', 'cwd|--v8-options'];
     for (let k = 0; k < R; k++) want.push(`monoA|--allow-natives-syntax ${TRACE} ./driver.js`, `deop|--allow-natives-syntax ${TRACE} ./driver.js`);
     assert.deepEqual(r.log, want);
     assert.ok(r.lines.includes(`mode    diff  runs ${R}  v8 flags --allow-natives-syntax ${TRACE}`), r.out);
@@ -261,7 +261,7 @@ const REFUSED = (v) => (r) => { assert.equal(r.status, 2, r.out); assert.equal(r
 // bash 3.2: the $((08)) error abandons the whole `[[ ]] && RUNS=... || die` list (die included) and the script goes on with
 // RUNS=08 (seq reads it as 8): exit and spawns stay right, only the mode line shows the unnormalized value
 const UNNORMALIZED = (v, R) => (r) => {
-    assert.equal(r.status, 1, r.out); assert.equal(r.spawns, 1 + 2 * R);
+    assert.equal(r.status, 1, r.out); assert.equal(r.spawns, 2 + 2 * R);
     assert.ok(r.lines.includes(`mode    diff  runs ${v}  v8 flags --allow-natives-syntax ${TRACE}`), r.out);
 };
 const RUNS_OK = [
@@ -272,7 +272,7 @@ const RUNS_OK = [
     ['09', 9, [['RUNS=$((10#$RUNS))', 'RUNS=$(($RUNS))']], UNNORMALIZED('09', 9)],
 ];
 for (const [v, R, teeth, flip] of RUNS_OK) {
-    test(`A3: --runs ${v} accepted -> exit 1 DIFF, ${1 + 2 * R} spawns, before / after alternating, exact argv`, { skip }, () => {
+    test(`A3: --runs ${v} accepted -> exit 1 DIFF, ${2 + 2 * R} spawns, before / after alternating, exact argv`, { skip }, () => {
         assertRuns(runsRow(SCRIPT, v), R);
     });
     test(`A3 teeth: --runs ${v} row is red on a boundary mutant`, { skip }, () => {
@@ -294,7 +294,7 @@ test('A3 teeth: the alternation row is red on a mutant that runs AFTER before BE
             '  run_side "$DRV_B_DIR" "$DRV_B_BASE" "${OUT:+$OUT/raw/before/run.$k.txt}"; RCB+=("$RUN_RC"); TXB+=("$RUN_TX")\n']]);
         const r = runsRow(p, '2');
         assert.equal(r.status, 1);   // same verdict and spawn count: only the order row sees it
-        assert.equal(r.spawns, 5);
+        assert.equal(r.spawns, 6);
         assert.throws(() => assertRuns(r, 2), assert.AssertionError);
     } finally { rmAll(dir); }
 });
@@ -445,11 +445,11 @@ for (const [label, setup, line, teeth, flip] of OUT_BAD) {
 const outEmptyRaw = (o) => { mkdirSync(join(o, 'raw'), { recursive: true }); };
 function assertOutAccepted(r) {
     assert.equal(r.status, 1, r.out);
-    assert.equal(r.spawns, 7);
+    assert.equal(r.spawns, 8);
     assert.match(r.t1, /^\{raw=\{after=\{run\.1\.txt=file:.*run\.3\.txt=file:[^}]*\},before=\{run\.1\.txt=file:.*run\.3\.txt=file:[^}]*\}\},report\.txt=file:/s);
     assert.match(r.t1, /report\.txt=file:[^]*VERDICT DIFF\n\}$/);
 }
-test('A3: --out with an existing EMPTY raw/ is accepted -> exit 1, 7 spawns, 3 + 3 raw files and report.txt ending VERDICT DIFF', { skip }, () => {
+test('A3: --out with an existing EMPTY raw/ is accepted -> exit 1, 8 spawns, 3 + 3 raw files and report.txt ending VERDICT DIFF', { skip }, () => {
     assertOutAccepted(outRow(SCRIPT, outEmptyRaw));
 });
 test('A3 teeth: the empty-raw/ row is red on a mutant that refuses any existing raw/', { skip }, () => {
@@ -515,7 +515,7 @@ const FX_FAILS = (r) => { assert.equal(r.status, 1, r.out); assert.match(r.out, 
 const FX_ROWS = [
     // [label, args, line(r), setup, teeth name, teeth edits, flip(r): the designed field the mutant flips, skip]
     ['--fixtures FIX in driver mode (--node FAKE --fn add D1 D2)', ['--fixtures', 'FIX', '--node', 'FAKE', '--fn', 'add', 'D1', 'D2'], GOES, null,
-        'R-goes-with', M_GOES, (r) => assert.equal(r.fake, 7, r.out)],
+        'R-goes-with', M_GOES, (r) => assert.equal(r.fake, 8, r.out)],
     ['--fixtures FIX alone', ['--fixtures', 'FIX'], GOES, null,
         'R-goes-with', M_GOES, (r) => assert.ok(r.lines.includes('deopt-diff: need --fn LIST (see --help)'), r.out)],
     ['--self-test --fn add', ['--self-test', '--fn', 'add'], ONLY, null, 'R-only-gotopt', M_ONLY_GOTOPT, SELF_OK],

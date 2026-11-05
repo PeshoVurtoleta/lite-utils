@@ -31,7 +31,11 @@
 #                      node options from a file into the measured process), and every --eval* / --print* flag, a
 #                      prefix match (node runs that code in the measured process instead of the driver, which
 #                      becomes argv; V8's --print-* flags, e.g. --print-bytecode, go with it; -e / -p are refused as
-#                      non-flags)
+#                      non-flags). Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag
+#                      (never --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump /
+#                      snapshot / file flags. Refused, exit 2 after one --v8-options read and before any measured run:
+#                      every node option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob,
+#                      ...), every string-valued V8 flag, and the tool's own flags above.
 #   --out DIR          keep DIR/report.txt, DIR/raw/<side>/run.<k>.txt (the raw stdout of run k) and
 #                      DIR/raw/<side>/run.<k>.err (its stderr); <side> = before / after, or driver with --zero.
 #                      DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;
@@ -105,9 +109,10 @@
 #   "  SAME -- identical young-GC multiset in the window (before <y> | after <y>)" or "  DIFF -- ..." then per kind
 #   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ...";
 #   "  NO-VERDICT -- <side>: <reason>". Exit 0 SAME / ZERO, 1 DIFF / NONZERO, 2 NO-VERDICT. Every refused argument
-#   exits 2 before any node is spawned and before anything is written. Spawns: one `node --version` (a failing one
-#   exits 2 before anything is written), then 2 x runs driver runs (1 x runs with --zero): runs 5 -> 11 spawns
-#   (6 with --zero), runs 3 -> 7 (4).
+#   exits 2 before any node is spawned and before anything is written, except a --v8-flags flag outside the allowlist
+#   (after the --version and --v8-options spawns). Spawns: one `node --version` (a failing one exits 2 before
+#   anything is written), one `node --v8-options` (also with no --v8-flags; a failing one exits 2 the same way), then
+#   2 x runs driver runs (1 x runs with --zero): runs 5 -> 12 spawns (7 with --zero), runs 3 -> 8 (5).
 # Not detected: young allocation under one semi-space (1 MB) in the window; large-object and old-space allocation
 #   (no young GC); allocation in workers or other isolates; markers written asynchronously (a marker that lands
 #   late moves the window); a GC line moved across a marker; a lost line cancelled by an extra one (e.g. a worker
@@ -233,6 +238,48 @@ worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
+}
+# `node --v8-options` -> "name type" per flag. A name line is exactly `  --<name> (` (one space before the paren: the
+# synopsis lines and uppercase names drop out); the NEXT line must be its `type:` line, else the name is dropped.
+# shellcheck disable=SC2016
+V8FL_AWK='
+p != "" { if (match($0, /^ +type: [a-z0-9_]+/)) { t = substr($0, RSTART, RLENGTH); sub(/^ +type: /, "", t); print p " " t }; p = "" }
+/^  --[a-z0-9_-]+ \(/ { p = $1; sub(/^--/, "", p); gsub(/_/, "-", p) }
+'
+# MD-53 deny families, matched against "-<name>-" (= `(^|-)X(-|$)` on the bare name)
+V8FL_RE='-(log|logfile|prof|profile|profiling|profiler|trace|print|perf|redirect|dump|stats|verbose|snapshot|gdbjit|counters|help|abort|fuzzing|file|logger)-'
+V8FL_TAB=""
+v8fl_read() { # NODE: V8FL_TAB from ONE `NODE --v8-options` capture; fails closed (die) on a spawn error, rc, 0 rows
+  local raw rows rc=0
+  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?
+  [[ $rc -eq 0 ]] || die "cannot run $1 --v8-options"
+  [[ -n "$raw" ]] || die "$1 --v8-options printed nothing"
+  rows=$(printf '%s\n' "$raw" | LC_ALL=C awk "$V8FL_AWK") || rows=""
+  [[ -n "$rows" ]] || die "$1 --v8-options lists no V8 flag"
+  V8FL_TAB=$'\n'"$rows"$'\n'
+}
+v8fl_ok() { # TOKEN: 0 iff TOKEN is a V8 tuning flag in V8FL_TAB, in its value form (pure bash, 0 spawns)
+  local nl=$'\n' g b t re v=0 neg=0
+  g=${1//_/-}
+  [[ "$g" == --* ]] || return 1
+  b=${g#--}
+  if [[ "$b" == *=* ]]; then v=1; [[ -n "${b#*=}" ]] || return 1; b=${b%%=*}; fi
+  if [[ "$b" == no-* && "$V8FL_TAB" != *"$nl$b "* ]]; then b=${b#no-}; neg=1; fi
+  case "$b" in ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;; esac
+  re="$nl$b ([a-z0-9_]+)$nl"
+  [[ "$V8FL_TAB" =~ $re ]] || return 1                  # not a V8 flag of this node (every node option)
+  t=${BASH_REMATCH[1]}
+  [[ "$t" != string ]] || return 1                      # string-typed: a file name, path or filter
+  if [[ "-$b-" =~ $V8FL_RE ]]; then return 1; fi        # MD-53 family
+  if [[ $neg -eq 1 && "$t" != bool && "$t" != maybe_bool ]]; then return 1; fi   # --no- on a non-bool
+  case "$t" in bool|maybe_bool) [[ $v -eq 0 ]] ;; *) [[ $v -eq 1 ]] ;; esac     # value form (MD-58)
+}
+v8fl_check() { # NODE: one read (MD-56: also with no --v8-flags), then die on the first refused V8_EXTRA token
+  local f
+  v8fl_read "$1"
+  for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
+    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)"
+  done
 }
 
 TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation)
@@ -451,10 +498,12 @@ self_test() {
   # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log and "<rq> <fd3> <req>" to
   # <its dir>/req (rq: ok = an absolute --require cmp-equal to gcn_cjs(), else none / rel / bad), exits 7 if
   # NODE_OPTIONS reached it, 9 on a driver argument starting with - (as node: "bad option"); --version prints v26.8.2
-  # (FAKE_VER_RC: that exit). A run (n = its run count in that driver dir) cats ./trace.<n>.txt or ./trace.txt; when
-  # rq = ok and no ./nocount it writes ./count.<n>, ./count or the number of `[<digits>:0x` lines before the first gcn
-  # line to fd 3 (./rmcount: then deletes the tool's gcn.<side>.<k> files); ./err.txt to stderr; exits ./rc.<n>,
-  # ./rc or 0. A mktemp shim (first on PATH) logs each call. ---
+  # (FAKE_VER_RC: that exit); --v8-options prints 7 name + type line pairs of test/fixtures/v8flags/v8-options.v26.8.2.txt
+  # verbatim (expose-gc, lazy-feedback-allocation, max-inlined-bytecode-size, allow-natives-syntax, opt, turbo-filter
+  # (string), trace-osr) and exits 0 (FAKE_V8O_RC: that exit); neither is a run. A run (n = its run count in that driver
+  # dir) cats ./trace.<n>.txt or ./trace.txt; when rq = ok and no ./nocount it writes ./count.<n>, ./count or the number
+  # of `[<digits>:0x` lines before the first gcn line to fd 3 (./rmcount: then deletes the tool's gcn.<side>.<k> files);
+  # ./err.txt to stderr; exits ./rc.<n>, ./rc or 0. A mktemp shim (first on PATH) logs each call. ---
   fk="$d/fk"; mk="$d/mk"; dr="$d/dr"
   mkdir -p "$fk" "$mk" "$dr" "$d/cwd" "$d/tmp" "$d/sh"
   { printf '#!%s\nAWKB=%q\nREF=%q\n' "$BASH" "$AWKB" "$d/gcn.ref"; cat <<'FAKE_NODE'
@@ -462,6 +511,15 @@ d=$(dirname "$0")
 printf '%s\n' "$*" >>"$d/log"
 if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi
 case "$1" in --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac
+case "$1" in --v8-options) if [ -n "${FAKE_V8O_RC:-}" ]; then exit "$FAKE_V8O_RC"; fi
+  printf '%s\n' '  --expose-gc (expose gc extension)' '        type: bool  default: --no-expose-gc' \
+    '  --lazy-feedback-allocation (Allocate feedback vectors lazily)' '        type: bool  default: --lazy-feedback-allocation' \
+    '  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)' '        type: int  default: --max-inlined-bytecode-size=460' \
+    '  --allow-natives-syntax (allow natives syntax)' '        type: bool  default: --no-allow-natives-syntax' \
+    '  --opt (alias for --turbofan)' '        type: bool  default: --opt' \
+    '  --turbo-filter (optimization filter for TurboFan compiler)' '        type: string  default: --turbo-filter="*"' \
+    '  --trace-osr (trace on-stack replacement)' '        type: bool  default: --no-trace-osr'
+  exit 0 ;; esac
 c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"
 req=""; pv=""; drv=""
 for a in "$@"; do if [ "$pv" = --require ]; then req=$a; fi; pv=$a; drv=$a; done
@@ -525,59 +583,59 @@ FAKE_MKTEMP
   mkd err "$(win "$(rep "$LS" 3)")"; printf '%01024d' 0 | tr 0 e >"$dr/err/err.txt"
 
   # --- verdicts (A2 / A2' / A3 / A3' / A9 / A12(d)); every A3 row passes --runs 3 explicitly (A10) ---
-  check "A2 e2e: diff 3 vs 5 (R=3) -> exit 1 DIFF, 7 spawns, '    before=3 after=5  Scavenge'" \
-    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y5/driver.js")|$(has '    before=3 after=5  Scavenge')" "1|VERDICT DIFF|7|1"
+  check "A2 e2e: diff 3 vs 5 (R=3) -> exit 1 DIFF, 8 spawns, '    before=3 after=5  Scavenge'" \
+    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y5/driver.js")|$(has '    before=3 after=5  Scavenge')" "1|VERDICT DIFF|8|1"
   check "A2 / A2' e2e: diff 3 vs 3, and 0 vs 0 (start, end, 2 Scavenge, gcn) -> exit 0 SAME" \
     "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y3b/driver.js")#$(spawn -- "$NO" --runs 3 "$dr/z0/driver.js" "$dr/z0b/driver.js")" \
-    "0|VERDICT SAME|7#0|VERDICT SAME|7"
-  check "A2' e2e: --zero on 0 young GC -> exit 0 ZERO, 4 spawns" \
-    "$(spawn -- "$NO" --runs 3 --zero "$dr/z0/driver.js")|$(has '  ZERO -- no young GC in the window (every run equal to run 1)')" "0|VERDICT ZERO|4|1"
+    "0|VERDICT SAME|8#0|VERDICT SAME|8"
+  check "A2' e2e: --zero on 0 young GC -> exit 0 ZERO, 5 spawns" \
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/z0/driver.js")|$(has '  ZERO -- no young GC in the window (every run equal to run 1)')" "0|VERDICT ZERO|5|1"
   check "A2 M9 e2e: --zero on 1 young GC -> exit 1 NONZERO" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/y1/driver.js")|$(has '  NONZERO -- 1 young GC(s) in the window (every run equal to run 1)')|$(has '  driver: run 1 young 1 [Scavenge x1], old 0 in the window; 2 GC line(s) before the fence, 1 after end; young per run 1,1,1')" \
-    "1|VERDICT NONZERO|4|1|1"
+    "1|VERDICT NONZERO|5|1|1"
   check "A3' e2e: markers + gcn, 0 GC lines -> exit 2 'no GC line between @@LITE-MARK end and the tool's exit fence in run 1'" \
-    "$(spawn -- "$NO" --runs 3 --zero "$dr/p0/driver.js")|$(has "  NO-VERDICT -- driver: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" "2|VERDICT NO-VERDICT|4|1"
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/p0/driver.js")|$(has "  NO-VERDICT -- driver: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" "2|VERDICT NO-VERDICT|5|1"
   check "A3' M14 e2e: 3 Scavenge in the window, none between end and gcn -> the same p = 0 reason" \
-    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/p0w/driver.js")|$(has "  NO-VERDICT -- after: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/p0w/driver.js")|$(has "  NO-VERDICT -- after: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" "2|VERDICT NO-VERDICT|8|1"
   check "A3 M8 e2e: run 2 differs from run 1 -> exit 2 null control naming run 2" \
-    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/nc/driver.js")|$(has '  NO-VERDICT -- after: null control: run 2 differs from run 1 (1 kind(s) differ, first: run 1 x3 | run 2 x4  Scavenge)')" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/nc/driver.js")|$(has '  NO-VERDICT -- after: null control: run 2 differs from run 1 (1 kind(s) differ, first: run 1 x3 | run 2 x4  Scavenge)')" "2|VERDICT NO-VERDICT|8|1"
   check "A3 e2e: a Mark-Compact in the window -> exit 2 'old-generation GC in the window in run 1 (Mark-Compact)'" \
-    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/mc/driver.js")|$(has '  NO-VERDICT -- after: old-generation GC in the window in run 1 (Mark-Compact)')" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/mc/driver.js")|$(has '  NO-VERDICT -- after: old-generation GC in the window in run 1 (Mark-Compact)')" "2|VERDICT NO-VERDICT|8|1"
   check "A3 e2e: driver exit 3 -> exit 2 'driver exited 3 in run 1'" \
-    "$(spawn -- "$NO" --runs 3 "$dr/rc3/driver.js" "$dr/y3/driver.js")|$(has '  NO-VERDICT -- before: driver exited 3 in run 1')" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/rc3/driver.js" "$dr/y3/driver.js")|$(has '  NO-VERDICT -- before: driver exited 3 in run 1')" "2|VERDICT NO-VERDICT|8|1"
   check "A3 M10 e2e: a NUL-glued Scavenge line in the window -> exit 2 unparseable (not at line start); --out raw keeps the NUL" \
     "$(spawn -- "$NO" --runs 3 --out "$d/on" "$dr/y3/driver.js" "$dr/nul/driver.js")|$(has '  NO-VERDICT -- after: unparseable --trace-gc output in run 1: GC line text not at line start in the window')|$(tr -d -c '\000' <"$d/on/raw/after/run.1.txt" | wc -c | tr -d ' ')" \
-    "2|VERDICT NO-VERDICT|7|1|1"
+    "2|VERDICT NO-VERDICT|8|1|1"
   check "A3 e2e: an awk shim exiting 5 is named before the driver's exit 3" \
     "$(spawn PATH="$d/sh/a5:$mk:$PATH" -- "$NO" --runs 3 "$dr/rc3/driver.js" "$dr/y3/driver.js")|$(has '  NO-VERDICT -- before: cannot read driver output in run 1 (awk exited 5)')|$(grep -c 'driver exited' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|1|0"
+    "2|VERDICT NO-VERDICT|8|1|0"
   check "A3' e2e: gcn missing -> exit 2 unparseable 'no @@LITE-MARK gcn'" \
-    "$(spawn -- "$NO" --runs 3 --zero "$dr/ngcn/driver.js")|$(has "  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: no @@LITE-MARK gcn (the tool's exit fence)")" "2|VERDICT NO-VERDICT|4|1"
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/ngcn/driver.js")|$(has "  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: no @@LITE-MARK gcn (the tool's exit fence)")" "2|VERDICT NO-VERDICT|5|1"
   check "A3' M17 e2e: 4 Scavenge after gcn, count = g -> verdict unchanged (SAME)" \
-    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/post/driver.js")" "0|VERDICT SAME|7"
+    "$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/post/driver.js")" "0|VERDICT SAME|8"
   check "A9 M20 e2e: 666 x3 vs 666, 666, 667 -> exit 2 null control naming run 3" \
-    "$(spawn -- "$NO" --runs 3 "$dr/d666/driver.js" "$dr/e666/driver.js")|$(has '  NO-VERDICT -- after: null control: run 3 differs from run 1 (1 kind(s) differ, first: run 1 x666 | run 3 x667  Scavenge)')" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/d666/driver.js" "$dr/e666/driver.js")|$(has '  NO-VERDICT -- after: null control: run 3 differs from run 1 (1 kind(s) differ, first: run 1 x666 | run 3 x667  Scavenge)')" "2|VERDICT NO-VERDICT|8|1"
   check "A12(d) e2e: 667 x3 vs 666 x3 -> exit 1 DIFF by 1 (the edge-flip sentence)" \
-    "$(spawn -- "$NO" --runs 3 "$dr/d667/driver.js" "$dr/d666/driver.js")|$(has '    before=667 after=666  Scavenge')" "1|VERDICT DIFF|7|1"
+    "$(spawn -- "$NO" --runs 3 "$dr/d667/driver.js" "$dr/d666/driver.js")|$(has '    before=667 after=666  Scavenge')" "1|VERDICT DIFF|8|1"
   check "A3 e2e: a driver writing 1 KB to stderr -> raw/after/run.1.err holds it, records + verdict unchanged; raw layout" \
     "$(spawn -- "$NO" --runs 3 --out "$d/oe" "$dr/y3/driver.js" "$dr/err/driver.js")|$(wc -c <"$d/oe/raw/after/run.1.err" | tr -d ' ')|$(grep -c 'eeee' "$d/oe/report.txt" || true)|$(ls "$d/oe/raw/before" | tr '\n' ' ')" \
-    "0|VERDICT SAME|7|1024|0|run.1.err run.1.txt run.2.err run.2.txt run.3.err run.3.txt "
+    "0|VERDICT SAME|8|1024|0|run.1.err run.1.txt run.2.err run.2.txt run.3.err run.3.txt "
   check "e2e: --zero --out -> raw/driver only; report.txt holds the verdict" \
-    "$(spawn -- "$NO" --runs 2 --zero --out "$d/oz" "$dr/z0/driver.js")|$(ls "$d/oz/raw" | tr '\n' ' ')|$(grep -c '^VERDICT ZERO$' "$d/oz/report.txt" || true)" "0|VERDICT ZERO|3|driver |1"
+    "$(spawn -- "$NO" --runs 2 --zero --out "$d/oz" "$dr/z0/driver.js")|$(ls "$d/oz/raw" | tr '\n' ' ')|$(grep -c '^VERDICT ZERO$' "$d/oz/report.txt" || true)" "0|VERDICT ZERO|4|driver |1"
   check "A14(e) e2e: spawn argv = v8 flags first, the trace flags, --require <T>/gcn.cjs, ./<driver>" \
-    "$(spawn -- "$NO" --runs 2 --v8-flags '--expose-gc' --zero "$dr/z0/driver.js" | cut -d'|' -f1)|$(sed -n 2p "$fk/log" | sed -E "s#$d/tmp/allocation-diff\\.[A-Za-z0-9]{6}/#<T>/#")" \
+    "$(spawn -- "$NO" --runs 2 --v8-flags '--expose-gc' --zero "$dr/z0/driver.js" | cut -d'|' -f1)|$(sed -n 3p "$fk/log" | sed -E "s#$d/tmp/allocation-diff\\.[A-Za-z0-9]{6}/#<T>/#")" \
     "0|--expose-gc --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --require <T>/gcn.cjs ./driver.js"
   mkdir -p "$dr/dash"; : >"$dr/dash/-p.js"; printf '%s\n' "$(win "$(rep "$LS" 3)")" >"$dr/dash/trace.txt"
   check "A14(e) e2e: a driver named '-p.js' runs as ./-p.js (never read as a node option): 6 argvs end ' ./-p.js', SAME" \
-    "$(spawn -- "$NO" --runs 3 "$dr/dash/-p.js" "$dr/dash/-p.js")|$(grep -c -e ' \./-p\.js$' "$fk/log" || true)" "0|VERDICT SAME|7|6"
-  check "e2e: NODE_OPTIONS set in the environment never reaches a spawn (SAME, 7 spawns)" \
-    "$(spawn NODE_OPTIONS=--st-probe -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y3b/driver.js")" "0|VERDICT SAME|7"
+    "$(spawn -- "$NO" --runs 3 "$dr/dash/-p.js" "$dr/dash/-p.js")|$(grep -c -e ' \./-p\.js$' "$fk/log" || true)" "0|VERDICT SAME|8|6"
+  check "e2e: NODE_OPTIONS set in the environment never reaches a spawn (SAME, 8 spawns)" \
+    "$(spawn NODE_OPTIONS=--st-probe -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y3b/driver.js")" "0|VERDICT SAME|8"
   check "e2e: a failing --version (with --out) -> exit 2 after 1 spawn, no OUT dir, no temp dir" \
     "$(spawn FAKE_VER_RC=1 -- "$NO" --out "$d/ov" "$dr/y3/driver.js" "$dr/y3b/driver.js" | cut -d'|' -f1,3)|$([[ -e "$d/ov" ]] && echo exists || echo absent)|$(wc -l <"$d/mk.log" | tr -d ' ')" \
     "2|1|absent|0"
-  check "A10 MD-31 e2e: no --runs -> runs 5: diff 11 spawns, --zero 6 spawns; the head says 'runs 5'" \
+  check "A10 MD-31 e2e: no --runs -> runs 5: diff 12 spawns, --zero 7 spawns; the head says 'runs 5'" \
     "$(spawn -- "$NO" "$dr/y3/driver.js" "$dr/y3b/driver.js")|$(grep -c '^mode    diff  runs 5  ' "$d/sp.out" || true)#$(spawn -- "$NO" --zero "$dr/z0/driver.js")|$(grep -c '^mode    zero  runs 5  ' "$d/sp.out" || true)" \
-    "0|VERDICT SAME|11|1#0|VERDICT ZERO|6|1"
+    "0|VERDICT SAME|12|1#0|VERDICT ZERO|7|1"
   o=""
   for l in N1 N2 N3 N4 N5 N6 N7 U1; do
     case $l in N1) x="${LS}x" ;; N2) x="${LS} " ;; N3) x="${L2}x" ;; N4) x="${L2} x" ;; N5) x="${H1} MB, pooled${T2}" ;;
@@ -585,7 +643,7 @@ FAKE_MKTEMP
     if [[ $l == U1 ]]; then mkd "a$l" "$U1"$'\n'"$(win "$LS")"; else mkd "a$l" "$(win "$x")"; fi
     o="$o#$(spawn -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/a$l/driver.js")|$(grep -c '^  NO-VERDICT -- after: unparseable --trace-gc output in run 1: ' "$d/sp.out" || true)"
   done
-  check "A1'' e2e: N1-N7 in the window and U1 before start -> each exit 2 unparseable" "$o" "$(printf '#2|VERDICT NO-VERDICT|7|1%.0s' 1 2 3 4 5 6 7 8)"
+  check "A1'' e2e: N1-N7 in the window and U1 before start -> each exit 2 unparseable" "$o" "$(printf '#2|VERDICT NO-VERDICT|8|1%.0s' 1 2 3 4 5 6 7 8)"
 
   # --- A13 rows: run k > 1 only; tee + tr failing together; CR on one marker; awk exit 0 without G ---
   mkd k2 "$(win "$(rep "$LS" 3)")"; echo 3 >"$dr/k2/rc.2"
@@ -593,69 +651,69 @@ FAKE_MKTEMP
   mkd k4 "$(win "$(rep "$LS" 3)")"; printf '%s\n' "$(win "$LFOO")" >"$dr/k4/trace.3.txt"
   check "A13 e2e: in run k > 1 only -- driver exit 3 (run 2), p = 0 (run 2), an X (run 3) -> each named with its run" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/k2/driver.js")|$(has '  NO-VERDICT -- driver: driver exited 3 in run 2')#$(spawn -- "$NO" --runs 3 --zero "$dr/k3/driver.js")|$(has "  NO-VERDICT -- driver: no GC line between @@LITE-MARK end and the tool's exit fence in run 2")#$(spawn -- "$NO" --runs 3 --zero "$dr/k4/driver.js")|$(has "  NO-VERDICT -- driver: unparseable --trace-gc output in run 3: unknown GC kind 'Foo' in the window")" \
-    "2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   check "A13 e2e: tee (exit 4) and tr (exit 6) failing in one run -> tr named; tee alone is named before the driver's exit 3" \
     "$(spawn PATH="$d/sh/tt:$mk:$PATH" -- "$NO" --runs 3 --zero "$dr/y3/driver.js")|$(has '  NO-VERDICT -- driver: cannot read driver output in run 1 (tr exited 6)')#$(spawn PATH="$d/sh/tee:$mk:$PATH" -- "$NO" --runs 3 --zero "$dr/rc3/driver.js")|$(has '  NO-VERDICT -- driver: cannot read driver output in run 1 (tee exited 4)')" \
-    "2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   mkd cr "$S start"$'\n'"$LS"$'\n'"$S end"$'\r'$'\n'"$LS"$'\n'"$S gcn"
   check "A13 e2e: a CR on the end marker line -> exit 2 unparseable 'not exactly that marker line'" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/cr/driver.js")|$(has '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: a line holding @@LITE-MARK start, end or gcn that is not exactly that marker line')" \
-    "2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1"
   check "A13 e2e: the record awk exits 0 with no output (no G record) -> exit 2 'no G record', never ZERO" \
     "$(spawn PATH="$d/sh/a0:$mk:$PATH" -- "$NO" --runs 3 --zero "$dr/z0/driver.js")|$(has '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: no G record')" \
-    "2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1"
 
   # --- the guard count (TASK 3g: A6, A13) ---
   mkd g6 "$A1T"; mkd g6b "$A1T"
   check "A6 e2e: G 6 / count 6 -> SAME; every spawn got the absolute cmp-equal preload and fd 3" \
-    "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/g6b/driver.js")|$(reqs)" "0|VERDICT SAME|7|ok yes x6"
+    "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/g6b/driver.js")|$(reqs)" "0|VERDICT SAME|8|ok yes x6"
   mkd g7 "$A1T"; cnt g7 '7\n'; mkd g9 "$A1T"; cnt g9 '9\n'
   check "A6 e2e: count 7 -> 'trace lost 1 GC line in run 1'; count 9 -> 'trace lost 3 GC lines'" \
     "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/g7/driver.js")|$(has '  NO-VERDICT -- after: trace lost 1 GC line in run 1 (guard count 7, trace 6)')#$(spawn -- "$NO" --runs 3 "$dr/g9/driver.js" "$dr/g6/driver.js")|$(has '  NO-VERDICT -- before: trace lost 3 GC lines in run 1 (guard count 9, trace 6)')" \
-    "2|VERDICT NO-VERDICT|7|1#2|VERDICT NO-VERDICT|7|1"
+    "2|VERDICT NO-VERDICT|8|1#2|VERDICT NO-VERDICT|8|1"
   mkd g5 "$A1T"; cnt g5 '5\n'; mkd g0 "$A1T"; cnt g0 '0\n'
   check "A6 e2e: count 5 -> '1 GC line in run 1 the guard did not count'; count 0 is a count -> '6 GC lines ...'" \
     "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/g5/driver.js")|$(has '  NO-VERDICT -- after: 1 GC line in run 1 the guard did not count (guard count 5, trace 6)')#$(spawn -- "$NO" --runs 3 --zero "$dr/g0/driver.js")|$(has '  NO-VERDICT -- driver: 6 GC lines in run 1 the guard did not count (guard count 0, trace 6)')" \
-    "2|VERDICT NO-VERDICT|7|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|8|1#2|VERDICT NO-VERDICT|5|1"
   mkd gnone "$A1T"; : >"$dr/gnone/nocount"; mkd grm "$A1T"; : >"$dr/grm/rmcount"
   check "A6 e2e: fd 3 never written, or the count file deleted before the read -> 'no guard count in run 1'" \
     "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/gnone/driver.js")|$(has '  NO-VERDICT -- after: no guard count in run 1')#$(spawn -- "$NO" --runs 3 --zero "$dr/grm/driver.js")|$(has '  NO-VERDICT -- driver: no guard count in run 1')" \
-    "2|VERDICT NO-VERDICT|7|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|8|1#2|VERDICT NO-VERDICT|5|1"
   i=0; o=""
   for c in '' '6' '7x\n' ' 6\n' '6 \n' '06\n' '-6\n' '+6\n' '6\n6\n' '6\n\n' '6\r\n' '6\000\n' '\0006\n' '1234567890\n' '0x6\n' '6.0\n'; do
     i=$((i + 1)); mkd "gb$i" "$A1T"; cnt "gb$i" "$c"
     o="$o#$(spawn -- "$NO" --runs 3 --zero "$dr/gb$i/driver.js")|$(has '  NO-VERDICT -- driver: no guard count in run 1')"
   done
   check "A14(b) e2e: 16 count files that are not one canonical decimal line (empty, no newline, sign, leading zero, 10 digits, NUL, CR, 2 lines, ...) -> each 'no guard count'" \
-    "$o" "$(printf '#2|VERDICT NO-VERDICT|4|1%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)"
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|5|1%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)"
   mkd gr2 "$A1T"; printf '7\n' >"$dr/gr2/count.2"; mkd gr3 "$A1T"; printf '5\n' >"$dr/gr3/count.3"
   check "e2e: a count mismatch in run 2 only / run 3 only -> named with its run" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/gr2/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 1 GC line in run 2 (guard count 7, trace 6)')#$(spawn -- "$NO" --runs 3 --zero "$dr/gr3/driver.js")|$(has '  NO-VERDICT -- driver: 1 GC line in run 3 the guard did not count (guard count 5, trace 6)')" \
-    "2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   mkd gt1 "x$LS"$'\n'"$A1T"
   mkd gt2 "$S start"$'\n'"$LS"$'\n'"$S end"$'\n'"$LS"$'\n'"partial-write$LS"$'\n'"$S gcn"
   mkd gt4 "abc"; printf '\000%s\n%s\n' "$LS" "$A1T" >>"$dr/gt4/trace.txt"; printf '7\n' >"$dr/gt4/count"
   check "A13 e2e: a torn GC line glued after text before start / between end and gcn / after a NUL before start -> 'trace lost 1'" \
     "$(spawn -- "$NO" --runs 3 "$dr/g6/driver.js" "$dr/gt1/driver.js")|$(has '  NO-VERDICT -- after: trace lost 1 GC line in run 1 (guard count 7, trace 6)')#$(spawn -- "$NO" --runs 3 --zero "$dr/gt2/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 3, trace 2)')#$(spawn -- "$NO" --runs 3 --zero "$dr/gt4/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 7, trace 6)')" \
-    "2|VERDICT NO-VERDICT|7|1#2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|8|1#2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   mkd gdg "$S start"$'\n'"$LS"$'\n'"$S end"$'\n'"$LS"$'\n'"$S gcn"$'\n'"$LS"$'\n'"$S gcn"; printf '3\n' >"$dr/gdg/count"
   check "A13 e2e: a driver-written @@LITE-MARK gcn (the tool's follows) -> X 'given twice'" \
-    "$(spawn -- "$NO" --runs 3 --zero "$dr/gdg/driver.js")|$(has '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice')" "2|VERDICT NO-VERDICT|4|1"
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/gdg/driver.js")|$(has '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice')" "2|VERDICT NO-VERDICT|5|1"
   mkd gx "$(win "$LFOO")"; printf '9\n' >"$dr/gx/count"; mkd gp0 "$S start"$'\n'"$S end"$'\n'"$S gcn"; : >"$dr/gp0/nocount"
   check "A6 judge order e2e: X + count mismatch -> the X; p = 0 + no count -> the p reason" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/gx/driver.js")|$(has "  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: unknown GC kind 'Foo' in the window")#$(spawn -- "$NO" --runs 3 --zero "$dr/gp0/driver.js")|$(has "  NO-VERDICT -- driver: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" \
-    "2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   mkd gmc "$(win "$LS"$'\n'"$LMC")"; printf '4\n' >"$dr/gmc/count"
   mkd gnc "$(win "$(rep "$LS" 3)")"; printf '%s\n' "$(win "$(rep "$LS" 4)")" >"$dr/gnc/trace.2.txt"; printf '9\n' >"$dr/gnc/count.3"
   check "A6 judge order e2e: Mark-Compact + count 4 (g 3) -> the count; null control (run 2) + count mismatch (run 3) -> the count" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/gmc/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 4, trace 3)')#$(spawn -- "$NO" --runs 3 --zero "$dr/gnc/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 5 GC lines in run 3 (guard count 9, trace 4)')" \
-    "2|VERDICT NO-VERDICT|4|1#2|VERDICT NO-VERDICT|4|1"
-  check "A6 e2e: R=3 --zero with counts -> 4 spawns, ZERO; driver exit 3 + count missing -> the driver exit named" \
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
+  check "A6 e2e: R=3 --zero with counts -> 5 spawns, ZERO; driver exit 3 + count missing -> the driver exit named" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/z0/driver.js")|$(reqs)#$(spawn -- "$NO" --runs 3 "$dr/rc3/driver.js" "$dr/gnone/driver.js")|$(has '  NO-VERDICT -- before: driver exited 3 in run 1')|$(has '  NO-VERDICT -- after: no guard count in run 1')" \
-    "0|VERDICT ZERO|4|ok yes x3#2|VERDICT NO-VERDICT|7|1|1"
+    "0|VERDICT ZERO|5|ok yes x3#2|VERDICT NO-VERDICT|8|1|1"
   : >"$d/awkfd3"
   check "e2e: fd 3 (the guard count) is open in node only, never in the record awk" \
-    "$(spawn PATH="$d/sh/a3:$mk:$PATH" -- "$NO" --runs 2 --zero "$dr/z0/driver.js")|$(grep -c yes "$d/awkfd3" || true)|$([[ $(grep -c no "$d/awkfd3" || true) -ge 2 ]] && echo seen || echo unseen)" "0|VERDICT ZERO|3|0|seen"
+    "$(spawn PATH="$d/sh/a3:$mk:$PATH" -- "$NO" --runs 2 --zero "$dr/z0/driver.js")|$(grep -c yes "$d/awkfd3" || true)|$([[ $(grep -c no "$d/awkfd3" || true) -ge 2 ]] && echo seen || echo unseen)" "0|VERDICT ZERO|4|0|seen"
   spawn -- "$NO" --runs 2 --zero "$dr/z0/driver.js" >/dev/null; x=$(sed -n 1p "$fk/req" | awk '{ print $3 }')
   rm -f "$fk"/*.n; : >"$fk/log"; : >"$fk/req"; mkdir -p "$d/rel/rt"
   (cd "$d/rel" && env -u NODE_OPTIONS -u NODE TMPDIR=rt "$BASH" "$SELF" "$NO" --runs 2 --zero "$dr/z0/driver.js") >"$d/sp.out" 2>&1 3>&- && c=0 || c=$?
@@ -680,17 +738,18 @@ FAKE_MKTEMP
   check "e2e: --out ../od1 whose report.txt is the --zero driver given as ../od3/report.txt (relative paths) -> refused" \
     "$(cd "$d/cwd" && env -u NODE_OPTIONS TMPDIR="$d/tmp" "$BASH" "$SELF" "$NO" --runs 2 --zero --out ../od1 ../od3/report.txt >/dev/null 2>&1 3>&-; echo $?)|$(cat "$d/od1/report.txt")" \
     "2|DRIVER-BYTES"
-  # relative PATH: node = $d/cwd/nm/node (the caller's cwd) and a rogue nm/node in each driver dir; all 1 + 2R spawns hit ONE
+  # relative PATH: node = $d/cwd/nm/node (the caller's cwd) and a rogue nm/node in each driver dir; all 2 + 2R spawns hit ONE
   mkdir -p "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"
   for x in "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"; do cp "$fk/node" "$x/node"; done
   mkd rpb "$(win "$(rep "$LS" 3)")"; mkd rpa "$(win "$(rep "$LS" 5)")"
   got=$(spawn PATH="nm:$mk:$PATH" -- --runs 3 "$dr/rpb/driver.js" "$dr/rpa/driver.js")
-  check "A13 e2e relative PATH (PATH=nm:...): all 1 + 2R spawns run the ONE node resolved from the caller's cwd, named absolute in the head" \
+  check "A13 e2e relative PATH (PATH=nm:...): all 2 + 2R spawns run the ONE node resolved from the caller's cwd, named absolute in the head" \
     "${got%|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "allocation-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS stripped)")" \
-    "1|VERDICT DIFF|7|0|1"
+    "1|VERDICT DIFF|8|0|1"
   rm -rf "$d/cwd/nm"
 
-  # --- -h, and refusals: each exit 2 before any spawn or disk write (A3 11 + A14(d)) ---
+  # --- -h, and refusals: each exit 2 before any spawn or disk write (A3 11 + A14(d)), except check 71's --v8-flags
+  # sub-case (a token outside the allowlist): exit 2 after the --version and --v8-options spawns, before any disk write ---
   "$BASH" "$SELF" -h >"$d/h.out" 2>&1 3>&- && c=0 || c=$?
   check "-h: exit 2, the usage text from line 2, '--runs N ... (default 5)' once, the fd 3 contract once" \
     "$c|$(sed -n 1p "$d/h.out" | cut -c1-21)|$(grep -c '(default 5)' "$d/h.out" || true)|$(grep -c 'fd 3 is the guard' "$d/h.out" || true)" "2|allocation-diff.sh --|1|1"
@@ -715,9 +774,11 @@ FAKE_MKTEMP
     o="$o#$(spawn -- "$NO" "--v8-flags=--expose-gc $x" "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags must not set $x" "$d/sp.out" || true)"
   done
   x="$(spawn -- "$NO" --v8-flags '-r ./p.js' "$dr/y3/driver.js" "$dr/y5/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -e "allocation-diff: --v8-flags takes flags only (each starts with -- and a letter), got '-r'" "$d/sp.out" || true)"
-  check "A14(d) refused before any spawn: --v8-flags --require=F / --require / --import=F / --import (a preload ahead of the guard's) and -r F -> exit 2, 0 spawns" \
-    "$o#$x#$(spawn -- "$NO" --runs 2 --v8-flags '--experimental-require-module' --zero "$dr/z0/driver.js" | cut -d'|' -f1)" \
-    "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1#0"
+  # FLAG -> the exact MD-50 die line of lib/v8flags.sh's v8fl_check (a --v8-flags token outside the allowlist)
+  v8m() { printf 'allocation-diff: --v8-flags must not set %s: only V8 tuning flags of this node binary are accepted (node'"'"'s own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)' "$1"; }
+  check "A14(d) refused before any spawn: --v8-flags --require=F / --require / --import=F / --import (a preload ahead of the guard's) and -r F -> exit 2, 0 spawns; --experimental-require-module (not a V8 flag of this node) -> exit 2 after the --version and --v8-options spawns, one MD-50 die line" \
+    "$o#$x#$(spawn -- "$NO" --runs 2 --v8-flags '--experimental-require-module' --zero "$dr/z0/driver.js" | cut -d'|' -f1,3)|$(grep -c -F -x -e "$(v8m --experimental-require-module)" "$d/sp.out" || true)" \
+    "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1#2|2|1"
 
   # --- A5 retention: 3 cycles of SAME / DIFF / NONZERO / NO-VERDICT (x2) without --out -> 1 mktemp each, 0 new entries ---
   ents() { find "$d/tmp" "$d/cwd" "$dr/y3" "$dr/y3b" "$dr/y5" "$dr/y1" "$dr/mc" "$dr/gnone" -mindepth 1 | wc -l | tr -d ' '; }
@@ -764,12 +825,26 @@ FAKE_MKTEMP
   check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver; a prefix match) -> exit 2, 0 spawns" \
     "$o" "#2|0|1#2|0|1#2|0|1#2|0|1#2|0|1"
 
+  # --- MD-50 (lib/v8flags.sh): the runtime V8 allowlist, read from this node's --v8-options after --version ---
+  o=""
+  for x in --snapshot-blob=F --build-snapshot --openssl-config=F --experimental-print-required-tla --trace-osr --turbo-filter=x --noopt; do
+    o="$o#$(spawn -- "$NO" --runs 2 --v8-flags "$x" --zero "$dr/z0/driver.js")|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "$(v8m "$x")" "$d/sp.out" || true)|$(tr '\n' ' ' <"$fk/log")"
+  done
+  x="$(spawn FAKE_V8O_RC=1 -- "$NO" --out "$d/ov8" "$dr/y3/driver.js" "$dr/y3b/driver.js" | cut -d'|' -f1,3)|$([[ -e "$d/ov8" ]] && echo exists || echo absent)|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: cannot run $fk/node --v8-options" "$d/sp.out" || true)"
+  check "MD-50 refused after the --v8-options read: --v8-flags --snapshot-blob=F / --build-snapshot / --openssl-config=F / --experimental-print-required-tla / --trace-osr / --turbo-filter=x / --noopt -> exit 2, 2 spawns (--version --v8-options), 0 mktemp, one die line; a failing --v8-options (with --out) -> exit 2 after 2 spawns, no OUT dir, no temp dir" \
+    "$o#$x" "$(printf '#2|VERDICT NO-VERDICT|2|0|1|--version --v8-options %.0s' 1 2 3 4 5 6 7)#2|2|absent|0|1"
+  x='--expose-gc --no-lazy-feedback-allocation --max-inlined-bytecode-size=30 --allow-natives-syntax'
+  check "MD-50 accepted: --v8-flags '$x' --runs 2 --zero -> exit 0 ZERO, 4 spawns: --version, --v8-options, then 2 runs carrying the 4 flags first" \
+    "$(spawn -- "$NO" --runs 2 --v8-flags "$x" --zero "$dr/z0/driver.js")|$(sed -n 1,2p "$fk/log" | tr '\n' ' ')|$(sed -n 3,4p "$fk/log" | awk -v p="$x --trace-gc --min-semi-space-size=1 " 'index($0, p) == 1 { n++ } END { print n + 0 }')|$(grep -c -F -e "$x" "$fk/log" || true)" \
+    "0|VERDICT ZERO|4|--version --v8-options |2|2"
+
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
 }
 
 # ---------------------------------------------------------------------------------------------
-# options (every check below runs before any node is spawned and before any disk write)
+# options (every check below runs before any node is spawned and before any disk write, except a --v8-flags flag
+# outside the allowlist: v8fl_check refuses it after the --version and --v8-options spawns, before any disk write)
 # ---------------------------------------------------------------------------------------------
 ZERO=0; RUNS=5; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null; T=""
 OPTS="--zero --runs --node --v8-flags --out --self-test --help"
@@ -870,8 +945,10 @@ for ((i = 0; i < ${#POS[@]}; i++)); do
   DESC[$i]="${DRV_DIR[$i]%/}/${DRV_BASE[$i]}  sha256/8 $(sha8 "${DRV_DIR[$i]}/${DRV_BASE[$i]}")"
 done
 
-# --- every refusal is above this line; spawns start here: --version, then disk writes, then the runs ---
+# --- every refusal that spawns nothing is above this line; spawns start here: --version, the --v8-options read
+# (v8fl_check refuses here, before any disk write or run), then disk writes, then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
+v8fl_check "$NODE_BIN"
 # the temp dir (gcn.cjs, the guard counts, driver stderr without --out) goes on every exit path: this trap runs the
 # prologue's EXIT trap after it (with $? restored; set +e so restoring a non-zero $? cannot cut the trap short). It is
 # set before mktemp, and T is absolute from the start (a relative TMPDIR is taken from the caller's cwd).

@@ -2,7 +2,7 @@
 // ORACLE: PLAN-phase3-g2.md ASSERTIONS A1 (verdicts), A2 (refusals), A3 (no git on PATH), A4 (env), A5 (retention) plus
 // ADDENDA A1 (MD-15 --out required, MD-16 byte-identical modules -> NO-VERDICT, MD-17 OUT/stage regular file), NOT the
 // script's own --self-test. Expected values are hand-derived from the fixture contents below (fake node, R = 3 runs ->
-// 1 + 3 x 2 = 7 spawns), never copied from a run.
+// 2 + 3 x 2 = 8 spawns), never copied from a run.
 // TIER: DETERMINISTIC (no V8 spawn; the fake node is a /bin/sh script). Every A1/A2 row also runs on the PRE-G2 build
 // (resolved by CONTENT: first commit of `git rev-list HEAD -- deopt-diff.sh` whose blob has sha256/8 221ff2ec; none -> the
 // twins are skipped, never passed), where it must exit 2 "unknown option --before(-ref)" (or the named option) AND its own
@@ -104,7 +104,7 @@ function mkCase() {
     const log = join(dir, 'argv.log'), calls = join(dir, 'calls'), node = join(dir, 'node');
     writeFileSync(node, `#!/bin/sh
 echo "$*" >> ${JSON.stringify(log)}
-case "$1" in --version) if [ -n "\${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac
+case "$1" in --version) if [ -n "\${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; --v8-options) echo "  --allow-natives-syntax (allow natives syntax)"; echo "        type: bool  default: --no-allow-natives-syntax"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; esac
 n=$(( $(cat ${JSON.stringify(calls)} 2>/dev/null || echo 0) + 1 )); echo "$n" > ${JSON.stringify(calls)}
 if [ -f ./trace.txt ]; then cat ./trace.txt; fi
 if [ -n "\${FAKE_LIVE:-}" ] && [ "$n" = "\${FAKE_AT:-0}" ]; then cp "$FAKE_LIVE_SRC" "$FAKE_LIVE"; fi
@@ -154,7 +154,7 @@ const lines = (s) => s.split('\n');
 const has = (r, line) => lines(r.stdout).filter((l) => l === line).length;
 
 // =====================================================================================================
-// A1 verdicts (fake node, R = 3 -> 7 spawns)
+// A1 verdicts (fake node, R = 3 -> 8 spawns)
 // =====================================================================================================
 const L_DIFF = '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)';
 const NOTE = 'NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)';
@@ -162,13 +162,13 @@ const L_ADD_DIFF = '  add: DIFF -- deopt multiset differs (before 0 | after 1)';
 const L_MD16 = '  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise';
 const R_DIFF = { args: (c) => refO(c), check: (c, r) => {
     assert.equal(r.status, 1, msg(r));                                        // red on M-sha (before staged from r2 -> exit 0), M-cwd
-    assert.equal(c.spawns().length, 7, c.spawns().join('\n'));                // --version + 3 runs x 2 sides
+    assert.equal(c.spawns().length, 8, c.spawns().join('\n'));                // --version + --v8-options + 3 runs x 2 sides
     assert.equal(has(r, L_DIFF), 1, msg(r));
     assert.equal(has(r, 'mode    diff (ref)  runs 3  v8 flags --trace-deopt-verbose --trace-opt --no-concurrent-recompilation'), 1, msg(r));   // red on M-mode
     assert.equal(lines(r.stdout).filter((l) => l.startsWith('NOTE ')).length, 0, msg(r));      // red on M-note
     assert.equal(has(r, 'VERDICT DIFF'), 1, msg(r));
 } };
-row('A1 ref r1 | r2 -> exit 1, 7 spawns, the before=0 after=1 line, "mode    diff (ref)  runs 3", no NOTE', R_DIFF);
+row('A1 ref r1 | r2 -> exit 1, 8 spawns, the before=0 after=1 line, "mode    diff (ref)  runs 3", no NOTE', R_DIFF);
 row('A1 ref r1 | r2 -> head line "before  r1 @ <sha12>  m/trace.txt  sha256/8 <x>" (sha12 from the repo, x from the staged file)', {
     args: (c) => refO(c), check: (c, r) => {
         assert.equal(r.status, 1, msg(r));
@@ -180,7 +180,7 @@ row('A1 ref r1 | r2 -> head line "before  r1 @ <sha12>  m/trace.txt  sha256/8 <x
     } });
 const R_SAME = { args: (c) => refO(c, { '--after-ref': 'r1' }), check: (c, r) => {
     assert.equal(r.status, 0, msg(r));
-    assert.equal(c.spawns().length, 7);
+    assert.equal(c.spawns().length, 8);
     assert.equal(has(r, NOTE), 1, msg(r));
     assert.equal(has(r, 'VERDICT SAME'), 1, msg(r));
 } };
@@ -210,7 +210,7 @@ const F_LIVE = {
 row('A1 file: the live --after rewritten at node call 3 -> exit 0 (the staged copy protects it)', F_LIVE);
 const MD16 = { args: (c) => refO(c, { '--after-ref': 'r1' }), env: (c) => ({ FAKE_AFTER_EXTRA: c.extra }), check: (c, r) => {
     assert.equal(r.status, 2, msg(r));                                       // red on M-noise-off (exit 1)
-    assert.equal(c.spawns().length, 7);
+    assert.equal(c.spawns().length, 8);
     assert.equal(has(r, L_ADD_DIFF), 1, msg(r));
     assert.equal(has(r, L_MD16), 1, msg(r));
     assert.ok(lines(r.stdout).indexOf(L_ADD_DIFF) < lines(r.stdout).indexOf(L_MD16), 'the DIFF line must come before the NO-VERDICT line');   // (ii) order
@@ -219,7 +219,7 @@ const MD16 = { args: (c) => refO(c, { '--after-ref': 'r1' }), env: (c) => ({ FAK
 row('A1 ref r1 | r1 with an after-only deopt -> exit 2: the fn DIFF line, THEN the byte-identical NO-VERDICT line (MD-16)', MD16);
 const MD16_PERFN = { args: (c) => refO(c, { '--after-ref': 'r1' }), env: () => ({ FAKE_AFTER_RC: '3' }), check: (c, r) => {
     assert.equal(r.status, 2, msg(r));
-    assert.equal(c.spawns().length, 7);
+    assert.equal(c.spawns().length, 8);
     assert.equal(has(r, '  add: NO-VERDICT -- after: driver exited 3 in run 1'), 1, msg(r));   // its OWN reason
     assert.equal(has(r, L_MD16), 0, msg(r));                                 // (i) red on `$VERDICT == DIFF` -> `$VERDICT != SAME`
     assert.equal(lines(r.stdout).filter((l) => l.includes('byte-identical') && !l.startsWith('NOTE ')).length, 0, msg(r));
@@ -316,7 +316,7 @@ mutant('M-order', 'stage_write before the --version spawn',
 // =====================================================================================================
 const repoState = () => ({ head: git(REPO, 'rev-parse', 'HEAD'), refs: git(REPO, 'for-each-ref'), status: git(REPO, 'status', '--porcelain') });
 function realMktemp() { for (const d of (process.env.PATH || '').split(':')) { if (d && existsSync(join(d, 'mktemp'))) return join(d, 'mktemp'); } return '/usr/bin/mktemp'; }
-test('deopt-diff stage A5 retention: 20 ref runs give exactly 140 spawns and 11 files per OUT; TMPDIR, cwd and mktemp stay untouched; the repo is unchanged', { skip }, () => {
+test('deopt-diff stage A5 retention: 20 ref runs give exactly 160 spawns and 11 files per OUT; TMPDIR, cwd and mktemp stay untouched; the repo is unchanged', { skip }, () => {
     let c;
     try {
         c = mkCase();
@@ -332,7 +332,7 @@ test('deopt-diff stage A5 retention: 20 ref runs give exactly 140 spawns and 11 
             const files = walk(out).map((f) => f.slice(out.length + 1)).sort();
             assert.equal(files.length, 11, `run ${i}: ${files.join(' ')}`);   // report.txt + raw 3 + 3 + stage 2 + 2
         }
-        assert.equal(c.spawns().length, 20 * 7, 'node spawns over 20 runs');
+        assert.equal(c.spawns().length, 20 * 8, 'node spawns over 20 runs');
         assert.equal(existsSync(mlog) ? readFileSync(mlog, 'utf8') : '', '', 'the staged run called mktemp');
         assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries');
         assert.deepEqual(readdirSync(c.cwd), [], 'cwd kept entries');
@@ -403,12 +403,12 @@ test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of t
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 1, `check "${n}"`);
     assert.equal(ST_NAMES.length, 18);
 });
-test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 18 staged checks; host-env ok count = pre-G2 count + 36 (18 staged + 13 G3 B2 + 5 B-four dd)', { skip: baseSkip }, async () => {
+test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 18 staged checks; host-env ok count = pre-G2 count + 39 (18 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2)', { skip: baseSkip }, async () => {
     histGate(haveBase);
     const r = await ST.pre;
     assert.equal(r.status, 0, r.out + r.err);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 0, n);
-    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5); // 89 = 53 + 36 = 53 + 18 + 13 + 5
+    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3); // 92 = 53 + 39 = 53 + 18 + 13 + 5 + 3 (spec: CHECKS 89 -> 92)
 });
 for (const [label, key] of [['GIT_EDITOR / EDITOR / VISUAL = true', 'editor'], ['the six GIT_* vars set to missing paths', 'missing'], ["GIT_CONFIG_PARAMETERS=\"'tag.gpgsign'='true'\"", 'params']]) {
     test(`deopt-diff stage A4 env: --self-test with ${label} -> exit 0, same ok count as the host-env run, all 18 staged checks once`, { skip }, async () => {

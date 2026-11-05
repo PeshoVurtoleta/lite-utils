@@ -15,8 +15,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 89;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
-                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44); a new check moves this literal.
+const CHECKS = 92;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
+                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
+                     // allowlist rows (checks 90-92: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
+                     // PLAN-md46 G2 TASK 3); a new check moves this literal.
                      // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
 // P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows
 const FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'deopt-diff', 'node-26.8.2');
@@ -86,6 +88,14 @@ const W1 = [AWK0, "DEOPT_AWK='\nBEGIN { if (fn == \"ad\") exit 3 }\nfunction nam
 const W2 = [AWK0, "DEOPT_AWK='\nBEGIN { if (fn == \"value\") exit 3 }\nfunction names("];
 const GE_X = 'else if (index($0, "[bailout") > 0 || index($0, "[completed compiling") > 0) x(';
 const RUNSIDE = (x) => `RUN_RC="${x}"`;
+// MD-46 (PLAN-md46 G2 TASK 1): the one v8fl_check call line, right after GOT_VER, before the --out mkdir block
+const V8FL_CALL = 'v8fl_check "$NODE_BIN"   # lib/v8flags.sh: ONE --v8-options read, then the --v8-flags allowlist (MD-50..58)\n';
+const OUT_BLOCK = 'if [[ -n "$OUT" ]]; then\n' +
+    '  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
+    '  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one\n' +
+    '  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L\n' +
+    '  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check\n' +
+    'fi\n';
 
 // [name, edits, designed row prefixes]. Coder mutants M1-M7, S1-S4, Na-Ne; reviewer K1-K4, K7, T1-T6, W1-W2 (round 2);
 // reviewer Ra-Rf, Rn (designed rows reasoned from the precedence line awk > tr > tee > driver exit and the NUL rows).
@@ -117,14 +127,17 @@ const MUTANTS = [
         ['e2e: a bailout glued after driver output']],
     ['Na-empty-reason-label', [['x("bailout: empty reason or a tab")', 'x("bailout: empty reason")']],
         ['records: a bailout with an empty reason or a tab']],
+    // MD-46: the v8fl_check call sits between GOT_VER and the --out block; Nb moves only the --version probe below the block
     ['Nb-version-probe-after-mkdir', [[
         'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\n' +
+        V8FL_CALL +
         'if [[ -n "$OUT" ]]; then\n' +
         '  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
         '  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one\n' +
         '  OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L\n' +
         '  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check\n' +
         'fi\n',
+        V8FL_CALL +
         'if [[ -n "$OUT" ]]; then\n' +
         '  mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"\n' +
         '  # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one\n' +
@@ -215,6 +228,15 @@ const OUT_MUTANTS = [
     ['M42-module-arm-deleted', [[MD42, '']], ['MD-42 refused before any spawn: --v8-flags --loader=F']],
     ['M44-eval-print-arm-deleted', [[MD44, '']], ['MD-44 refused before any spawn: --v8-flags --eval=F']],
 ];
+// The MD-46 G2 mutant table (PLAN-md46 G2 TASK 4, ASSERTIONS A1 / A2): M-v8fl-off deletes the call (no --v8-options read:
+// the refused token runs, FAKE_V8O_RC is never seen, every spawn pin reads 7); M-v8fl-late moves it below the --out mkdir
+// block (the refusals still exit 2 after 2 spawns, but OUT now exists). Designed rows = checks 91 (b) and 92 (c).
+const V8B = 'MD-50 refused after the --v8-options read';
+const V8C = 'MD-56 a failing node --v8-options';
+const V8FL_MUTANTS = [
+    ['M-v8fl-off', [[V8FL_CALL, '']], [V8B, V8C]],
+    ['M-v8fl-late', [[V8FL_CALL + OUT_BLOCK, OUT_BLOCK + V8FL_CALL]], [V8B, V8C]],
+];
 // Controls (must SURVIVE: W1 / W2 on the pre-r2 rec() body that swallowed an awk failure -- that is the gap W1 / W2 close)
 const CONTROLS = [
     ['C1-W1-on-old-rec', [W1, [REC_NEW, REC_OLD]]],
@@ -240,6 +262,7 @@ function assertKilled(name, r, rows, exact = false) {
 assert.equal(MUTANTS.length, 36, 'the mutant table holds the 29 + 7 rows of the plan');
 assert.equal(OUT_MUTANTS.length, 5, 'the B-four dd mutant table holds M36, M37, M40, M42, M44 (TASK 5)');
 assert.equal(TIER_MUTANTS.length, 16, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4))');
+assert.equal(V8FL_MUTANTS.length, 2, 'the MD-46 G2 mutant table holds M-v8fl-off and M-v8fl-late (PLAN-md46 G2 TASK 4)');
 // The mutant self-tests are independent, so they run in parallel (6 at a time) from module load; each test awaits its own.
 let active = 0;
 const waiting = [];
@@ -267,6 +290,7 @@ function launch(name, edits, extra = []) {
 const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const OKILLS = skip ? null : OUT_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
+const VKILLS = skip ? null : V8FL_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const SURV = skip ? null : CONTROLS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 function killRows(table, kills, exact = false) { table.forEach(([name, , rows], i) => {
     test(`deopt-diff --self-test MUST FAIL on mutant ${name}${exact ? ' (exactly its designed row)' : ''}`, { skip }, async () => {
@@ -285,6 +309,7 @@ function killRows(table, kills, exact = false) { table.forEach(([name, , rows], 
 killRows(MUTANTS, KILLS);
 killRows(TIER_MUTANTS, TKILLS);
 killRows(OUT_MUTANTS, OKILLS, true);
+killRows(V8FL_MUTANTS, VKILLS);
 CONTROLS.forEach(([name], i) => {
     test(`deopt-diff --self-test control ${name} must SURVIVE`, { skip }, async () => {
         const r = await SURV[i];
@@ -377,16 +402,27 @@ FIX_MUTANTS.forEach(([name, , rows], i) => {
     });
 });
 
-test('deopt-diff -h: exit 2 and the usage header (reason list and precedence line)', { skip }, () => {
-    const r = spawnSync('bash', [SCRIPT, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV });
+// PLAN-md46 G1 "Shared -h text for G2-G5, verbatim" (MD-46), compared with all whitespace runs collapsed to one space
+const V8FL_HELP = 'Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric as ' +
+    '--flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 after one ' +
+    '--v8-options read and before any measured run: every node option (--run, --test, --watch, --check, --inspect, ' +
+    '--cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool\'s own flags above.';
+function assertHelp(r) {
     assert.equal(r.status, 2, r.stdout + r.stderr);
     assert.match(r.stdout, /^deopt-diff\.sh -- the DEOPTIMIZATIONS of NAMED functions/m);
     assert.match(r.stdout, /cannot read driver output in run <k> \(<tee\|tr\|awk> exited <rc>\)/);
     assert.match(r.stdout, /the first failure in the order awk > tr > tee > driver exit is named/);
+    const flat = r.stdout.replace(/\s+/g, ' ');
+    assert.equal(flat.split(V8FL_HELP).length - 1, 1, 'the shared MD-46 -h text exactly once (whitespace collapsed)');
+    assert.ok(flat.includes('-r / -e / -p are refused as non-flags. ' + V8FL_HELP), 'the shared text follows the -r / -e / -p sentence');
+}
+test('deopt-diff -h: exit 2, the usage header (reason list and precedence line) and the shared MD-46 --v8-flags text', { skip }, () => {
+    assertHelp(spawnSync('bash', [SCRIPT, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV }));
 });
 
 // --- e2e rows from the B2-r2 review: fail-closed shapes no self-test row pins. A fake node (bash) answers --version
-// with v26.8.2 and otherwise cats ./trace.txt of its cwd (the driver's dir); every spawn is logged.
+// with v26.8.2, --v8-options with a canned list (MD-46: test/fixtures/v8flags/v8-options.v26.8.2.txt lines 1551-1552,
+// verbatim) and otherwise cats ./trace.txt of its cwd (the driver's dir); every spawn is logged, both answers included.
 // Canned V8 node v26.8.2 lines (copied from the self-test's canned trace; fn = add).
 const E9 = '[completed compiling 0x060e65bf5b89 <JSFunction add (sfi = 0xf7e008dc999)> (target TURBOFAN_JS) - took 0.009, 0.245, 0.003 ms]';
 const D10 = '[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing 0x060e65bf5b89 <JSFunction add (sfi = 0xf7e008dc999)>, 0x140083075c49 <Code TURBOFAN_JS>, opt id 2, bytecode offset 2, deopt exit 0, FP to SP delta 32, caller SP 0x00016eeed198, pc 0x00011f6425b4]';
@@ -399,8 +435,10 @@ function e2e(script, after) {
         const fk = join(dir, 'fk');
         mkdirSync(fk);
         writeFileSync(join(fk, 'node'), [`#!${process.env.BASH || '/bin/bash'}`, 'd=$(dirname "$0")', 'echo x >>"$d/log"',
-            'case "$1" in --version) echo v26.8.2; exit 0 ;; esac', 'if [ -f ./trace.txt ]; then cat ./trace.txt; fi', 'exit 0', ''].join('\n'));
+            'case "$1" in --version) echo v26.8.2; exit 0 ;; esac', 'case "$1" in --v8-options) cat "$d/v8o.txt"; exit 0 ;; esac',
+            'if [ -f ./trace.txt ]; then cat ./trace.txt; fi', 'exit 0', ''].join('\n'));
         chmodSync(join(fk, 'node'), 0o755);
+        writeFileSync(join(fk, 'v8o.txt'), '  --allow-natives-syntax (allow natives syntax)\n        type: bool  default: --no-allow-natives-syntax\n');
         for (const [n, text] of [['before', E9 + '\n'], ['after', after]]) {
             mkdirSync(join(dir, n));
             writeFileSync(join(dir, n, 'driver.js'), '');
@@ -413,11 +451,11 @@ function e2e(script, after) {
         return { status: r.status, out, lines: out.split('\n'), spawns: readFileSync(join(fk, 'log'), 'utf8').split('\n').filter(Boolean).length };
     } finally { rmSync(dir, { recursive: true, force: true }); }
 }
-// exit 2, one VERDICT line (NO-VERDICT, never SAME / DIFF), 7 spawns (R=3: 1 version + 3 + 3), the OWN reason line
+// exit 2, one VERDICT line (NO-VERDICT, never SAME / DIFF), 8 spawns (R=3: 1 version + 1 --v8-options + 3 + 3), the OWN reason line
 function assertX(r, why) {
     assert.equal(r.status, 2, r.out);
     assert.deepEqual(r.lines.filter((l) => l.startsWith('VERDICT ')), ['VERDICT NO-VERDICT'], r.out);
-    assert.equal(r.spawns, 7, r.out);
+    assert.equal(r.spawns, 8, r.out);
     assert.ok(r.lines.includes(REASON(why)), `missing reason line "${REASON(why)}"\n${r.out}`);
 }
 const E_ROWS = [

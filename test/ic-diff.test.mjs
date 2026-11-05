@@ -18,7 +18,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 72;   // self-test ok lines at gB B-four ic B1 (src 2b4769ad / root bed42c6e, plan TASK 5); a new check moves this literal
+const C = 75;   // self-test ok lines at MD-46 G4 B1 ic (src de09b3e3 / root 7c0d3dbf, PLAN-md46 G4 TASK 5); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_COMPILE_CACHE would make the fake nodes exit 7;
@@ -26,7 +26,7 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
 
-// The 72 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 75 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -100,6 +100,9 @@ const ROW = [null,
     /* 70 */ 'refused before any spawn: MD-40',
     /* 71 */ 'refused before any spawn: MD-42',
     /* 72 */ 'refused before any spawn: MD-44',
+    /* 73 */ 'MD-46 allowlist (with --out):',
+    /* 74 */ 'MD-56: a --v8-options list',
+    /* 75 */ 'K3 second call: the hashed',
 ];
 
 function selfTest(path) {
@@ -274,10 +277,10 @@ const B2 = [
     ["M22", [36], "env strip dropped from the --version probe",
         [["GOT_VER=$(\"${PROBE_ENV[@]}\" \"$NODE_RES\" --version 2>/dev/null)",
           "GOT_VER=$(\"$NODE_RES\" --version 2>/dev/null)"]]],
-    ["M24", [37], "--v8-options exit ignored",
+    ["M24", [75], "--v8-options exit ignored",
         [["[[ \"$V8O_RC\" == 0 ]] || die \"cannot run $NODE_RES --v8-options\"",
           "true"]]],
-    ["M25", [37], "empty --v8-options output accepted",
+    ["M25", [75], "empty --v8-options output accepted",
         [["[[ \"$V8O_N\" =~ ^[0-9]+$ && \"$V8O_N\" != 0 ]] || die \"$NODE_RES --v8-options printed nothing\"",
           "true"]]],
     ["M-ver", [38], "--version exit ignored",
@@ -288,7 +291,7 @@ const B2 = [
           "V8O_T=$(\"${PROBE_ENV[@]}\" \"$NODE_RES\" --v8-options 2>/dev/null) && V8O_R=0 || V8O_R=$?\nV8O=$(printf '%s\\n' \"rc $V8O_R\" \"bytes ${#V8O_T}\" \"$(printf '%s\\n' \"$V8O_T\" | sha8 -)\")"]]],
     ["M-optverdict", [40], "the v8-opts hash moves the verdict",
         [["\nVERDICT=SAME\n",
-          "\nVERDICT=SAME; [[ $V8O_SHA == 3d098cd0 ]] || VERDICT=DIFF\n"]]],
+          "\nVERDICT=SAME; [[ $V8O_SHA == ea67e28d ]] || VERDICT=DIFF\n"]]],
     ["M-nomv", [41], "isolate file copied, not renamed",
         [["mv -f \"${LF[0]}\" \"$lf\" ||",
           "cp \"${LF[0]}\" \"$lf\" ||"]]],
@@ -404,6 +407,19 @@ const NEW = [
     ['M44x', [72], 'eval arm -> exact forms `--eval|--eval=*|--print|--print=*)`',
         [['    --eval*|--print*)\n',
           '    --eval|--eval=*|--print|--print=*)\n']]],
+    // MD-46 G4 TASK 5 (PLAN-md46.md; A3 addendum): the allowlist wiring. v8fl_check deleted -> row 73 (every refused
+    // flag runs) and row 74 (the synopsis-only list is never read); moved after the OUT / mktemp block (accepted runs
+    // unchanged) -> rows 54, 73-75 (OUT / mktemp before the refusal or the hashed probe);
+    // v8fl_read's env strip dropped (the anchor is the INCLUDED lib text, once in the root) -> row 36 (the fake exits 7
+    // on the allowlist read when NODE_OPTIONS reaches it)
+    ['M-v8fl-call', [73, 74], 'v8fl_check call deleted (no allowlist read, no refusal)',
+        [['\nv8fl_check "$NODE_RES"\n', '\n']]],
+    ['M-v8fl-late', [54, 73, 74, 75], 'v8fl_check moved after the OUT / mktemp block (accepted runs unchanged)',
+        [['\nv8fl_check "$NODE_RES"\n', '\n'],
+         ['  RUNROOT="$IC_TMP"\nfi\n', '  RUNROOT="$IC_TMP"\nfi\nv8fl_check "$NODE_RES"\n']]],
+    ['M-v8fl-env', [36], 'v8fl_read env strip dropped (NODE_OPTIONS / NODE_COMPILE_CACHE reach the allowlist read)',
+        [['  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?\n',
+          '  raw=$("$1" --v8-options 2>/dev/null) || rc=$?\n']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -447,8 +463,8 @@ function launch(name, edits) {
 }
 
 // --- exit wiring (TASK 6 / A10): a self-test whose row FAILs must exit non-zero. EW1 flips ONE canned expectation
-// (row 32's spawn count 8 -> 9); EWa / EWb break the wiring on top of EW1 and must make the row's assertion throw.
-const EW1 = ['"1|VERDICT DIFF|8|1|1|--version+--v8-options|1"', '"1|VERDICT DIFF|9|1|1|--version+--v8-options|1"'];
+// (row 32's spawn count 9 -> 10); EWa / EWb break the wiring on top of EW1 and must make the row's assertion throw.
+const EW1 = ['"1|VERDICT DIFF|9|1|1|--version+--v8-options+--v8-options|1"', '"1|VERDICT DIFF|10|1|1|--version+--v8-options+--v8-options|1"'];
 const EW = [
     ['EW1-one-expectation-flipped', [EW1]],
     ['EWa-self-test-rc-dropped', [EW1, ['if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi', 'self_test || true; FINAL=1; exit 0']]],
@@ -485,7 +501,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 71 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 74 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -504,10 +520,13 @@ const HELP_LINES = [
     '  ic-diff.sh --self-test                                       canned checks, a fake node (no real node)',
     '  -h, --help         this text (exit 2)',
     '                     "self-test: <n> check(s) FAILED" (exit 1)',
-    'Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, one --v8-options, then',
-    '  2 x runs trace runs (runs 3: 8 spawns); a failing probe exits 2 before anything is written. Probe die lines:',
+    'Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, two --v8-options (the',
+    '  --v8-flags allowlist read, then the hashed probe), then 2 x runs trace runs (runs 3: 9 spawns); a failing probe',
+    '  <node> --v8-options`, `ic-diff: <node> --v8-options printed nothing`, `ic-diff: <node> --v8-options lists no V8',
+    '  flag`, `ic-diff: cannot hash the <node> --v8-options output`.',
+    '  --v8-flags allowlist: it exits 2 after the --version and the first --v8-options spawn, still before any disk write.',
     '  With --out: no mktemp; DIR holds report.txt and raw/<side>/run.<k>.{log,out} (4 x runs + 1 files; 13 for runs 3).',
-    '  `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after both probes, removed on every exit; an INT / TERM ->',
+    '  `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit; an INT / TERM ->',
     '  S fn<TAB>kind<TAB>base:line:col<TAB>key<TAB>final<TAB>mod<TAB>slow',
     'Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT.',
     'Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.',
@@ -559,7 +578,9 @@ test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row'
 
 // --- A4 (+ A7 K1 / K2) on this file's OWN fake node and mktemp shim (independent of the self-test's fake). The fake
 // node logs its argv per spawn, exits 7 when NODE_OPTIONS or NODE_COMPILE_CACHE reaches it (every run below sets
-// both), answers --version / --v8-options, else is a trace run: exit 9 unless its last argument is an existing file
+// both), answers --version / --v8-options (a synopsis + one name / type entry verbatim from
+// test/fixtures/v8flags/v8-options.v26.8.2.txt, lazy-feedback-allocation, so the allowlist read finds a V8 flag; the
+// rows below pass no --v8-flags), else is a trace run: exit 9 unless its last argument is an existing file
 // whose name does not start with '-' as node would read it, copy ./ic.log to isolate-0x1000-<pid>-<basename of
 // --logfile> beside the --logfile path, ./term -> SIGTERM to its parent (the script), exit ./rc or 0. Canned log:
 // node v26.8.2 lines (recheck2 mono capture, path shortened), get's LoadIC site final 1 (mono) or 1 then P (poly).
@@ -581,7 +602,7 @@ function rig() {
     const bash = process.env.BASH && process.env.BASH.startsWith('/') ? process.env.BASH : '/bin/bash';
     writeFileSync(join(fk, 'node'), [`#!${bash}`, 'd=$(dirname "$0")', 'printf "%s\\n" "$*" >>"$d/log"',
         'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi',
-        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) printf "Synopsis:\\n  a4 fake\\n"; exit 0 ;; esac',
+        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) printf "Synopsis:\\n  a4 fake\\n  --lazy-feedback-allocation (Allocate feedback vectors lazily)\\n        type: bool  default: --lazy-feedback-allocation\\n"; exit 0 ;; esac',
         'lf=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; done; last="${!#}"',
         'case "$last" in -*) echo "bad option: $last" >&2; exit 9 ;; esac',
         '[ -f "$last" ] || { echo "no driver: $last" >&2; exit 9; }',
@@ -627,16 +648,17 @@ function rig() {
 }
 function verdicts(out) { return out.split('\n').filter((l) => l.startsWith('VERDICT ')); }
 
-// A4 / K1 spawns + mktemp: R=3 SAME -> 8 spawns (--version, --v8-options, 6 trace runs), mktemp -d exactly once
+// A4 / K1 spawns + mktemp: R=3 SAME -> 9 spawns (--version, --v8-options = the allowlist read, --v8-options = the
+// hashed probe, 6 trace runs), mktemp -d exactly once
 function a4Spawns(script) {
     const g = rig();
     try {
         let r = g.run(script, ['--fn', 'get', g.D.mono, g.D.mono]);
         assert.equal(r.status, 0, r.out);
         assert.deepEqual(verdicts(r.out), ['VERDICT SAME'], r.out);
-        assert.equal(r.argv.length, 8, r.argv.join('\n'));
-        assert.equal(r.argv[0], '--version'); assert.equal(r.argv[1], '--v8-options');
-        for (const a of r.argv.slice(2)) {
+        assert.equal(r.argv.length, 9, r.argv.join('\n'));
+        assert.equal(r.argv[0], '--version'); assert.equal(r.argv[1], '--v8-options'); assert.equal(r.argv[2], '--v8-options');
+        for (const a of r.argv.slice(3)) {
             assert.equal(a.split(' ').filter((w) => w === '--no-node-snapshot').length, 1, a);
             assert.match(a, /(^| )--log-ic( |$)/);
             assert.match(a, / \.\/driver\.js$/);
@@ -644,12 +666,12 @@ function a4Spawns(script) {
         assert.deepEqual(r.mk, [`-d ${g.tmp}/ic-diff.XXXXXX`]);
         r = g.run(script, ['--runs', '2', '--fn', 'get', g.D.mono, g.D.poly]);
         assert.equal(r.status, 1, r.out);
-        assert.equal(r.argv.length, 6, r.argv.join('\n'));
+        assert.equal(r.argv.length, 7, r.argv.join('\n'));
         assert.equal(r.mk.length, 1);
         assert.ok(r.out.split('\n').includes(`  before=0 after=1  get${TB}LoadIC${TB}x${TB}P`), r.out);
         r = g.run(script, ['--runs', '20', '--fn', 'get', g.D.mono, g.D.mono]);
         assert.equal(r.status, 0, r.out);
-        assert.equal(r.argv.length, 42);
+        assert.equal(r.argv.length, 43);
         assert.equal(r.mk.length, 1);
         assert.deepEqual(readdirSync(g.tmp), []);
     } finally { g.done(); }
@@ -661,7 +683,7 @@ function a4Out(script) {
         const o = join(g.d, 'o');
         const r = g.run(script, ['--out', o, '--fn', 'get', g.D.mono, g.D.poly]);
         assert.equal(r.status, 1, r.out);
-        assert.equal(r.argv.length, 8);
+        assert.equal(r.argv.length, 9);
         assert.equal(r.mk.length, 0, r.mk.join('\n'));
         const files = [];
         const walk = (p) => { for (const e of readdirSync(p, { withFileTypes: true })) { const q = join(p, e.name); if (e.isDirectory()) walk(q); else files.push(relative(o, q)); } };
@@ -686,7 +708,7 @@ function a4Retention(script) {
                 const r = g.run(script, ['--fn', 'get', a, b]);
                 assert.equal(r.status, rc, r.out);
                 assert.deepEqual(verdicts(r.out), [`VERDICT ${v}`], r.out);
-                assert.equal(r.argv.length, 8);
+                assert.equal(r.argv.length, 9);
                 assert.equal(r.mk.length, 1);
                 assert.deepEqual(g.ents(), b0, `cycle ${i + 1} ${v}`);
             }
@@ -695,7 +717,7 @@ function a4Retention(script) {
         assert.equal(r.status, 2, r.out);
         assert.ok(r.out.split('\n').includes('ic-diff: interrupted'), r.out);
         assert.equal(r.mk.length, 1);
-        assert.equal(r.argv.length, 3, r.argv.join('\n'));
+        assert.equal(r.argv.length, 4, r.argv.join('\n'));
         assert.deepEqual(g.ents(), b0, 'after the SIGTERM');
     } finally { g.done(); }
 }
@@ -707,8 +729,8 @@ function argvDash(script) {
         const r = g.run(script, ['--fn', 'get', g.D.dashb, g.D.dasha]);
         assert.equal(r.status, 0, r.out);
         assert.deepEqual(verdicts(r.out), ['VERDICT SAME'], r.out);
-        assert.equal(r.argv.length, 8);
-        assert.deepEqual(r.argv.slice(2).map((a) => a.slice(a.lastIndexOf(' ') + 1)), ['./-x.js', './-y.js', './-x.js', './-y.js', './-x.js', './-y.js']);
+        assert.equal(r.argv.length, 9);
+        assert.deepEqual(r.argv.slice(3).map((a) => a.slice(a.lastIndexOf(' ') + 1)), ['./-x.js', './-y.js', './-x.js', './-y.js', './-x.js', './-y.js']);
     } finally { g.done(); }
 }
 
@@ -742,7 +764,7 @@ function modRow(script) {
 }
 
 const A4 = [
-    ['A4 / K1: R=3 -> 8 spawns (probes first, --no-node-snapshot once per trace argv), mktemp -d once; R=2 -> 6; R=20 -> 42', a4Spawns,
+    ['A4 / K1: R=3 -> 9 spawns (the 3 probes first, --no-node-snapshot once per trace argv), mktemp -d once; R=2 -> 7; R=20 -> 43', a4Spawns,
         // teeth: a --version probe per trace run (B2 M21); the env strip dropped from the trace spawns (fake exits 7);
         // --no-node-snapshot dropped (M12); the mktemp moved into run_side (one per run)
         [['M21', [['  if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi\n', '  if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi\n  "${PROBE_ENV[@]}" "$NODE_RES" --version >/dev/null 2>&1\n']]],

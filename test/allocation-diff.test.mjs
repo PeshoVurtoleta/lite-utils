@@ -20,7 +20,8 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 76;   // self-test ok lines at B2a (src 00ab0dac / root 8e795263, sha256); a new check moves this literal
+const C = 78;   // self-test ok lines at b36 G5 B3 (src eb9de455 / root cd94100c, sha256; 76 at B2a 00ab0dac / 8e795263,
+                // 78 since G5 B1 added checks 77 / 78); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ROOTUSER = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -35,8 +36,13 @@ const SRC = readFileSync(SCRIPT, 'utf8');
 function count(src, from) { return src.split(from).length - 1; }
 // the MD-33 guard (B2h; root 8e795263 :845 / src 00ab0dac :775), one whole line: the B2h mutant deletes exactly it
 const RAWGUARD = '  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"\n';
+// MD-50 / MD-56 (PLAN-md46 G5): the --version probe line, the v8fl_check call right after it, and the first disk write
+// (gcn.cjs into the temp dir); whole lines, the V1-V3 mutants' anchors
+const VERLINE = 'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\n';
+const V8CALL = 'v8fl_check "$NODE_BIN"\n';
+const GCNLINE = 'gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"\n';
 
-// The 76 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 78 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ "A1' records: 2",
     /*  2 */ 'A1 records: every',
@@ -114,6 +120,8 @@ const ROW = [null,
     /* 74 */ 'MD-39 refused before',
     /* 75 */ 'MD-42 refused before',
     /* 76 */ 'MD-44 refused before',
+    /* 77 */ 'MD-50 refused after',
+    /* 78 */ 'MD-50 accepted:',
 ];
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
@@ -484,6 +492,15 @@ const NEW = [
           "true ||"],
          ["[[ ! -e \"$OUT/report.txt\" ]] || { RL=",
           "true || { RL="]]],
+    // V1-V3 (PLAN-md46 G5 TASK 4, MD-50 / MD-56): the v8fl_check call (lib/v8flags.sh's --v8-options read + allowlist)
+    // removed, moved above the --version probe, moved after the first disk write (gcn.cjs into the temp dir)
+    ['V1', [16, 71, 77, 78], 'v8fl_check call removed (no --v8-options read, no allowlist)',
+        [[V8CALL, '']]],
+    ['V2', [36, 78], 'v8fl_check (the --v8-options read) moved above the --version probe',
+        [[VERLINE + V8CALL, V8CALL + VERLINE]]],
+    ['V3', [77], 'v8fl_check (the --v8-options read) moved after the gcn.cjs write into the temp dir',
+        [[VERLINE + V8CALL, VERLINE],
+         [GCNLINE, GCNLINE + V8CALL]]],
 ];
 const MUTANTS = [...B2, ...NEW];
 const NONROOT = new Set(['B2h']);
@@ -606,8 +623,9 @@ test('allocation-diff --self-test temp dir (Y7): revert check (the trap rm dropp
 });
 
 // --- the refusal rig: this file's OWN logging fake node and mktemp shim. The fake node logs its argv per spawn and
-// answers --version (anything else: exit 0, no output). PATH = mktemp shim, fake node dir, host PATH; TMPDIR = d/tmp;
-// cwd = d/cwd. `ents` lists every entry under d (the two logs excepted): a refusal writes nothing anywhere.
+// answers --version (anything else, --v8-options too: exit 0, no output -- so v8fl_check dies "--v8-options printed
+// nothing" after 2 spawns; only the B2h mutant row gets that far). PATH = mktemp shim, fake node dir, host PATH; TMPDIR =
+// d/tmp; cwd = d/cwd. `ents` lists every entry under d (the two logs excepted): a refusal writes nothing anywhere.
 function rig() {
     const d = mkdtempSync(join(tmpdir(), 'ad-rf-'));
     const fk = join(d, 'fk'); const mk = join(d, 'mk'); const dr = join(d, 'dr');
@@ -688,7 +706,8 @@ const HELP_LINES = [
     '  Each value option is given at most once and never empty; --v8-flags / --out / --node and DRIVER paths take no',
     '  newline. --self-test takes no other argument. --zero / --self-test / --help take no =value. An unknown option',
     '  exits 2 with a did-you-mean hint.',
-    '  exits 2 before any node is spawned and before anything is written. Spawns: one `node --version` (a failing one',
+    '                     non-flags). Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag',
+    '  exits 2 before any node is spawned and before anything is written, except a --v8-flags flag outside the allowlist',
 ];
 function assertHelp(script) {
     withRig((g) => {
@@ -949,7 +968,9 @@ for (const [label, fn, teeth] of RF) {
 }
 
 // --- B2h mutant (A15 TASK 3h): the root script with the MD-33 guard line deleted (one line fewer) must turn the 0300
-// row red: it gets past the refusal and spawns node (A15: exit 2 after the runs, run.1.txt blanked). Non-root only.
+// row red: it gets past the refusal and spawns node (A15, before MD-50: exit 2 after the runs, run.1.txt blanked; since
+// G5 B1 the rig's fake prints no --v8-options list, so it exits 2 after the --version and --v8-options spawns). Non-root
+// only.
 test('allocation-diff B2h mutant: the root script minus the MD-33 guard line (line count -1) turns the raw/ 0300 row red (spawns > 0, no "is not readable")', { skip: skip || (ROOTUSER ? 'euid 0 reads a 0300 dir: the guard never fires' : false) }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-b2h-'));
     try {

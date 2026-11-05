@@ -174,7 +174,7 @@ const R_DIFF = { args: (c) => refO(c), check: (c, r) => {
     assert.match(r.stdout, /^VERDICT DIFF$/m);
     assert.doesNotMatch(r.stdout, /^NOTE .*byte-identical/m, msg(r));
     assert.match(r.stdout, /^mode    diff \(ref\) /m, msg(r));
-    assert.equal(c.spawns().length, 6);                                  // --version, --v8-options, 1 fn x 2 runs x 2 sides
+    assert.equal(c.spawns().length, 7);                                  // --version, 2 x --v8-options (the --v8-flags allowlist, then the limits), 1 fn x 2 runs x 2 sides
 } };
 row('A2 ref r1(211) | r2(212) -> exit 1 DIFF with "    before=1 after=0  211"', R_DIFF);
 const R_SAME = { args: (c) => refO(c, { '--after-ref': 'r1' }), check: (c, r) => {
@@ -194,12 +194,30 @@ const F_LIVE = {
     },
 };
 row('A2 file frozen 211 | live 211, the live --after rewritten to 212 at bytecode call 3 -> exit 0 (the staged copy protects it)', F_LIVE);
-row('A2 staged --fn add,mid,dup -> exactly 14 node spawns (2 + 3 fns x 2 runs x 2 sides)', {
+row('A2 staged --fn add,mid,dup -> exactly 15 node spawns (3 + 3 fns x 2 runs x 2 sides)', {
     args: (c) => refO(c, {}, 'add,mid,dup'),
-    check: (c, r) => { assert.equal(r.status, 1, msg(r)); assert.equal(c.spawns().length, 14, c.spawns().join('\n')); },
+    check: (c, r) => { assert.equal(r.status, 1, msg(r)); assert.equal(c.spawns().length, 15, c.spawns().join('\n')); },
 });
 
 // =====================================================================================================
+// A4 (MD-46 G3, ruling MD-57): bb's --out / stage writes precede its --v8-flags allowlist read, so a refusal in ref or
+// file mode leaves OUT/stage (4 files), an EMPTY raw/before + raw/after and a 0-byte report.txt, after exactly
+// [--version, --v8-options]: exit 2, the frozen lib/v8flags.sh die line, 0 stdout bytes.
+for (const mode of ['ref', 'file']) {
+    row(`A4 ${mode} mode --v8-flags --bogus-flag -> exit 2 die after [--version, --v8-options]; OUT = stage/ 4 files + empty raw/before, raw/after + 0-byte report.txt`, {
+        args: (c) => [...(mode === 'ref' ? refO(c) : fileO(c)), '--v8-flags', '--bogus-flag'],
+        check: (c, r) => {
+            assert.equal(r.status, 2, msg(r));
+            assert.equal(r.stderr, "bytecode-budget: --v8-flags must not set --bogus-flag: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)\nVERDICT NO-VERDICT\n");
+            assert.equal(r.stdout, '');
+            assert.deepEqual(c.spawns(), ['--version', '--v8-options']);
+            assert.deepEqual(walk(c.out).map((x) => x.slice(c.out.length + 1)).sort(), ['report.txt', 'stage/after/driver.mjs', 'stage/after/mod.js', 'stage/before/driver.mjs', 'stage/before/mod.js']);
+            assert.deepEqual(readdirSync(join(c.out, 'raw')).sort(), ['after', 'before']);
+            assert.equal(readFileSync(join(c.out, 'report.txt'), 'utf8'), '');
+        },
+    });
+}
+
 // A3 refusals: exit 2, 0 spawns, OUT not created -- the stage_check / options cases (tasks 1-2)
 // =====================================================================================================
 refusal('--before-ref without --after-ref', (c) => refO(c, { '--after-ref': null }), /go together/);
@@ -282,7 +300,7 @@ const relImp = (mode) => ({
         assert.match(r.stdout, /^VERDICT NO-VERDICT$/m, msg(r));
         assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- before: driver exited 1 in run 1$/m, msg(r));
         assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- after: driver exited 1 in run 1$/m, msg(r));
-        assert.equal(c.spawns().length, 6, c.spawns().join('\n'));                      // diff-mode spawn count: --version, --v8-options, 1 fn x 2 runs x 2 sides
+        assert.equal(c.spawns().length, 7, c.spawns().join('\n'));                      // diff-mode spawn count: --version, 2 x --v8-options (allowlist, limits), 1 fn x 2 runs x 2 sides
         assert.ok(!existsSync(join(c.out, 'stage', 'before', 'helper.js')), 'the sibling was staged');
     },
 });
@@ -367,7 +385,7 @@ test('bytecode-budget stage A4 retention: 20 ref runs keep 0 entries in TMPDIR a
         assert.ok(files.includes('report.txt'));
     }
     spawns = c.spawns().length;
-    assert.equal(spawns, 20 * 14, 'node spawns over 20 runs');
+    assert.equal(spawns, 20 * 15, 'node spawns over 20 runs');
     // macOS mktemp ignores TMPDIR, so this checks the script's own paths (it has no mktemp without a leak to name)
     assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries');
     assert.deepEqual(readdirSync(c.cwd), [], 'cwd kept entries');
@@ -387,11 +405,11 @@ test('bytecode-budget stage A4 control MUTANT A4-stage-in-tmpdir (stage root $TM
 });
 
 // =====================================================================================================
-// A5 self-test (B2: N = 4 new checks; --self-test = 49 ok, --fixtures 73; ext-audit B-four bb + 5: 54 / 78; the totals are asserted in
+// A5 self-test (B2: N = 4 new checks; --self-test = 49 ok, --fixtures 73; ext-audit B-four bb + 5: 54 / 78; MD-46 G3 + 3: 57 / 81; the totals are asserted in
 // bytecode-budget.test.mjs, not duplicated here). The four staged check names below are the contract.
 // =====================================================================================================
 const ST_NAMES = [
-    'ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 6 spawns, before=1 after=0  211',
+    'ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 7 spawns, before=1 after=0  211',
     'ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the null-control NOTE',
     'file mode: --before a FROZEN copy (r1, 211) --after the live tracked m/mid.txt (212) -> exit 1 DIFF; OUT holds 9 files (report.txt, raw 2 + 2, stage 2 + 2)',
     'ref / file refusals before any spawn (exit 2, 0 spawns, no OUT dir): ',
@@ -402,12 +420,12 @@ const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
 const stRun = (script, env = cleanEnv()) => spawnSync('bash', [script, '--self-test'], { encoding: 'utf8', timeout: 240000, env });
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok   ' + name)).length;
 
-test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 4 staged checks present exactly once, 54 ok', { skip }, () => {
+test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 4 staged checks present exactly once, 57 ok', { skip }, () => {
     const r = stRun(SCRIPT);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, `check "${n}"`);
-    assert.equal(okLines(r.stdout).length, 54);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44); also pinned by bytecode-budget.test.mjs C
+    assert.equal(okLines(r.stdout).length, 57);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist); also pinned by bytecode-budget.test.mjs C
 });
 test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 4 staged checks (and 45 ok)', { skip: baseSkip }, () => {
     histGate(haveBase);
@@ -443,16 +461,16 @@ test('bytecode-budget stage A5 (d): a PATH without git -> exit 1, exactly one FA
     t.diagnostic(`no-git: rc=${r.status} FAIL lines=${JSON.stringify(f)} ok=${okLines(r.stdout).length}`);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(f.length, 1, f.join('\n'));
-    assert.equal(okLines(r.stdout).length, 50);   // 54 - the 4 staged rows (they need git); the 5 B-four bb rows need none
+    assert.equal(okLines(r.stdout).length, 53);   // 57 - the 4 staged rows (they need git); the 5 B-four bb rows and the 3 MD-46 G3 rows need none
     assert.ok(f[0].startsWith('FAIL ' + NOGIT_NAME), f[0]);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);   // the staged rows do not run without git
 });
-test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 54 ok, exit 0 (hook safety)', { skip }, () => {
+test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 57 ok, exit 0 (hook safety)', { skip }, () => {
     const env = { ...cleanEnv() };
     for (const k of GITVARS) env[k] = join(ROOT, 'no-such-' + k);
     const r = stRun(SCRIPT, env);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
-    assert.equal(okLines(r.stdout).length, 54);
+    assert.equal(okLines(r.stdout).length, 57);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, n);
 });

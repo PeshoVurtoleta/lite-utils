@@ -19,7 +19,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 54;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); with --fixtures C + 24 = 78)
+const C = 57;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); with --fixtures C + 24 = 81)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
@@ -321,16 +321,108 @@ for (const [name, args, msg, raw] of REFUSALS) {
     });
 }
 
-// T1: a V8 flag node rejects: every probe still runs (1 version + 1 limits + 2 fns x 3 runs = 8), NO-VERDICT exit 2
-test('bytecode-budget: a V8 flag node rejects runs every probe: 2 + fns x runs spawns, NO-VERDICT', { skip }, () => {
+// MD-46 G3 A1: a --v8-flags token this node does not list as a V8 tuning flag is refused right after --version, by the
+// ONE allowlist read: exit 2, stderr exactly the frozen lib/v8flags.sh die line + VERDICT NO-VERDICT, 0 stdout bytes,
+// argv exactly [--version, --v8-options] (red on 4e364c6 a2449a09, which ran all 8 probes for --bogus-flag and
+// accepted the node options). The fake node lists only test/fixtures/bytecode-budget/node-26.8.2/v8-options-excerpt.txt.
+const V8FL_DIE = (t) => `bytecode-budget: --v8-flags must not set ${t}: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)\nVERDICT NO-VERDICT\n`;
+function v8flRefused(r, f, t) {
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.equal(r.stderr, V8FL_DIE(t));
+    assert.equal(r.stdout, '');
+    assert.deepEqual(f.spawns(), ['--version', '--v8-options']);
+}
+test('bytecode-budget: --v8-flags --bogus-flag (not a V8 flag of this node) -> exit 2 die line after [--version, --v8-options], 0 probes, 0 stdout', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-rej-'));
     try {
         const f = fakeNode(dir, { rc: 9 });
         const r = run(SCRIPT, ['--node', f.path, '--fn', 'add,mid', '--runs', '3', '--v8-flags', '--bogus-flag', DRIVER]);
+        v8flRefused(r, f, '--bogus-flag');
+        assert.equal(f.spawns().filter((l) => l.includes('--print-bytecode-filter=')).length, 0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// T1 (-h): a V8 flag this node LISTS but rejects at run time still runs every probe: 3 + 2 fns x 3 runs = 9, NO-VERDICT
+test('bytecode-budget: a listed V8 flag node rejects (--max-inlined-bytecode-size=30, driver exit 9) runs every probe: 9 spawns, NO-VERDICT', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-rej9-'));
+    try {
+        const f = fakeNode(dir, { rc: 9 });
+        const r = run(SCRIPT, ['--node', f.path, '--fn', 'add,mid', '--runs', '3', '--v8-flags', '--max-inlined-bytecode-size=30', DRIVER]);
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.match(r.stdout, /^  add: NO-VERDICT -- driver exited 9 in run 1$/m);
-        assert.equal(f.spawns().length, 8, f.spawns().join('\n'));
+        assert.match(r.stdout, /^  mid: NO-VERDICT -- driver exited 9 in run 1$/m);
+        const sp = f.spawns();
+        assert.equal(sp.length, 9, sp.join('\n'));
+        assert.deepEqual(sp.slice(0, 3), ['--version', '--v8-options', '--v8-options']);
+        assert.equal(sp.filter((l) => l.includes('--print-bytecode-filter=') && l.includes('--max-inlined-bytecode-size=30')).length, 6);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+for (const t of ['--snapshot-blob=F', '--build-snapshot', '--openssl-config=F', '--experimental-require-module', '--experimental-print-required-tla']) {
+    test(`bytecode-budget: --v8-flags ${t} (a node option) -> exit 2 die line after [--version, --v8-options], 0 stdout`, { skip }, () => {
+        const dir = mkdtempSync(join(tmpdir(), 'bb-rej-'));
+        try {
+            const f = fakeNode(dir);
+            v8flRefused(run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', t, DRIVER]), f, t);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+}
+// A2: 25 accepted --v8-flags tokens (every flag the excerpt lists, =N; all of them happen to be int / float) still cost ONE allowlist read: 3 + 2 runs.
+test('bytecode-budget: 25 accepted --v8-flags tokens -> exit 0 REPORTED, still 1 allowlist read (5 spawns: --version, 2 x --v8-options, 2 runs)', { skip }, () => {
+    const names = [...readFileSync(join(FIX, 'v8-options-excerpt.txt'), 'utf8').matchAll(/^ {2}--([a-z0-9-]+) \(/gm)].map((m) => m[1]);
+    assert.ok(names.length >= 13, String(names.length));
+    const toks = Array.from({ length: 25 }, (_, i) => `--${names[i % names.length]}=${i + 2}`);
+    const dir = mkdtempSync(join(tmpdir(), 'bb-25tok-'));
+    try {
+        const f = fakeNode(dir);
+        const r = run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', toks.join(' '), DRIVER]);
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /^VERDICT REPORTED$/m);
+        const sp = f.spawns();
+        assert.equal(sp.length, 5, sp.join('\n'));
+        assert.deepEqual(sp.slice(0, 3), ['--version', '--v8-options', '--v8-options']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// A4: under MD-57 bb's --out writes precede the allowlist read: a refusal leaves OUT/raw empty and report.txt 0 bytes
+// (report mode and diff mode), and 20 refuse + accept cycles leave a private TMPDIR and cwd empty with no mktemp call.
+test('bytecode-budget: a --v8-flags refusal with --out leaves OUT/raw empty and report.txt 0 bytes (report and diff mode)', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-rejout-'));
+    try {
+        const f = fakeNode(dir);
+        const out = join(dir, 'o');
+        v8flRefused(run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', '--bogus-flag', '--out', out, DRIVER]), f, '--bogus-flag');
+        assert.deepEqual(readdirSync(join(out, 'raw')), []);
+        assert.equal(readFileSync(join(out, 'report.txt'), 'utf8'), '');
+        const s = diffSetup({ before: { add: [6] }, after: { add: [6] } });
+        try {
+            const dout = join(s.dir, 'o');
+            const r = run(SCRIPT, ['--diff', '--node', s.node, '--fn', 'add', '--v8-flags', '--bogus-flag', '--out', dout, s.B, s.A]);
+            v8flRefused(r, s, '--bogus-flag');
+            assert.deepEqual(readdirSync(join(dout, 'raw')).sort(), ['after', 'before']);
+            assert.deepEqual(readdirSync(join(dout, 'raw', 'before')), []);
+            assert.deepEqual(readdirSync(join(dout, 'raw', 'after')), []);
+            assert.equal(readFileSync(join(dout, 'report.txt'), 'utf8'), '');
+        } finally { s.done(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('bytecode-budget: 20 cycles of a --v8-flags refusal + an accepted run leave a private TMPDIR and cwd empty and call no mktemp', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-rejret-'));
+    const tmp = mkdtempSync(join(tmpdir(), 'bb-tmpdir-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'bb-cwd-'));
+    try {
+        const f = fakeNode(dir);
+        const sh = mktempShim(dir);
+        const env = cleanEnv({ TMPDIR: tmp, ...sh.env });
+        for (let i = 0; i < 20; i++) {
+            const x = run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', '--build-snapshot', DRIVER], { env, cwd });
+            assert.equal(x.status, 2, x.stdout + x.stderr);
+            const y = run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', '--reserve-inline-budget-scale-factor=1.5', DRIVER], { env, cwd });
+            assert.equal(y.status, 0, y.stdout + y.stderr);
+        }
+        assert.equal(f.spawns().length, 20 * 2 + 20 * 5);   // refusal 2 (version + allowlist); accept 5 (+ limits + 2 runs)
+        assert.equal(f.spawns().filter((l) => l === '--v8-options').length, 20 + 20 * 2);
+        assert.deepEqual(readdirSync(tmp), []);
+        assert.deepEqual(readdirSync(cwd), []);
+        assert.deepEqual(sh.paths(), []);
+    } finally { for (const d of [dir, tmp, cwd]) rmSync(d, { recursive: true, force: true }); }
 });
 
 // T3: a --node whose --version fails -> exit 2 after exactly that 1 spawn
@@ -388,11 +480,12 @@ test('bytecode-budget: the driver runs with cwd = the driver directory', { skip 
 });
 
 // ---- A4: spawns / retention ----
-test('bytecode-budget: 3 fns x 2 runs = exactly 8 node spawns (1 version + 1 limits + 6 traces)', { skip }, () => {
+test('bytecode-budget: 3 fns x 2 runs = exactly 9 node spawns (1 version + 1 allowlist + 1 limits + 6 traces)', { skip }, () => {
     // NODE_OPTIONS is set: the fake node exits 7 on a bytecode call if the script leaks it
     const { r, spawns } = gate('add=6,mid=211,dup=19', NV, {}, SCRIPT, { env: { ...process.env, NODE_OPTIONS: '--no-warnings' } });
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.equal(spawns.length, 8, spawns.join('\n'));
+    assert.equal(spawns.length, 9, spawns.join('\n'));
+    assert.deepEqual(spawns.slice(0, 3), ['--version', '--v8-options', '--v8-options']);
     assert.equal(spawns.filter((l) => l.includes('--print-bytecode-filter=')).length, 6);
 });
 
@@ -597,12 +690,13 @@ test('bytecode-budget diff control: a copy without the diff branch FINAL=1 turns
 });
 
 // ---- A3: spawn budget + refusals (0 spawns) ----
-test('bytecode-budget diff: --fn add,mid,dup x 2 runs = exactly 14 node spawns (1 version + 1 limits + 12 probes)', { skip }, () => {
+test('bytecode-budget diff: --fn add,mid,dup x 2 runs = exactly 15 node spawns (1 version + 1 allowlist + 1 limits + 12 probes)', { skip }, () => {
     const spec = { before: { add: [6], mid: [211], dup: [6, 19] }, after: { add: [6], mid: [211], dup: [6, 19] } };
     // NODE_OPTIONS set: the fake exits 7 on any call if the script leaks it
     const { r, spawns } = diffRun(spec, 'add,mid,dup', SCRIPT, [], { env: { ...process.env, NODE_OPTIONS: '--no-warnings' } });
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.equal(spawns.length, 14, spawns.join('\n'));
+    assert.equal(spawns.length, 15, spawns.join('\n'));
+    assert.deepEqual(spawns.slice(0, 3), ['--version', '--v8-options', '--v8-options']);
     assert.equal(spawns.filter((l) => l.includes('--print-bytecode-filter=')).length, 12);
 });
 const DIFF_REFUSALS = [

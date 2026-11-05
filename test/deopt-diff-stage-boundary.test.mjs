@@ -2,7 +2,7 @@
 // lib/stage.sh) that test/deopt-diff-stage.test.mjs and the script's --self-test do not pin.
 // ORACLE: .handoff/PLAN-phase3-g2.md ASSERTIONS A1-A5 + ADDENDA A1 (MD-15 / MD-16 / MD-17) and the `deopt-diff.sh -h`
 // text where an assertion defers to it -- never what the script printed. Expected values are hand-derived from the
-// fixture text below (fake node, R runs -> 1 + 2R spawns).
+// fixture text below (fake node, R runs -> 2 + 2R spawns).
 // TIER: DETERMINISTIC (no V8 spawn; the fake node is a /bin/sh script; no timed assertion).
 // Teeth: every row of NEW (G2) behaviour also runs on the PRE-G2 build, resolved by CONTENT (the first commit of
 // `git rev-list HEAD -- deopt-diff.sh` whose blob has sha256/8 221ff2ec; none -> those twins SKIP, never pass), where it
@@ -140,7 +140,7 @@ function mkCase() {
     const log = join(dir, 'argv.log'), calls = join(dir, 'calls'), node = join(dir, 'node');
     writeFileSync(node, `#!/bin/sh
 echo "$PWD|$*" >> ${JSON.stringify(log)}
-case "$1" in --version) echo v26.8.2; exit 0 ;; esac
+case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) echo "  --allow-natives-syntax (allow natives syntax)"; echo "        type: bool  default: --no-allow-natives-syntax"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; esac
 n=$(( $(cat ${JSON.stringify(calls)} 2>/dev/null || echo 0) + 1 )); echo "$n" > ${JSON.stringify(calls)}
 if [ -n "\${FAKE_HANG_AT:-}" ] && [ "$n" = "$FAKE_HANG_AT" ]; then : > "$FAKE_READY"; sleep 60; fi
 if [ -f ./trace.txt ]; then cat ./trace.txt; fi
@@ -153,7 +153,7 @@ exit 0
     writeFileSync(c.live, T_R2); writeFileSync(c.extra, D + '\n');
     c.log = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
     c.spawns = () => c.log().length;
-    c.drivers = () => c.log().filter((l) => !l.endsWith('|--version')).map((l) => l.split('|'));
+    c.drivers = () => c.log().filter((l) => !l.endsWith('|--version') && !l.endsWith('|--v8-options')).map((l) => l.split('|'));
     return c;
 }
 function runAsync(cmd, args, opts) {
@@ -191,16 +191,17 @@ function parityRow(name, cs) { ROWS.push({ kind: 'parity', name, cs }); return c
 function mutant(name, desc, edits, cs, observe) { ROWS.push({ kind: 'mutant', name, desc, edits, cs, observe }); }
 
 // =====================================================================================================
-// 1. --runs at its bounds in staged mode: 2 and 20 (N and N of the [2, 20] range) -> 1 + 2R spawns, sides
+// 1. --runs at its bounds in staged mode: 2 and 20 (N and N of the [2, 20] range) -> 2 + 2R spawns, sides
 //    alternating before / after, cwd = OUT/stage/<side> for EVERY driver spawn; 1 and 21 refused before any spawn
 // =====================================================================================================
-const runsRow = (R) => row(`1 ref r1 | r2 --runs ${R} -> exit 1 DIFF, ${1 + 2 * R} spawns (--version first), sides alternate, cwd OUT/stage/<side> each`, {
+const runsRow = (R) => row(`1 ref r1 | r2 --runs ${R} -> exit 1 DIFF, ${2 + 2 * R} spawns (--version, --v8-options first), sides alternate, cwd OUT/stage/<side> each`, {
     args: (c) => refO(c, { '--runs': String(R) }),
     check: (c, r) => {
         verdict(r, 1, 'DIFF');
         const log = c.log();
-        assert.equal(log.length, 1 + 2 * R, log.join('\n'));
+        assert.equal(log.length, 2 + 2 * R, log.join('\n'));
         assert.ok(log[0].endsWith('|--version'), log[0]);
+        assert.ok(log[1].endsWith('|--v8-options'), log[1]);
         const want = Array.from({ length: 2 * R }, (_, i) => [`${c.out}/stage/${i % 2 ? 'after' : 'before'}`, `${TRACE} ./driver.js`]);
         assert.deepEqual(c.drivers(), want);
         assert.equal(files(join(c.out, 'raw', 'before')).length, R);
@@ -234,7 +235,7 @@ row('2 ref r1 | r2 --fn sub,add -> sub SAME (0 | 0), add DIFF (0 | 1): exit 1 DI
         verdict(r, 1, 'DIFF');
         assert.equal(has(r, '  sub: SAME -- identical deopt multiset (before 0 | after 0)'), 1, msg(r));
         assert.equal(has(r, '  add: DIFF -- deopt multiset differs (before 0 | after 1)'), 1, msg(r));
-        assert.equal(c.spawns(), 7);
+        assert.equal(c.spawns(), 8);
     },
 });
 row("2 ref r1 | r2 --fn add,nosuch -> add DIFF, nosuch NO-VERDICT (guard, both sides): exit 2 NO-VERDICT", {
@@ -271,7 +272,7 @@ row('3 file frozen r1 (other name) | live r1 -> exit 0 SAME, the NOTE line, mode
         assert.equal(has(r, `before  ${FROZEN}  sha256/8 ${sha8(T_R1)}`), 1, msg(r));
         assert.equal(has(r, `after   ${c.live}  sha256/8 ${sha8(T_R1)}`), 1, msg(r));
         assert.equal(readFileSync(join(c.out, 'stage', 'before', 'trace.txt'), 'utf8'), T_R1);
-        assert.equal(c.spawns(), 7);
+        assert.equal(c.spawns(), 8);
     },
 });
 row('3 file mode MD-16: frozen r1 | live r1 with an after-only deopt -> exit 2, the DIFF line then the MD-16 line', {
@@ -360,7 +361,7 @@ row('6 --out=DIR form in ref mode -> exit 1 DIFF, exactly the 11 files', {
 });
 row('6 adversarial: every option in --opt=value form (file mode) -> exit 1 DIFF, mode "diff (file)"', {
     args: (c) => [`--before=${FROZEN}`, `--after=${c.live}`, `--driver=${DRV}`, `--repo=${REPO}`, `--out=${c.out}`, '--fn=add', `--node=${c.node}`, '--runs=2'],
-    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.match(r.stdout, /^mode {4}diff \(file\) {2}runs 2 /m, msg(r)); assert.equal(c.spawns(), 5); },
+    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.match(r.stdout, /^mode {4}diff \(file\) {2}runs 2 /m, msg(r)); assert.equal(c.spawns(), 6); },
 });
 row('6 --before-ref given twice -> exit 2 "--before-ref given twice (give one comma list)", 0 spawns, no OUT', {
     args: (c) => [...refO(c), '--before-ref', 'r2'], check: refuses('--before-ref given twice (give one comma list)'),
@@ -419,10 +420,10 @@ mutant('M-opts-front', 'staged options moved to the FRONT of OPTS',
 // =====================================================================================================
 const bv = spawnSync('/bin/bash', ['--version'], { encoding: 'utf8', timeout: 30000 });
 const skip32 = skip || (bv.status === 0 && /version 3\.2\./.test(bv.stdout) ? false : '/bin/bash is not bash 3.2 on this host');
-row('9 /bin/bash 3.2 runs ref r1 | r2 -> exit 1 DIFF, 7 spawns, the before=0 after=1 line', {
+row('9 /bin/bash 3.2 runs ref r1 | r2 -> exit 1 DIFF, 8 spawns, the before=0 after=1 line', {
     bash: '/bin/bash', rowSkip: skip32,
     args: (c) => refO(c),
-    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.equal(c.spawns(), 7); assert.equal(has(r, '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)'), 1, msg(r)); },
+    check: (c, r) => { verdict(r, 1, 'DIFF'); assert.equal(c.spawns(), 8); assert.equal(has(r, '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)'), 1, msg(r)); },
 });
 
 // =====================================================================================================
@@ -446,7 +447,7 @@ const CS_DANG = row("10a OUT/stage a DANGLING symlink -> exit 2 with MD-17's 'ex
 mutant('M-dangling-revert', 'MD-17 reverted to the pre-fix test (no ! -L): the lib answers instead', [[MD17, MD17_OLD]], CS_DANG,
     (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stderr, /stage is not empty \(give a new or empty DIR\)/, msg(r)); });
 const uid0 = typeof process.getuid === 'function' && process.getuid() === 0;
-const CS_000 = row('10b KNOWN GAP (-h): OUT/stage mode 000 holding a file -> 1 spawn, OUT/raw/before + raw/after + an empty report.txt written, then "cannot create"', {
+const CS_000 = row('10b KNOWN GAP (-h): OUT/stage mode 000 holding a file -> 2 spawns (--version, --v8-options), OUT/raw/before + raw/after + an empty report.txt written, then "cannot create"', {
     rowSkip: skip || (uid0 ? 'root ignores mode 000' : false),
     prep: (c) => { mkdirSync(join(c.out, 'stage'), { recursive: true }); writeFileSync(join(c.out, 'stage', 'f'), 'x\n'); chmodSync(join(c.out, 'stage'), 0o000); },
     args: (c) => refO(c),
@@ -454,7 +455,7 @@ const CS_000 = row('10b KNOWN GAP (-h): OUT/stage mode 000 holding a file -> 1 s
         const die = lines(r.stderr).filter((l) => l.startsWith('deopt-diff: '));
         assert.equal(r.status, 2, msg(r));
         assert.deepEqual(die, [`deopt-diff: --out: cannot create ${c.out}/stage/before and ${c.out}/stage/after`], msg(r));
-        assert.deepEqual(c.log().map((l) => l.split('|')[1]), ['--version']);
+        assert.deepEqual(c.log().map((l) => l.split('|')[1]), ['--version', '--v8-options']);
         assert.ok(statSync(join(c.out, 'raw', 'before')).isDirectory() && statSync(join(c.out, 'raw', 'after')).isDirectory());
         assert.equal(statSync(join(c.out, 'report.txt')).size, 0);
     },
@@ -543,15 +544,15 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     const retCheck = (x) => {
         assert.ok(x.shimLive, 'the mktemp shim did not log a control mktemp -d');
         assert.deepEqual(x.res.map((q) => `${q.name}:${q.status}:${q.n}`), [0, 1, 2].flatMap(() => CYC.map(([n, rc]) => `${n}:${rc}:${n === 'refusal' ? -1 : 11}`)));
-        assert.equal(x.spawns, 3 * 3 * 7, 'node spawns over 9 verdict runs + 3 refusals');
+        assert.equal(x.spawns, 3 * 3 * 8, 'node spawns over 9 verdict runs + 3 refusals');
         assert.deepEqual(x.made, [], 'mktemp was called (a dir in the real temp dir)');
         assert.deepEqual(x.leaked, []);
         assert.deepEqual(x.tmp, [], 'TMPDIR kept entries');
         assert.deepEqual(x.cwd, [], 'cwd kept entries');
         assert.ok(x.repoSame, 'the repo HEAD / refs / status changed');
     };
-    const M_MKTEMP = [['# --- every refusal is above this line; spawns start here', 'LEAK_D=$(mktemp -d)   # mutant']];
-    test('stage boundary: 11 retention: 3 x SAME / DIFF / NO-VERDICT / refusal (staged) -> 63 spawns, 11 files per verdict OUT, 0 mktemp, cwd + TMPDIR empty, repo unchanged', { skip }, async () => {
+    const M_MKTEMP = [['# --- every refusal but the --v8-flags allowlist is above this line; spawns start here', 'LEAK_D=$(mktemp -d)   # mutant']];
+    test('stage boundary: 11 retention: 3 x SAME / DIFF / NO-VERDICT / refusal (staged) -> 72 spawns, 11 files per verdict OUT, 0 mktemp, cwd + TMPDIR empty, repo unchanged', { skip }, async () => {
         retCheck(await retention(SCRIPT));
     });
     test('stage boundary teeth: [11 retention] on the pre-G2 build (221ff2ec) every run exits 2 -> red', { skip: baseSkip }, async () => {
@@ -596,7 +597,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     }
     const sigCheck = (x) => {
         assert.ok(x.wasReady && !x.exitedEarly, 'the run never reached driver run 3');
-        assert.equal(x.spawns, 4, '--version + 3 driver spawns at the kill');
+        assert.equal(x.spawns, 5, '--version + --v8-options + 3 driver spawns at the kill');
         assert.ok(x.st.signal === 'SIGTERM' || x.st.code !== 0, JSON.stringify(x.st));
         assert.doesNotMatch(x.out, /^VERDICT /m);
         assert.deepEqual(x.made, [], 'mktemp was called');

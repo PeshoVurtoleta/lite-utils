@@ -27,8 +27,12 @@
 #                      node options from a file into the measured process), and every --eval* / --print* flag, a
 #                      prefix match (--eval / --print: node runs that code in the measured process instead of the
 #                      driver, which becomes argv; V8's --print-* flags, e.g. --print-bytecode, print V8 internals
-#                      into the measured run). -r / -e / -p are refused as non-flags. --no-lazy-feedback-allocation
-#                      is allowed.
+#                      into the measured run). -r / -e / -p are refused as non-flags.
+#                      Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never
+#                      --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot /
+#                      file flags. Refused, exit 2 after one --v8-options read and before any measured run: every node
+#                      option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob, ...), every
+#                      string-valued V8 flag, and the tool's own flags above.
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
 #                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent, or an
 #                      empty, readable and writable directory that is not a symlink; DIR/report.txt must not be a
@@ -44,20 +48,22 @@
 #   -h, --help         this text (exit 2)
 #   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline and
 #   --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value. An
-#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write.
+#   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write, but the
+#   --v8-flags allowlist: it exits 2 after the --version and the first --v8-options spawn, still before any disk write.
 #
 # DRIVER: exactly two existing readable files (no newline in the path). Each trace run is
 #   `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE <node> [v8 flags] --log-ic --no-concurrent-recompilation
 #   --no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>` with cwd = the driver's directory (`./`
 #   keeps a file name starting with `-` a path), stdout + stderr to DIR/raw/<side>/run.<k>.out with --out, else
 #   /dev/null. Runs alternate before / after for k = 1..N. Only a run's records are held in memory, never its log.
-# Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, one --v8-options, then
-#   2 x runs trace runs (runs 3: 8 spawns); a failing probe exits 2 before anything is written. Probe die lines:
-#   `ic-diff: cannot run <node> --version`, `ic-diff: cannot run <node> --v8-options`, `ic-diff: <node> --v8-options
-#   printed nothing`, `ic-diff: cannot hash the <node> --v8-options output`.
+# Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, two --v8-options (the
+#   --v8-flags allowlist read, then the hashed probe), then 2 x runs trace runs (runs 3: 9 spawns); a failing probe
+#   exits 2 before anything is written. Probe die lines: `ic-diff: cannot run <node> --version`, `ic-diff: cannot run
+#   <node> --v8-options`, `ic-diff: <node> --v8-options printed nothing`, `ic-diff: <node> --v8-options lists no V8
+#   flag`, `ic-diff: cannot hash the <node> --v8-options output`.
 # Log files: V8 writes isolate-0x<addr>-<pid>-run.log in the run dir (DIR/raw/<side>, else <private dir>/<side>);
 #   exactly one such file per run is renamed run.<k>.log. Without --out: ONE
-#   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after both probes, removed on every exit; an INT / TERM ->
+#   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit; an INT / TERM ->
 #   "ic-diff: interrupted", exit 2 (one that lands while mktemp runs is held until the dir is named, then removes it).
 #   With --out: no mktemp; DIR holds report.txt and raw/<side>/run.<k>.{log,out} (4 x runs + 1 files; 13 for runs 3).
 #   Known gap: when a run leaves != 1 isolate file, those files stay in its run dir and later runs of that side count
@@ -216,6 +222,7 @@ END {
 '
 
 # @include lib/common.sh
+# @include lib/v8flags.sh
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 TRACE_FLAGS=(--log-ic --no-concurrent-recompilation --no-node-snapshot)
@@ -452,7 +459,8 @@ EOF
 
   # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log, exits 7 if NODE_OPTIONS or
   # NODE_COMPILE_CACHE reached it; --version prints v26.8.2 (FAKE_VER_RC: that exit); --v8-options cats ./v8opts.txt
-  # (FAKE_OPTS_RC: that exit; FAKE_OPTS_EMPTY: prints nothing); else a trace run: exit 9 on a driver argument starting
+  # (FAKE_OPTS_RC: that exit; FAKE_OPTS_EMPTY: prints nothing; both only on the FAKE_OPTS_AT-th --v8-options call, default
+  # 1, counted in <its dir>/opts.n); else a trace run: exit 9 on a driver argument starting
   # with - (as node: "bad option"), copy ./ic.<n>.log or ./ic.log (n = its run count in that dir) to
   # isolate-0x7508000000-<pid>-<basename of --logfile> beside the --logfile path (./iso2: a second isolate file too),
   # ./term: SIGTERM to its parent (this script), exit with ./rc or 0. A mktemp shim (first on PATH) logs each call
@@ -463,7 +471,8 @@ EOF
     'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi' \
     'case "$1" in' \
     '  --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;;' \
-    '  --v8-options) if [ -n "${FAKE_OPTS_RC:-}" ]; then exit "$FAKE_OPTS_RC"; fi; if [ -n "${FAKE_OPTS_EMPTY:-}" ]; then exit 0; fi' \
+    '  --v8-options) k=$(( $(cat "$d/opts.n" 2>/dev/null || echo 0) + 1 )); echo "$k" >"$d/opts.n"' \
+    '    if [ "$k" = "${FAKE_OPTS_AT:-1}" ]; then if [ -n "${FAKE_OPTS_RC:-}" ]; then exit "$FAKE_OPTS_RC"; fi; if [ -n "${FAKE_OPTS_EMPTY:-}" ]; then exit 0; fi; fi' \
     '    cat ./v8opts.txt; exit 0 ;;' \
     'esac' \
     'lf=""; drv=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; drv="$a"; done' \
@@ -479,7 +488,18 @@ EOF
     "r=\$($(printf '%q' "$(command -v mktemp)") \"\$@\") || exit 1" 'printf "%s\n" "$r"' \
     'if [ -n "${ST_MKTERM:-}" ]; then kill -TERM "$PPID"; fi' 'exit 0' >"$mk/mktemp"
   chmod +x "$mk/mktemp"
-  printf 'Synopsis:\n  fake v8 options\n\n' >"$d/cwd/v8opts.txt"
+  # ./v8opts.txt: a synopsis, then name / type lines byte-exact from test/fixtures/v8flags/v8-options.v26.8.2.txt
+  # (:409-410, 527-528, 595-596, 641-642), then an empty line (the stream ends in two newlines: K4 / M26)
+  local VO='  --lazy-feedback-allocation (Allocate feedback vectors lazily)
+        type: bool  default: --lazy-feedback-allocation
+  --turbo-filter (optimization filter for TurboFan compiler)
+        type: string  default: --turbo-filter="*"
+  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)
+        type: int  default: --max-inlined-bytecode-size=460
+  --trace-osr (trace on-stack replacement)
+        type: bool  default: --no-trace-osr
+'
+  printf 'Synopsis:\n  fake v8 options\n%s\n' "$VO" >"$d/cwd/v8opts.txt"
   mkd() { mkdir -p "$dr/$1"; : >"$dr/$1/driver.js"; printf '%s\n' "$2" >"$dr/$1/ic.log"; }
   mkd mono "$MONO"; mkd mono2 "$(printf '%s\n' "$MONO" | sed -e 's/0x3bcd762b/0x2d0e1f44/g' -e 's|file:///w/|file:///elsewhere/x/|g')"
   mkd poly "$POLY"; mkd nc "$MONO"; printf '%s\n' "$POLY" >"$dr/nc/ic.2.log"
@@ -502,21 +522,21 @@ EOF
   }
   has() { grep -c -F -x -e "$1" "$d/sp.out" || true; }
   ents() { find "$d/tmp" "$d/cwd" "$dr/mono" "$dr/poly" "$dr/rc3" "$dr/term" -mindepth 1 | wc -l | tr -d ' '; }
-  check "A3 / A7 R-a e2e: mono vs poly (R=3) -> exit 1 DIFF, 8 spawns (log line 1 --version, line 2 --v8-options, then 6 trace runs), 1 mktemp, the before=0 after=1 line" \
-    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "  before=0 after=1  get${TB}LoadIC${TB}x${TB}P")|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
-    "1|VERDICT DIFF|8|1|1|--version+--v8-options|1"
+  check "A3 / A7 R-a e2e: mono vs poly (R=3) -> exit 1 DIFF, 9 spawns (log lines 1-3 --version, --v8-options, --v8-options, then 6 trace runs), 1 mktemp, the before=0 after=1 line" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "  before=0 after=1  get${TB}LoadIC${TB}x${TB}P")|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")+$(sed -n 3p "$fk/log")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
+    "1|VERDICT DIFF|9|1|1|--version+--v8-options+--v8-options|1"
   check "A3 e2e: mono vs mono2 (every address and the script path changed) -> exit 0 SAME; TMPDIR and cwd keep no new entry" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(has '  get: SAME -- identical IC multiset (before 1 | after 1 site(s))')|$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" \
-    "0|VERDICT SAME|8|1|1|1"
-  check "A7 R-b: --runs 2 -> 6 spawns, --runs 5 -> 12 spawns" \
+    "0|VERDICT SAME|9|1|1|1"
+  check "A7 R-b: --runs 2 -> 7 spawns, --runs 5 -> 13 spawns" \
     "$(spawn -- "$NO" --runs 2 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")#$(spawn -- "$NO" --runs 5 --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")" \
-    "1|VERDICT DIFF|6|1#1|VERDICT DIFF|12|1"
+    "1|VERDICT DIFF|7|1#1|VERDICT DIFF|13|1"
   got=$(spawn -- "$NO" --v8-flags=--no-lazy-feedback-allocation --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")
-  check "A7 R-c / K2: --v8-flags=--no-lazy-feedback-allocation -> probe argvs exactly --version / --v8-options; trace argvs 3-8 hold --no-node-snapshot and the flag once each" \
-    "$got|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")|$(awk 'NR >= 3 { a = 0; b = 0; for (i = 1; i <= NF; i++) { if ($i == "--no-node-snapshot") a++; if ($i == "--no-lazy-feedback-allocation") b++ } printf "%d%d,", a, b }' "$fk/log")" \
-    "1|VERDICT DIFF|8|1|--version+--v8-options|11,11,11,11,11,11,"
-  check "A7 R-d / K2: NODE_OPTIONS and NODE_COMPILE_CACHE set in the environment never reach any spawn (mono vs mono -> SAME, 8 spawns)" \
-    "$(spawn NODE_OPTIONS=--st-probe NODE_COMPILE_CACHE="$d/cc" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")" "0|VERDICT SAME|8|1"
+  check "A7 R-c / K2: --v8-flags=--no-lazy-feedback-allocation -> probe argvs exactly --version / --v8-options / --v8-options; trace argvs 4-9 hold --no-node-snapshot and the flag once each" \
+    "$got|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")+$(sed -n 3p "$fk/log")|$(awk 'NR >= 4 { a = 0; b = 0; for (i = 1; i <= NF; i++) { if ($i == "--no-node-snapshot") a++; if ($i == "--no-lazy-feedback-allocation") b++ } printf "%d%d,", a, b }' "$fk/log")" \
+    "1|VERDICT DIFF|9|1|--version+--v8-options+--v8-options|11,11,11,11,11,11,"
+  check "A7 R-d / K2: NODE_OPTIONS and NODE_COMPILE_CACHE set in the environment never reach any spawn (mono vs mono -> SAME, 9 spawns)" \
+    "$(spawn NODE_OPTIONS=--st-probe NODE_COMPILE_CACHE="$d/cc" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")" "0|VERDICT SAME|9|1"
   check "A7 R-e / K3: --v8-options exit 1 (with --out) -> exit 2, 2 spawns, 0 mktemp, the die line once, no OUT dir; empty output -> exit 2, 2 spawns, die once" \
     "$(spawn FAKE_OPTS_RC=1 -- "$NO" --out "$d/oe" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --v8-options")|$([[ -e "$d/oe" ]] && echo exists || echo absent)#$(spawn FAKE_OPTS_EMPTY=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: $fk/node --v8-options printed nothing")" \
     "2|VERDICT NO-VERDICT|2|0|1|absent#2|VERDICT NO-VERDICT|2|0|1"
@@ -524,54 +544,54 @@ EOF
     "$(spawn FAKE_VER_RC=1 -- "$NO" --out "$d/ov" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --version")|$([[ -e "$d/ov" ]] && echo exists || echo absent)" \
     "2|VERDICT NO-VERDICT|1|0|1|absent"
   got=$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js"); cp "$d/sp.out" "$d/g1.out"
-  check "A7 R-f / K4: v8opts.txt ending in two newlines -> exactly one 'v8-opts sha256/8 3d098cd0' (the hash of the byte stream)" \
-    "$got|$(has 'v8-opts sha256/8 3d098cd0')|$(grep -c -e '^v8-opts ' "$d/sp.out" || true)" "0|VERDICT SAME|8|1|1|1"
-  printf 'Synopsis:\n  fake v8 options, second build\n\n' >"$d/cwd/v8opts.txt"
+  check "A7 R-f / K4: v8opts.txt ending in two newlines -> exactly one 'v8-opts sha256/8 ea67e28d' (the hash of the byte stream)" \
+    "$got|$(has 'v8-opts sha256/8 ea67e28d')|$(grep -c -e '^v8-opts ' "$d/sp.out" || true)" "0|VERDICT SAME|9|1|1|1"
+  printf 'Synopsis:\n  fake v8 options, second build\n%s\n' "$VO" >"$d/cwd/v8opts.txt"
   got="$got#$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")"
-  printf 'Synopsis:\n  fake v8 options\n\n' >"$d/cwd/v8opts.txt"
-  check "A7 R-g control: a second v8opts.txt -> the same rc, VERDICT, spawns and every non-v8-opts line; its v8-opts line 6633eb97" \
-    "$got|$([[ "$(grep -v -e '^v8-opts ' "$d/g1.out")" == "$(grep -v -e '^v8-opts ' "$d/sp.out")" ]] && echo same || echo differs)|$(has 'v8-opts sha256/8 6633eb97')" \
-    "0|VERDICT SAME|8|1#0|VERDICT SAME|8|1|same|1"
+  printf 'Synopsis:\n  fake v8 options\n%s\n' "$VO" >"$d/cwd/v8opts.txt"
+  check "A7 R-g control: a second v8opts.txt -> the same rc, VERDICT, spawns and every non-v8-opts line; its v8-opts line 5ed538ce" \
+    "$got|$([[ "$(grep -v -e '^v8-opts ' "$d/g1.out")" == "$(grep -v -e '^v8-opts ' "$d/sp.out")" ]] && echo same || echo differs)|$(has 'v8-opts sha256/8 5ed538ce')" \
+    "0|VERDICT SAME|9|1#0|VERDICT SAME|9|1|same|1"
   check "A4 --out: exit 1 DIFF, 0 mktemp, exactly 13 files (report.txt + 3 x 2 x {log,out}), no isolate file left; report.txt holds the verdict" \
     "$(spawn -- "$NO" --out "$d/o" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(find "$d/o" -type f | wc -l | tr -d ' ')|$(find "$d/o" -name 'isolate-*' | wc -l | tr -d ' ')|$(grep -c '^VERDICT DIFF$' "$d/o/report.txt" 2>/dev/null || true)|$(grep -c -F -x -e "$LPP" "$d/o/raw/after/run.2.log" 2>/dev/null || true)" \
-    "1|VERDICT DIFF|8|0|13|0|1|1"
+    "1|VERDICT DIFF|9|0|13|0|1|1"
   check "A2 e2e: no isolate log written (after) -> 'no IC log (no isolate-0x*-*-run.log written) in run 1'" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nolog/driver.js")|$(has '  get: NO-VERDICT -- after: no IC log (no isolate-0x*-*-run.log written) in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 / M16 e2e: two isolate files in one run (after) -> 'another isolate or process logged (2 isolate-0x*-*-run.log files) in run 1'" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/iso2/driver.js")|$(has '  get: NO-VERDICT -- after: another isolate or process logged (2 isolate-0x*-*-run.log files) in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 e2e: 2 v8-version lines (after) -> 'the log holds 2 v8-version line(s), want 1 in run 1'" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/v2/driver.js")|$(has '  get: NO-VERDICT -- after: the log holds 2 v8-version line(s), want 1 in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A9 e2e: a NUL as the last byte before the \\n of a valid IC line (after) -> 'a NUL byte in the log in run 1', never SAME" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nul/driver.js")|$(has '  get: NO-VERDICT -- after: a NUL byte in the log in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 e2e: no final newline (after) -> 'the log has no final newline in run 1'" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nonl/driver.js")|$(has '  get: NO-VERDICT -- after: the log has no final newline in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 e2e: driver exit 3 (before) -> 'before: driver exited 3 in run 1'" \
     "$(spawn -- "$NO" --fn get "$dr/rc3/driver.js" "$dr/mono/driver.js")|$(has '  get: NO-VERDICT -- before: driver exited 3 in run 1')" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 e2e: an unresolved pc (after) -> 'unreadable IC log in run 1: unresolved pc ...'" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/xu/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- after: unreadable IC log in run 1: unresolved pc (' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|8|1|1"
+    "2|VERDICT NO-VERDICT|9|1|1"
   check "A2 e2e: run 2 of after differs (mono, then poly) -> 'after: null control: run 2 differs from run 1', before passes" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/nc/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- after: null control: run 2 differs from run 1 (' "$d/sp.out" || true)|$(grep -c -e ' -- before: ' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|8|1|1|0"
+    "2|VERDICT NO-VERDICT|9|1|1|0"
   check "A2 e2e: --fn nosuch -> each side 'no IC site of 'nosuch' in run 1 (...'" \
     "$(spawn -- "$NO" --fn nosuch "$dr/mono/driver.js" "$dr/poly/driver.js")|$(grep -c -E -e "^  nosuch: NO-VERDICT -- (before|after): no IC site of 'nosuch' in run 1 \\(" "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|8|1|2"
+    "2|VERDICT NO-VERDICT|9|1|2"
   check "bug class: a driver named '-x.js' runs as ./-x.js (never read as a node option): 6 trace argvs end in ' ./-x.js', exit 0 SAME" \
-    "$(spawn -- "$NO" --fn get "$dr/dash/-x.js" "$dr/dash/-x.js")|$(grep -c -e ' \./-x\.js$' "$fk/log" || true)" "0|VERDICT SAME|8|1|6"
-  # relative PATH: node = $d/cwd/nm/node (this cwd) and a rogue nm/node in each driver dir; all 2 + 2R spawns must hit ONE
+    "$(spawn -- "$NO" --fn get "$dr/dash/-x.js" "$dr/dash/-x.js")|$(grep -c -e ' \./-x\.js$' "$fk/log" || true)" "0|VERDICT SAME|9|1|6"
+  # relative PATH: node = $d/cwd/nm/node (this cwd) and a rogue nm/node in each driver dir; all 3 + 2R spawns must hit ONE
   mkdir -p "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"
   for x in "$d/cwd/nm" "$dr/rpb/nm" "$dr/rpa/nm"; do cp "$fk/node" "$x/node"; done
   mkd rpb "$MONO"; mkd rpa "$POLY"
   got=$(spawn PATH="nm:$mk:$PATH" -- --fn get "$dr/rpb/driver.js" "$dr/rpa/driver.js")
-  check "A9 relative PATH (PATH=nm:...): all 2 + 2R spawns run the ONE binary resolved from the caller's cwd, named absolute in the header" \
+  check "A9 relative PATH (PATH=nm:...): all 3 + 2R spawns run the ONE binary resolved from the caller's cwd, named absolute in the header" \
     "${got%|*|*|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "ic-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
-    "1|8|0|1"
+    "1|9|0|1"
   rm -rf "$d/cwd/nm"
   # A4 retention: 3 cycles of SAME / DIFF / NO-VERDICT and 1 SIGTERM mid-run leave TMPDIR, cwd and the driver dirs as they were
   b0=$(ents); got=""
@@ -582,10 +602,10 @@ EOF
   b1=$(ents)
   check "A4 retention: 3 x (SAME / DIFF / NO-VERDICT) + 1 SIGTERM mid-run (before run 1) -> 1 mktemp each, 0 new entries in TMPDIR, cwd and the driver dirs" \
     "$got|$b0->$b1" \
-    "$(printf '#0|VERDICT SAME|8|1/1|VERDICT DIFF|8|1/2|VERDICT NO-VERDICT|8|1%.0s' 1 2 3)#2|VERDICT NO-VERDICT|3|1|1|$b0->$b0"
-  check "A9 signal window: a SIGTERM that lands while mktemp -d runs -> exit 2 'interrupted', 2 spawns, the new dir removed (0 entries in TMPDIR)" \
+    "$(printf '#0|VERDICT SAME|9|1/1|VERDICT DIFF|9|1/2|VERDICT NO-VERDICT|9|1%.0s' 1 2 3)#2|VERDICT NO-VERDICT|4|1|1|$b0->$b0"
+  check "A9 signal window: a SIGTERM that lands while mktemp -d runs -> exit 2 'interrupted', 3 spawns, the new dir removed (0 entries in TMPDIR)" \
     "$(spawn ST_MKTERM=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has 'ic-diff: interrupted')|$(find "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
-    "2|VERDICT NO-VERDICT|2|1|1|0"
+    "2|VERDICT NO-VERDICT|3|1|1|0"
   rf() { # LABEL FRAGMENT args...: refused with exit 2, 0 spawns, 0 mktemp, a die line holding FRAGMENT
     local l="$1" f="$2"; shift 2
     check "refused before any spawn: $l -> exit 2, 0 spawns, 0 mktemp, '$f'" \
@@ -645,6 +665,23 @@ EOF
   done
   check "refused before any spawn: MD-44 --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns, 0 mktemp" \
     "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3 4 5)"
+
+  # --- MD-46 / MD-56: the --v8-flags allowlist (v8fl_check right after --version: one --v8-options read, also with no
+  # --v8-flags), then the hashed --v8-options probe (K3 on the second call) ---
+  o=""
+  for x in --openssl-config=F --trace-osr --turbo-filter=x --max-inlined-bytecode-size; do
+    o="$o#$(spawn -- "$NO" --fn get --out "$d/o73" "--v8-flags=--no-lazy-feedback-allocation $x" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--v8-flags must not set $x: only V8 tuning flags of this node binary are accepted")|$([[ -e "$d/o73" ]] && echo exists || echo absent)"
+  done
+  check "MD-46 allowlist (with --out): --v8-flags --openssl-config=F (a node option) / --trace-osr (MD-53 family) / --turbo-filter=x (string-typed) / bare --max-inlined-bytecode-size (int, no =N) -> exit 2 after --version + one --v8-options (2 spawns), 0 mktemp, the die line once, no OUT dir" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|2|0|1|absent%.0s' 1 2 3 4)"
+  printf 'Synopsis:\n  fake v8 options\n\n' >"$d/cwd/v8opts.txt"
+  got="$(spawn -- "$NO" --out "$d/o74" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: $fk/node --v8-options lists no V8 flag")|$([[ -e "$d/o74" ]] && echo exists || echo absent)"
+  printf 'Synopsis:\n  fake v8 options\n%s\n' "$VO" >"$d/cwd/v8opts.txt"
+  check "MD-56: a --v8-options list with no V8 flag line (the old synopsis-only v8opts.txt), no --v8-flags, with --out -> exit 2, 2 spawns, 0 mktemp, 'lists no V8 flag' once, no OUT dir" \
+    "$got" "2|VERDICT NO-VERDICT|2|0|1|absent"
+  check "K3 second call: the hashed --v8-options probe exits 1 (FAKE_OPTS_AT=2, with --out) -> exit 2, 3 spawns, 0 mktemp, the die line once, no OUT dir; prints nothing -> exit 2, 3 spawns, die once" \
+    "$(spawn FAKE_OPTS_AT=2 FAKE_OPTS_RC=1 -- "$NO" --out "$d/o75" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --v8-options")|$([[ -e "$d/o75" ]] && echo exists || echo absent)#$(spawn FAKE_OPTS_AT=2 FAKE_OPTS_EMPTY=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: $fk/node --v8-options printed nothing")" \
+    "2|VERDICT NO-VERDICT|3|0|1|absent#2|VERDICT NO-VERDICT|3|0|1"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -748,8 +785,11 @@ DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- 
 DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
 DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
 
-# --- every refusal is above this line; spawns start here: --version, --v8-options, then mktemp / OUT mkdir, the runs ---
+# --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, the allowlist read
+# (v8fl_check: one --v8-options, MD-56: also with no --v8-flags), the hashed --v8-options probe, then mktemp / OUT
+# mkdir, the runs ---
 GOT_VER=$("${PROBE_ENV[@]}" "$NODE_RES" --version 2>/dev/null) || die "cannot run $NODE_RES --version"
+v8fl_check "$NODE_RES"
 # the --v8-options BYTE STREAM is hashed through a pipe (never a $(...) value: that strips trailing newlines); tee
 # copies the same bytes to fd 3 = the wc pipe. fd 4 = the capture. Lines: the 8-hex hash, "rc <node exit>" (node's
 # exit from PIPESTATUS), "bytes <n>" (no process substitution: its output could land in the hashed pipe)

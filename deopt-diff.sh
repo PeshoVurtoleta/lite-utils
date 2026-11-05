@@ -30,7 +30,12 @@
 #                      node options from a file into the measured process), and every --eval* / --print* flag, a
 #                      prefix match (--eval / --print: node runs that code in the measured process instead of the
 #                      driver, which becomes argv; V8's --print-* flags, e.g. --print-bytecode, print V8 internals
-#                      into the measured run). -r / -e / -p are refused as non-flags
+#                      into the measured run). -r / -e / -p are refused as non-flags. Accepted: V8 flags this node
+#                      lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric as --flag=N --
+#                      except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 after
+#                      one --v8-options read and before any measured run: every node option (--run, --test, --watch,
+#                      --check, --inspect, --cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the
+#                      tool's own flags above.
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
 #                      output of run k, addresses kept). DIR/raw must be absent or an empty, readable and writable
 #                      directory that is not a symlink; DIR/report.txt must not be a symlink or a file with another
@@ -115,16 +120,18 @@
 #                                    the DIFF becomes NO-VERDICT, exit 2; SAME and NO-VERDICT stay as they are)
 # Then the tier section (below), a blank line and "VERDICT <SAME|DIFF|NO-VERDICT>".
 # Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. If both sides pass, the run-1
-#   D multisets are compared. Every refused argument exits 2 before any node is spawned and before anything is
-#   written to disk. Spawns: one `node --version` (a failing one exits 2 before anything is written), then
-#   2 x runs driver runs.
+#   D multisets are compared. Every refused argument exits 2 before any node is spawned and before anything is written
+#   to disk, except a --v8-flags allowlist refusal (lib/v8flags.sh): it exits 2 after the --version and --v8-options
+#   spawns, before anything is written. Spawns: one `node --version` (a failing one exits 2 before anything is
+#   written), one `node --v8-options` (NODE_OPTIONS stripped; a failing one, or one that lists no V8 flag, exits 2
+#   before anything is written), then 2 x runs driver runs: 2 + 2 x runs in all (8 at --runs 3).
 # Ref / file mode: --out DIR is required; DIR/stage must be absent or an empty directory (a DIR/stage that is not a
-#   directory exits 2 "--out: DIR/stage exists and is not a directory"). After the --version spawn, DIR/stage/before
-#   and DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
-#   textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each side's
-#   driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its own
-#   fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
-#   or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
+#   directory exits 2 "--out: DIR/stage exists and is not a directory"). After the --version and --v8-options spawns,
+#   DIR/stage/before and DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`,
+#   plumbing, no textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each
+#   side's driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its
+#   own fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>"
+#   (ref) or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
 #   "driver  <abs --driver>  sha256/8 <x>", and when the two staged modules are byte-identical
 #   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
 #   The mode line says "diff (ref)" or "diff (file)". Spawns, lines and verdict as in driver mode, plus the
@@ -151,10 +158,10 @@
 #   path value starting with '-' (e.g. --before -b.js) is read as an option by dirname / basename / stat and exits 2
 #   only through the EXIT trap ("unexpected error (exit 1)", 0 spawns, nothing written). The stage checks
 #   (lib/stage.sh): an unreadable (mode 000) DIR/stage passes the emptiness test, even when it is not empty, so the
-#   run spends its --version spawn and writes DIR/raw/before, DIR/raw/after and an empty DIR/report.txt before it
-#   dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a symlink to an empty
-#   directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already gets the raw
-#   files in driver mode).
+#   run spends its --version and --v8-options spawns and writes DIR/raw/before, DIR/raw/after and an empty
+#   DIR/report.txt before it dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a
+#   symlink to an empty directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already
+#   gets the raw files in driver mode).
 # Tier section: read from run 1 of each side, printed after the fn lines (and the byte-identical NO-VERDICT line)
 #   in every report that reaches VERDICT. Every line starts "tier    " and none holds " -- " (a " -- " in a reason
 #   or file name prints as " - - "): "tier    REPORTED: run 1 of each side, never part of the verdict", then per
@@ -514,6 +521,49 @@ stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the dr
   DESC_D="$STAGE_DRIVER  sha256/8 $(sha8 "$DRV_B")"
 }
 
+# `node --v8-options` -> "name type" per flag. A name line is exactly `  --<name> (` (one space before the paren: the
+# synopsis lines and uppercase names drop out); the NEXT line must be its `type:` line, else the name is dropped.
+# shellcheck disable=SC2016
+V8FL_AWK='
+p != "" { if (match($0, /^ +type: [a-z0-9_]+/)) { t = substr($0, RSTART, RLENGTH); sub(/^ +type: /, "", t); print p " " t }; p = "" }
+/^  --[a-z0-9_-]+ \(/ { p = $1; sub(/^--/, "", p); gsub(/_/, "-", p) }
+'
+# MD-53 deny families, matched against "-<name>-" (= `(^|-)X(-|$)` on the bare name)
+V8FL_RE='-(log|logfile|prof|profile|profiling|profiler|trace|print|perf|redirect|dump|stats|verbose|snapshot|gdbjit|counters|help|abort|fuzzing|file|logger)-'
+V8FL_TAB=""
+v8fl_read() { # NODE: V8FL_TAB from ONE `NODE --v8-options` capture; fails closed (die) on a spawn error, rc, 0 rows
+  local raw rows rc=0
+  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?
+  [[ $rc -eq 0 ]] || die "cannot run $1 --v8-options"
+  [[ -n "$raw" ]] || die "$1 --v8-options printed nothing"
+  rows=$(printf '%s\n' "$raw" | LC_ALL=C awk "$V8FL_AWK") || rows=""
+  [[ -n "$rows" ]] || die "$1 --v8-options lists no V8 flag"
+  V8FL_TAB=$'\n'"$rows"$'\n'
+}
+v8fl_ok() { # TOKEN: 0 iff TOKEN is a V8 tuning flag in V8FL_TAB, in its value form (pure bash, 0 spawns)
+  local nl=$'\n' g b t re v=0 neg=0
+  g=${1//_/-}
+  [[ "$g" == --* ]] || return 1
+  b=${g#--}
+  if [[ "$b" == *=* ]]; then v=1; [[ -n "${b#*=}" ]] || return 1; b=${b%%=*}; fi
+  if [[ "$b" == no-* && "$V8FL_TAB" != *"$nl$b "* ]]; then b=${b#no-}; neg=1; fi
+  case "$b" in ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;; esac
+  re="$nl$b ([a-z0-9_]+)$nl"
+  [[ "$V8FL_TAB" =~ $re ]] || return 1                  # not a V8 flag of this node (every node option)
+  t=${BASH_REMATCH[1]}
+  [[ "$t" != string ]] || return 1                      # string-typed: a file name, path or filter
+  if [[ "-$b-" =~ $V8FL_RE ]]; then return 1; fi        # MD-53 family
+  if [[ $neg -eq 1 && "$t" != bool && "$t" != maybe_bool ]]; then return 1; fi   # --no- on a non-bool
+  case "$t" in bool|maybe_bool) [[ $v -eq 0 ]] ;; *) [[ $v -eq 1 ]] ;; esac     # value form (MD-58)
+}
+v8fl_check() { # NODE: one read (MD-56: also with no --v8-flags), then die on the first refused V8_EXTRA token
+  local f
+  v8fl_read "$1"
+  for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
+    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)"
+  done
+}
+
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 TRACE_FLAGS=(--trace-deopt-verbose --trace-opt --no-concurrent-recompilation)
 # run_side keeps a line that starts with `[` or carries trace text anywhere (DEOPT_AWK turns the latter into X)
@@ -815,7 +865,10 @@ EOF
     "$(tie add "$PRE"$'\n'"$(mko 1 2 3)" '$')$(tie add "$PRE"$'\n'"$(mko 1)"$'\n'"${E9}zz"$'\n'"$(mko 2)" '$')" \
     "ops until TURBOFAN_JS: not compiled in run 1 (last marker op 3);ops until TURBOFAN_JS: not compiled in run 1 (last marker op 2);"
 
-  # --- this script end to end: a fake node (bash) logs argv, prints a version, cats ./trace.<n>.txt or ./trace.txt
+  # --- this script end to end: a fake node (bash) logs argv, prints a version, answers --v8-options with $fk/v8o.txt
+  # (ten lines of test/fixtures/v8flags/v8-options.v26.8.2.txt, verbatim: allow-natives-syntax bool,
+  # max-inlined-bytecode-size int, lazy-feedback-allocation bool, turbo-filter string, trace-osr bool; exit
+  # $FAKE_V8O_RC instead when set) before its run counter, cats ./trace.<n>.txt or ./trace.txt
   # from cwd (n = its run count in that driver dir), in a cwd ending in /after also cats $FAKE_AFTER_EXTRA (when set),
   # exits with ./rc or 0, and exits 7 if NODE_OPTIONS reached it ---
   local fk="$d/fk" D1 D2 out
@@ -823,11 +876,23 @@ EOF
   printf '%s\n' "#!$BASH" 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
     'if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi' \
     'case "$1" in --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac' \
+    'case "$1" in --v8-options) if [ -n "${FAKE_V8O_RC:-}" ]; then exit "$FAKE_V8O_RC"; fi; cat "$d/v8o.txt"; exit 0 ;; esac' \
     'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"' \
     'if [ -f "./trace.$n.txt" ]; then cat "./trace.$n.txt"; elif [ -f ./trace.txt ]; then cat ./trace.txt; fi' \
     'case "$PWD" in */after) if [ -n "${FAKE_AFTER_EXTRA:-}" ]; then cat "$FAKE_AFTER_EXTRA"; fi ;; esac' \
     'if [ -f ./rc ]; then exit "$(cat ./rc)"; fi' 'exit 0' >"$fk/node"
   chmod +x "$fk/node"
+  printf '%s\n' \
+    '  --allow-natives-syntax (allow natives syntax)' \
+    '        type: bool  default: --no-allow-natives-syntax' \
+    '  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)' \
+    '        type: int  default: --max-inlined-bytecode-size=460' \
+    '  --lazy-feedback-allocation (Allocate feedback vectors lazily)' \
+    '        type: bool  default: --lazy-feedback-allocation' \
+    '  --turbo-filter (optimization filter for TurboFan compiler)' \
+    '        type: string  default: --turbo-filter="*"' \
+    '  --trace-osr (trace on-stack replacement)' \
+    '        type: bool  default: --no-trace-osr' >"$fk/v8o.txt"
   # shim dirs put first on PATH: DIR/tee fails (exit 1) on the files under OUT/raw/ only (say() keeps the real tee);
   # DIR/tr fails (exit 6) on run_side's `tr '\000' '?'` only; DIR/awk fails (exit 5) on run_side's keep filter only
   mktee() { # DIR OUT
@@ -861,54 +926,68 @@ EOF
     printf '%s|%s|%s' "$rc" "$(awk '/^VERDICT /{ printf "%s%s", (n++ ? "," : ""), $0 }' "$d/sp.out")" "$(wc -l <"$fk/log" | tr -d ' ')"
   }
   has() { grep -c -F -x -e "$1" "$d/sp.out" || true; }
-  check "e2e: 1 deopt vs 2 identical deopts (R=3) -> exit 1 DIFF, exactly 7 spawns, the before=1 after=2 line" \
-    "$(spawn - --fn add "$D2" "$d/twice/driver.js")|$(has '    before=1 after=2  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" "1|VERDICT DIFF|7|1"
+  check "e2e: 1 deopt vs 2 identical deopts (R=3) -> exit 1 DIFF, exactly 8 spawns, the before=1 after=2 line" \
+    "$(spawn - --fn add "$D2" "$d/twice/driver.js")|$(has '    before=1 after=2  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" "1|VERDICT DIFF|8|1"
   check "e2e: mono vs deopt -> exit 1 DIFF (before=0 after=1)" \
-    "$(spawn - --fn add "$D1" "$D2")|$(has '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" "1|VERDICT DIFF|7|1"
+    "$(spawn - --fn add "$D1" "$D2")|$(has '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" "1|VERDICT DIFF|8|1"
   check "e2e: mono vs mono -> exit 0 SAME; without --out nothing is written (cwd and TMPDIR stay empty)" \
     "$(spawn - --fn add "$D1" "$D1")|$(has '  add: SAME -- identical deopt multiset (before 0 | after 0)')|$(find "$d/cwd" "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
-    "0|VERDICT SAME|7|1|0"
+    "0|VERDICT SAME|8|1|0"
   check "e2e: NODE_OPTIONS set in the environment never reaches node (mono vs mono still SAME)" \
-    "$(spawn NODE_OPTIONS=--st-probe --fn add "$D1" "$D1")" "0|VERDICT SAME|7"
+    "$(spawn NODE_OPTIONS=--st-probe --fn add "$D1" "$D1")" "0|VERDICT SAME|8"
   check "e2e: guard -> exit 2, each side says 'no optimized compile of 'nosuch' in run 1'" \
     "$(spawn - --fn nosuch "$D2" "$d/deop2/driver.js")|$(grep -c -E -e "^  nosuch: NO-VERDICT -- (before|after): no optimized compile of 'nosuch' in run 1 \\(" "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|2"
+    "2|VERDICT NO-VERDICT|8|2"
   check "e2e: null control -> exit 2 naming after: 'null control: run 2 differs from run 1'" \
     "$(spawn - --fn add "$D2" "$d/nc/driver.js")|$(grep -c -e '^  add: NO-VERDICT -- after: null control: run 2 differs from run 1 (' "$d/sp.out" || true)|$(grep -c -e ' -- before: ' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|1|0"
+    "2|VERDICT NO-VERDICT|8|1|0"
   check "e2e: driver exit 3 (before) -> exit 2 'before: driver exited 3 in run 1'" \
-    "$(spawn - --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: driver exited 3 in run 1')" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn - --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: driver exited 3 in run 1')" "2|VERDICT NO-VERDICT|8|1"
   cp "$d/sp.out" "$d/rc3.out"   # read by T8 and T13
   check "e2e: an unparseable bailout naming fn (after) -> exit 2 'unparseable trace line naming 'add' in run 1: ...'" \
     "$(spawn - --fn add "$D2" "$d/xb/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: bailout: kind 'deopt-Eager'")" \
-    "2|VERDICT NO-VERDICT|7|1"
+    "2|VERDICT NO-VERDICT|8|1"
   check "e2e: a bailout glued after driver output on one line (after) -> exit 2 'trace text not at line start', never DIFF" \
     "$(spawn - --fn add "$D2" "$d/glue/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: trace text not at line start")" \
-    "2|VERDICT NO-VERDICT|7|1"
+    "2|VERDICT NO-VERDICT|8|1"
   check "e2e --out: driver text, a NUL, then a bailout on one line (after) -> exit 2 'trace text not at line start', never SAME; the raw file keeps the NUL" \
     "$(spawn - --out "$d/on" --fn add "$D1" "$d/nul/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: trace text not at line start")|$(tr -d -c '\000' <"$d/on/raw/after/run.1.txt" | wc -c | tr -d ' ')" \
-    "2|VERDICT NO-VERDICT|7|1|1"
+    "2|VERDICT NO-VERDICT|8|1|1"
   check "e2e: a NUL, then a bailout at the start of a line (after) -> exit 2 'trace text not at line start', never SAME" \
     "$(spawn - --fn add "$D1" "$d/nul0/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: trace text not at line start")" \
-    "2|VERDICT NO-VERDICT|7|1"
+    "2|VERDICT NO-VERDICT|8|1"
   check "e2e: '[completed compilingX' glued after driver output, then a bailout (after) -> exit 2 'trace text not at line start', never SAME" \
     "$(spawn - --fn add "$D2" "$d/gluee/driver.js")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: trace text not at line start")" \
-    "2|VERDICT NO-VERDICT|7|1"
+    "2|VERDICT NO-VERDICT|8|1"
   check "e2e --out: exit 1 DIFF; report.txt holds the verdict; raw/before + raw/after hold 3 + 3 files, addresses kept" \
     "$(spawn - --out "$d/o" --fn add "$D1" "$D2")|$(grep -c '^VERDICT DIFF$' "$d/o/report.txt" 2>/dev/null || true)|$(find "$d/o/raw/before" -type f | wc -l | tr -d ' ')+$(find "$d/o/raw/after" -type f | wc -l | tr -d ' ')|$(grep -c -F -x -e "$D10" "$d/o/raw/after/run.2.txt" 2>/dev/null || true)" \
-    "1|VERDICT DIFF|7|1|3+3|1"
+    "1|VERDICT DIFF|8|1|3+3|1"
   check "e2e --out: a tee failure on a driver exiting 3 -> exit 2 'cannot read driver output in run 1 (tee exited 1)', not 'driver exited'" \
     "$(spawn "PATH=$d/shim:$PATH" --out "$d/ot" --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: cannot read driver output in run 1 (tee exited 1)')|$(grep -c -e 'driver exited' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|1|0"
+    "2|VERDICT NO-VERDICT|8|1|0"
   check "e2e --out: an awk + tr + tee failure on a driver exiting 3 -> 'cannot read driver output in run 1 (awk exited 5)'" \
     "$(spawn "PATH=$d/shim2:$PATH" --out "$d/oa" --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: cannot read driver output in run 1 (awk exited 5)')|$(grep -c -e 'tr exited' -e 'tee exited' -e 'driver exited' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|1|0"
+    "2|VERDICT NO-VERDICT|8|1|0"
   check "e2e --out: a tr + tee failure on a driver exiting 3 -> 'cannot read driver output in run 1 (tr exited 6)'" \
     "$(spawn "PATH=$d/shim3:$PATH" --out "$d/or" --fn add "$d/rc3/driver.js" "$D2")|$(has '  add: NO-VERDICT -- before: cannot read driver output in run 1 (tr exited 6)')|$(grep -c -e 'tee exited' -e 'driver exited' "$d/sp.out" || true)" \
-    "2|VERDICT NO-VERDICT|7|1|0"
+    "2|VERDICT NO-VERDICT|8|1|0"
   check "e2e --out: a failing node --version -> exit 2 after 1 spawn, nothing written (no OUT dir)" \
     "$(spawn FAKE_VER_RC=1 --out "$d/ov" --fn add "$D1" "$D2")|$(grep -c -e '^deopt-diff: cannot run .*/node --version$' "$d/sp.out" || true)|$([[ -e "$d/ov" ]] && echo exists || echo absent)" \
     "2|VERDICT NO-VERDICT|1|1|absent"
+  # --- MD-46 (MD-50..58, lib/v8flags.sh): the --v8-flags allowlist, read from the fake node's canned --v8-options ---
+  check "MD-50 accepted: --v8-flags '--allow-natives-syntax --no-lazy-feedback-allocation --max-inlined-bytecode-size=30' -> exit 1 DIFF, 8 spawns, spawn 2 is the --v8-options read" \
+    "$(spawn - --fn add --v8-flags '--allow-natives-syntax --no-lazy-feedback-allocation --max-inlined-bytecode-size=30' "$D1" "$D2")|$(sed -n 2p "$fk/log")" \
+    "1|VERDICT DIFF|8|--v8-options"
+  local f; got=""; x=0
+  for f in --snapshot-blob=F --turbo-filter=x --trace-osr --max-inlined-bytecode-size; do
+    x=$((x + 1))
+    got="$got#$(spawn - --out "$d/oa$x" --fn add --v8-flags "$f" "$D1" "$D2")|$(has "deopt-diff: --v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)")|$([[ -e "$d/oa$x" ]] && echo exists || echo absent)"
+  done
+  check "MD-50 refused after the --v8-options read: --out + --v8-flags --snapshot-blob=F (no V8 flag) / --turbo-filter=x (string) / --trace-osr (trace family) / --max-inlined-bytecode-size (int, no =N) -> exit 2, 2 spawns, the allowlist die line once, no OUT dir" \
+    "$got" "#2|VERDICT NO-VERDICT|2|1|absent#2|VERDICT NO-VERDICT|2|1|absent#2|VERDICT NO-VERDICT|2|1|absent#2|VERDICT NO-VERDICT|2|1|absent"
+  check "MD-56 a failing node --v8-options (FAKE_V8O_RC=1) -> exit 2 after 2 spawns, 'cannot run .../node --v8-options', nothing written (no OUT dir)" \
+    "$(spawn FAKE_V8O_RC=1 --out "$d/ow" --fn add "$D1" "$D2")|$(grep -c -e '^deopt-diff: cannot run .*/node --v8-options$' "$d/sp.out" || true)|$([[ -e "$d/ow" ]] && echo exists || echo absent)" \
+    "2|VERDICT NO-VERDICT|2|1|absent"
 
   # --- the REPORTED tier section end to end (PLAN A3, A5, MD-20, A9): mx / dx are mono / deop driver dirs whose
   # trace.txt put() rewrites between runs; mktaw DIR BODY writes an awk shim (first on PATH) that runs BODY for
@@ -928,13 +1007,13 @@ EOF
   put ""; got=$(spawn - --fn add "$d/mx/driver.js" "$d/dx/driver.js"); cp "$d/sp.out" "$d/m0.out"
   got="$got#$(has 'tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')"
   put $'\n'"$EX"
-  check "T7 A3 never moves the verdict: mono|deop without, then with 5 extra lines (';;;', ops 1 2, 'op x', '....@@LITE-MARK op 3') -> same rc, VERDICT, 7 spawns, non-tier lines; tier lines read them" \
+  check "T7 A3 never moves the verdict: mono|deop without, then with 5 extra lines (';;;', ops 1 2, 'op x', '....@@LITE-MARK op 3') -> same rc, VERDICT, 8 spawns, non-tier lines; tier lines read them" \
     "$got#$(spawn - --fn add "$d/mx/driver.js" "$d/dx/driver.js")#$(sm)#$(has 'tier    add  before  ops until TURBOFAN_JS: markers unreadable (bad op line after op 2: want @@LITE-MARK op <1-15 digits>)')$(has 'tier    add  after  ops until TURBOFAN_JS: markers unreadable (bad op line after op 2: want @@LITE-MARK op <1-15 digits>)')" \
-    "1|VERDICT DIFF|7#1#1|VERDICT DIFF|7#same#11"
+    "1|VERDICT DIFF|8#1#1|VERDICT DIFF|8#same#11"
   put ""
   check "T8 MD-20 / A5: TIER_AWK exits 5, or exits 0 printing nothing -> 'unreadable (awk exited 5|0)' per side; rc, VERDICT, spawns, non-tier lines unchanged; run 1 exit 3 -> 'not reported (run 1: 3)'" \
     "$(spawn "PATH=$d/ta5:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(uw 5)|$(sm)#$(spawn "PATH=$d/ta0:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(uw 0)|$(sm)#$(grep -c -F -x -e 'tier    add  before  not reported (run 1: 3)' "$d/rc3.out" || true)" \
-    "1|VERDICT DIFF|7|11|same#1|VERDICT DIFF|7|11|same#1"
+    "1|VERDICT DIFF|8|11|same#1|VERDICT DIFF|8|11|same#1"
   IFS= read -r -d '' N4L <<'EOF' || true
 tier    REPORTED: run 1 of each side, never part of the verdict
 tier    add  before  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0
@@ -951,21 +1030,21 @@ tier    addX  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 0, TURBOFAN_JS
 tier    addX  after  cycles 0: none
 tier    addX  after  ops until TURBOFAN_JS: no @@LITE-MARK op lines
 EOF
-  check "T9 A9 (2) N4: --fn add,addX mono|deop -> exit 2, 7 spawns; tier lines exactly: header, then per fn in --fn order its before lines, then its after lines" \
-    "$(spawn - --fn add,addX "$D1" "$D2")|$(grep -e '^tier    ' "$d/sp.out" || true)" "2|VERDICT NO-VERDICT|7|${N4L%$'\n'}"
+  check "T9 A9 (2) N4: --fn add,addX mono|deop -> exit 2, 8 spawns; tier lines exactly: header, then per fn in --fn order its before lines, then its after lines" \
+    "$(spawn - --fn add,addX "$D1" "$D2")|$(grep -e '^tier    ' "$d/sp.out" || true)" "2|VERDICT NO-VERDICT|8|${N4L%$'\n'}"
   mkdir -p "$d/mixb" "$d/mixa"
   for x in mixb mixa; do
     : >"$d/$x/driver.js"; printf '%s\n' "$T_DEOPT" >"$d/$x/trace.1.txt"; printf '%s\n' "$T_MONO" >"$d/$x/trace.2.txt"; printf '%s\n' "$T_MONO" >"$d/$x/trace.3.txt"
   done
   check "T10 A9 (2) N5: each dir's run 1 deopts, runs 2 3 do not -> exit 2 (null control), 3 + 3 runs, both sides' tier deopt line read from run 1" \
     "$(spawn - --fn add "$d/mixb/driver.js" "$d/mixa/driver.js")|$(cat "$fk/mixb.n" 2>/dev/null)+$(cat "$fk/mixa.n" 2>/dev/null)|$(has 'tier    add  before  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')$(has 'tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')" \
-    "2|VERDICT NO-VERDICT|7|3+3|11"
+    "2|VERDICT NO-VERDICT|8|3+3|11"
   check "T11 A9 (2) N6: TIER_AWK prints 'tier    add  x  PARTIAL' then exits 5 -> no PARTIAL line, 'unreadable (awk exited 5)' per side; rc, VERDICT, spawns, non-tier lines unchanged" \
-    "$(spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e PARTIAL "$d/sp.out" || true)|$(uw 5)|$(sm)" "1|VERDICT DIFF|7|0|11|same"
+    "$(spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e PARTIAL "$d/sp.out" || true)|$(uw 5)|$(sm)" "1|VERDICT DIFF|8|0|11|same"
   got=""
   for x in taf tam tab; do got="$got#$(spawn "PATH=$d/$x:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e FOREIGN -e '  x  ' "$d/sp.out" || true)|$(uw 0)"; done
   check "T12 A9 (1) N7: TIER_AWK exits 0 after a tier line + a foreign line, a 3-space 'tier' line between 2 tier lines, or a tier line + an empty line -> no shim line, 'unreadable (awk exited 0)' per side" \
-    "$got" "#1|VERDICT DIFF|7|0|11#1|VERDICT DIFF|7|0|11#1|VERDICT DIFF|7|0|11"
+    "$got" "#1|VERDICT DIFF|8|0|11#1|VERDICT DIFF|8|0|11#1|VERDICT DIFF|8|0|11"
   check "T13 A9 (2) gv-cmp sub-check 8: before run 1 exits 3 -> the after side still reads its own run 1: 'tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0'" \
     "$(grep -c -F -x -e 'tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0' "$d/rc3.out" || true)" "1"
   rf() { # LABEL FRAGMENT args...: refused with exit 2, 0 spawns, a die line holding FRAGMENT
@@ -1011,12 +1090,12 @@ EOF
     check "ref / file modes: temp git repo set up (init, commits r1 r2, tags r1 r2)" "git exited $sr: $(tail -n 1 "$g/git.log")" "ok"
   else
     RR=(--module m/trace.txt --driver "$R/driver.js" --repo "$R")
-    check "S1 ref mode (temp git repo): --before-ref r1 --after-ref r2 -> exit 1 DIFF, 7 spawns, the before=0 after=1 line, 'mode    diff (ref)  runs 3', no NOTE" \
+    check "S1 ref mode (temp git repo): --before-ref r1 --after-ref r2 -> exit 1 DIFF, 8 spawns, the before=0 after=1 line, 'mode    diff (ref)  runs 3', no NOTE" \
       "$(sspawn - --out "$g/s1" --fn add --before-ref r1 --after-ref r2 "${RR[@]}")|$(has '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)')|$(has 'mode    diff (ref)  runs 3  v8 flags --trace-deopt-verbose --trace-opt --no-concurrent-recompilation')|$(grep -c -e '^NOTE ' "$d/sp.out" || true)" \
-      "1|VERDICT DIFF|7|1|1|0"
+      "1|VERDICT DIFF|8|1|1|0"
     check "S2 ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the exact null-control NOTE" \
       "$(sspawn - --out "$g/s2" --fn add --before-ref r1 --after-ref r1 "${RR[@]}")|$(has 'NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)')" \
-      "0|VERDICT SAME|7|1"
+      "0|VERDICT SAME|8|1"
     # a tee shim rewrites the live --after to the r1 text while before run 2 (driver run 3) runs: after runs 2 and 3
     # still read the staged r2 copy, so a stage that aliased the live file would fail the after null control
     printf '%s\n' "#!$BASH" "for a; do case \"\$a\" in */raw/before/run.2.txt) cp $(printf '%q' "$frz") $(printf '%q' "$R/m/trace.txt") || exit 9 ;; esac; done" \
@@ -1024,11 +1103,11 @@ EOF
     chmod +x "$g/shim4/tee"
     check "S3 file mode: --before a FROZEN r1 copy, --after the live tracked r2 file (rewritten to r1 at driver run 3) -> exit 1 DIFF; OUT holds exactly 11 files" \
       "$(sspawn "PATH=$g/shim4:$PATH" --out "$g/s3" --fn add --before "$frz" --after "$R/m/trace.txt" --driver "$R/driver.js")|$(find "$g/s3" -type f | wc -l | tr -d ' ')|$(cmp -s "$frz" "$R/m/trace.txt" && echo rewritten || echo kept)" \
-      "1|VERDICT DIFF|7|11|rewritten"
+      "1|VERDICT DIFF|8|11|rewritten"
     printf '%s\n' "$T_DEOPT" >"$R/m/trace.txt"
     check "S4 ref mode (MD-16): --before-ref r1 --after-ref r1 plus an after-only deopt -> exit 2, the DIFF line, then the byte-identical NO-VERDICT line" \
       "$(sspawn "FAKE_AFTER_EXTRA=$g/extra.txt" --out "$g/s4" --fn add --before-ref r1 --after-ref r1 "${RR[@]}")|$(has '  add: DIFF -- deopt multiset differs (before 0 | after 1)')|$(has '  NO-VERDICT -- before and after modules are byte-identical: the DIFF is run-to-run noise')" \
-      "2|VERDICT NO-VERDICT|7|1|1"
+      "2|VERDICT NO-VERDICT|8|1|1"
     srf() { # LABEL DIE-TEXT OUT|- ENV|- args...: exit 2, 0 spawns, 'deopt-diff: DIE-TEXT' once and no other die line;
       # OUT not created (an OUT that exists before the run is left as it was); '-' (no --out): cwd stays empty
       local l="$1" f="$2" o="$3" pre="" s w t; shift 3
@@ -1147,11 +1226,11 @@ EOF
     mkdir -p "$d/fxd" "$d/fxd2" "$d/fxm"
     for x in fxd fxd2 fxm; do : >"$d/$x/driver.js"; done
     fxt deopt >"$d/fxd/trace.txt"; fxt deopt >"$d/fxd2/trace.txt"; fxt mono >"$d/fxm/trace.txt"
-    check "fixture F12 e2e (the fake node serving deopt.txt | mono.txt): --fn add -> exit 1 DIFF, 7 spawns, 'before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)'" \
+    check "fixture F12 e2e (the fake node serving deopt.txt | mono.txt): --fn add -> exit 1 DIFF, 8 spawns, 'before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)'" \
       "$(spawn - --fn add "$d/fxd/driver.js" "$d/fxm/driver.js")|$(has '  add: DIFF -- deopt multiset differs (before 1 | after 0)')|$(has '    before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" \
-      "1|VERDICT DIFF|7|1|1"
-    check "fixture F13 e2e (the fake node serving deopt.txt | a copy): --fn add -> exit 0 SAME (before 1 | after 1), 7 spawns" \
-      "$(spawn - --fn add "$d/fxd/driver.js" "$d/fxd2/driver.js")|$(has '  add: SAME -- identical deopt multiset (before 1 | after 1)')" "0|VERDICT SAME|7|1"
+      "1|VERDICT DIFF|8|1|1"
+    check "fixture F13 e2e (the fake node serving deopt.txt | a copy): --fn add -> exit 0 SAME (before 1 | after 1), 8 spawns" \
+      "$(spawn - --fn add "$d/fxd/driver.js" "$d/fxd2/driver.js")|$(has '  add: SAME -- identical deopt multiset (before 1 | after 1)')" "0|VERDICT SAME|8|1"
     check "fixture F14 f-marks.txt tier lines: fn=add -> TURBOFAN_JS 1, 'cycles 0: TURBOFAN_JS', 'ops until TURBOFAN_JS: after op 50, before op 60'" \
       "$(tie add "$FXF")" \
       "compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0;cycles 0: TURBOFAN_JS;ops until TURBOFAN_JS: after op 50, before op 60;"
@@ -1174,7 +1253,8 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
-# options (every check below runs before any node is spawned and before any disk write)
+# options (every check below runs before any node is spawned and before any disk write; the --v8-flags allowlist,
+# lib/v8flags.sh, runs after the --version spawn, at the marker line below)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; REPORT=/dev/null
 BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; STAGE_SAME=0
@@ -1272,9 +1352,9 @@ if [[ -n "$OUT" ]]; then
   OUT_UP="$OUT/raw/before"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
   [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/before and $OUT/raw/after ($OUT_UP is not a writable directory)"
 fi
-# resolve the binary ONCE, from the caller's cwd: every spawn (--version, each run in its driver dir) runs this
-# absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a slash is a path
-# (never looked up on PATH): it goes straight to the -f / -x check, so a directory is named as such
+# resolve the binary ONCE, from the caller's cwd: every spawn (--version, the --v8-options read, each run in its
+# driver dir) runs this absolute path, so a relative PATH entry can never pick a different node per cwd. A name with a
+# slash is a path (never looked up on PATH): it goes straight to the -f / -x check, so a directory is named as such
 NODE_RES=$NODE_BIN
 if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
@@ -1293,8 +1373,9 @@ if [[ $STAGED == 0 ]]; then
   DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
 fi
 
-# --- every refusal is above this line; spawns start here: --version, then disk writes (--out only), then the runs ---
+# --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, then the --v8-options read (lib/v8flags.sh: an allowlist refusal exits 2 there), then disk writes (--out only), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
+v8fl_check "$NODE_BIN"   # lib/v8flags.sh: ONE --v8-options read, then the --v8-flags allowlist (MD-50..58)
 if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
   # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one

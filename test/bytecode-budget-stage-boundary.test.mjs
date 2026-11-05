@@ -189,7 +189,7 @@ const spell = (label, ref) => row(`1 ref spelling: --before-ref ${label} -> exit
         assert.ok(r.stdout.includes(CNT_B211), msg(r));
         assert.match(r.stdout, descB(ref(), SHA.r1, S211), msg(r));
         assert.match(r.stdout, descA('r2', SHA.r2, S212), msg(r));
-        assert.equal(c.spawns().length, 6);
+        assert.equal(c.spawns().length, 7);   // --version, 2 x --v8-options (the --v8-flags allowlist, then the limits), 1 fn x 2 runs x 2 sides
     },
 });
 spell('tag r1', () => 'r1');
@@ -229,9 +229,9 @@ for (const bad of ['r*', 'r?', 'r[12]', 'sp ace', 'r2^{/no such message}']) {
 
 // =====================================================================================================
 // 2. KNOWN GAP (deferred FILLER: ls-tree mode 100644/100755 check): a TRACKED SYMLINK --module is a blob of mode
-// 120000; ref mode stages its TARGET TEXT ("mod.js") as the module, the driver fails, NO-VERDICT after 6 spawns.
+// 120000; ref mode stages its TARGET TEXT ("mod.js") as the module, the driver fails, NO-VERDICT after 7 spawns.
 // =====================================================================================================
-row('2 KNOWN GAP tracked symlink --module src/link.js -> exit 2 NO-VERDICT "driver exited 1 in run 1" both sides, 6 spawns, staged link.js = "mod.js"', {
+row('2 KNOWN GAP tracked symlink --module src/link.js -> exit 2 NO-VERDICT "driver exited 1 in run 1" both sides, 7 spawns, staged link.js = "mod.js"', {
     args: (c) => refO(c, { '--module': 'src/link.js', '--driver': DRV_LINK }),
     env: () => ({ FAKE_MOD: 'link.js' }),
     check: (c, r) => {
@@ -239,7 +239,7 @@ row('2 KNOWN GAP tracked symlink --module src/link.js -> exit 2 NO-VERDICT "driv
         assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- before: driver exited 1 in run 1$/m, msg(r));
         assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- after: driver exited 1 in run 1$/m, msg(r));
         assert.match(r.stdout, /^VERDICT NO-VERDICT$/m, msg(r));
-        assert.equal(c.spawns().length, 6, c.spawns().join('\n'));
+        assert.equal(c.spawns().length, 7, c.spawns().join('\n'));
         const st = join(c.out, 'stage', 'before', 'link.js');
         assert.ok(lstatSync(st).isFile(), 'staged copy is a regular file');
         assert.equal(readFileSync(st, 'utf8'), 'mod.js');
@@ -286,7 +286,7 @@ row('4 --after -mod.js (driver imports ./-mod.js) -> exit 2 via the EXIT trap, 0
 mutant('M-trap-off', 'EXIT trap condition -> false (rc 1 escapes)', [['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
     (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); });
 // ext-audit (B1e): a dash-led --out is a supported DIR name (read as ./-o9, never as an option), so this is a clean run
-row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 6 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {
+row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 7 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {
     args: (c) => refO(c, { '--out': '-o9' }),
     check: (c, r) => {
         verdict(1, 'DIFF')(r);
@@ -295,7 +295,7 @@ row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 6 spawn
         assert.match(r.stdout, descB('r1', SHA.r1, S211), msg(r));
         assert.match(r.stdout, descA('r2', SHA.r2, S212), msg(r));
         assert.match(r.stdout, new RegExp(`^out {5}${reEsc(realpathSync(c.cwd))}/-o9$`, 'm'), msg(r));
-        assert.equal(c.spawns().length, 6, c.spawns().join('\n'));
+        assert.equal(c.spawns().length, 7, c.spawns().join('\n'));
         assert.deepEqual(readdirSync(c.cwd), ['-o9']);
         const o9 = join(c.cwd, '-o9');
         assert.deepEqual(readdirSync(o9).sort(), ['raw', 'report.txt', 'stage']);
@@ -400,9 +400,9 @@ const emuCheck = (r) => {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.deepEqual(fails, [EMU_FAIL]);
     assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
-    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 50);   // 54 - the 4 staged rows (repo setup failed)
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 53);   // 57 - the 4 staged rows (repo setup failed)
 };
-test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 50 ok', { skip }, () => {
+test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 53 ok', { skip }, () => {
     emuCheck(stRun(SCRIPT, emuEnv()));
 });
 test('stage boundary teeth: [8 KNOWN GAP EMULATED] the 9173830d build has no staged rows (exit 0) -> the row is red', { skip: baseSkip }, () => {

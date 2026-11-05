@@ -13,17 +13,17 @@
 // FAKE NODE: bash; logs argv to <its dir>/log and $PWD to <its dir>/pwd, exits 7 if NODE_OPTIONS reached it, answers --version
 // (v26.8.2), exits 9 on a driver argument that starts with '-' (as node would), else echoes ./trace.txt with a read loop (no fork; a rig failure exits 4 / 5, which no row reads as a guard count) (3 Scavenge lines in the
 // marked window + 1 exit-fence line) and writes the number of GC lines before the gcn marker to fd 3. So an accepted run is
-// VERDICT SAME, exit 0. Accepted diff --runs 3 = 1 + 6 = 7 spawns and 1 mktemp (PLAN A3). Each refused row: exit 2, stdout empty,
+// VERDICT SAME, exit 0. It also answers --v8-options with the G1 fixture (test/fixtures/v8flags/v8-options.v26.8.2.txt, read loop, no fork). Accepted diff --runs 3 = --version + --v8-options + 6 = 8 spawns and 1 mktemp (PLAN-md46 G5 A2). Each refused row: exit 2, stdout empty,
 // stderr exactly the die line + VERDICT NO-VERDICT, 0 spawns, 0 mktemp, 0 new entries anywhere under the row's directory.
 // FROZEN EXPECTATION (b27-head, allocation-diff.sh a84f1607; PLAN A5): every row red except the 8 controls B4B-ok, MD37c, N33, N18,
-// B1, DRV1, MOD-ok, EVAL-ok. More than one OTHER row green on the frozen script is a planner DELTA, not a reason to change an expectation here.
-// After the B1 build (TASKS 1-4): all rows green. Rows that need file modes (M1, M1b, N29, N30, N32, N35, N34, and those parts of the A4
+// B1, DRV1, MOD-node, EVAL-node (named MOD-ok / EVAL-ok at b27). More than one OTHER row green on the frozen script is a planner DELTA, not a reason to change an expectation here.
+// MD-46 G5 (ASSERTIONS A3): on the b35 before build (HEAD 4e364c6) the red set is exactly B4B-ok, B3 -/node, B3 -n/node, B3 -nd, MD37c, N33, B1, MOD-node, EVAL-node, F15 x3, V8-ok, V8R; every other row green. After the B1 build (TASKS 1-4) and G5: all rows green. Rows that need file modes (M1, M1b, N29, N30, N32, N35, N34, and those parts of the A4
 // row) skip at euid 0. N34 hangs on a walk without "!= ." (10 s spawn timeout = red).
 // Mutants this file is designed to kill (PLAN TASK 7): unset CDPATH after the include (B2 self-test), `--*` gate (B4B), no env arm
 // (ENV), no dash guard (B3 -o), no MD-36 (MD36a/b), no SYM (SYM), no write check (M1/M1b), no MD-37 / MD-37 fail-open (MD37a/b), no
 // walk (N29-N32), walk without `!= .` / `-x` / `-d` / `! -L` (N34 / N35 / N36 / N31), no -f/-x (B1b, ALIAS), no node -ef (N14), no `-`
 // NODE_DIR guard (B3 --node -/node), no `--` on dirname (B3 --node -n/node), no DRV -ef (N16), no OUT_L fallback (N17), always cd -P
-// (N18), no MD-38 (MD38), no `%/` (M2), loader globs dropped / exact forms only (MOD), a `*require*|*import*|*loader*` arm (MOD-ok), `--eval*|--print*` narrowed / exact-only / unanchored `*eval*|*print*` (EVAL / EVAL-ok), no `--` on command -v (B3 --node -nd). The race-only backstop (`: >"$REPORT"` after mkdir) is an accepted survivor.
+// (N18), no MD-38 (MD38), no `%/` (M2), loader globs dropped / exact forms only (MOD), a `*require*|*import*|*loader*` arm (MOD-node), `--eval*|--print*` narrowed / exact-only / unanchored `*eval*|*print*` (EVAL / EVAL-node), no `--` on command -v (B3 --node -nd). The race-only backstop (`: >"$REPORT"` after mkdir) is an accepted survivor.
 // MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -58,13 +58,17 @@ for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
 // A Scavenge line as --trace-gc prints it (ends with "; "); 3 in the window + 1 after `end` (the exit fence).
 const LS = '[30520:0x7966000000]       39 ms: Scavenge 5.0 (6.1) -> 4.3 (6.6) MB, pooled: 0.0 MB, 0.48 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ';
 const TRACE = ['@@LITE-MARK start', LS, LS, LS, '@@LITE-MARK end', LS, '@@LITE-MARK gcn', ''].join('\n');
+const V8O = join(HERE, 'fixtures', 'v8flags', 'v8-options.v26.8.2.txt'); // the G1 fixture: `node --v8-options` of v26.8.2
 const MKTEMP = (spawnSync(BASH, ['-c', 'command -v mktemp'], { encoding: 'utf8', env: ENV }).stdout || '').trim();
 
 function mkFakeNode(path) {
+    assert.ok(existsSync(V8O), `the G1 fixture is missing: ${V8O}`);   // the --v8-options arm replays it
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, [`#!${BASH}`, 'd=${0%/*}', 'printf "%s\\n" "$*" >>"$d/log"', 'printf "%s\\n" "$PWD" >>"$d/pwd"',
         'if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi',
         'case "$1" in --version) echo v26.8.2; exit 0 ;; esac',
+        // --v8-options: the fixture, replayed with a read loop (no fork), before any driver handling
+        `case "$1" in --v8-options) { while IFS= read -r l || [ -n "$l" ]; do printf "%s\\n" "$l"; done; } <${JSON.stringify(V8O)} || exit 4; exit 0 ;; esac`,
         'last=; for a; do last=$a; done',
         'case "$last" in -*) echo "bad option: $last" >&2; exit 9 ;; esac',
         // no fork past the spawn itself (no cat / awk / dirname): cat / awk forks under load, with awk stderr swallowed, could make the guard count vanish silently (suspected cause of the B4B-ok flake,
@@ -151,6 +155,23 @@ function refused(g, args, msg, o = {}) {
     assert.deepEqual(g.ents(), b0, `${what}: entries written`);
     return r;
 }
+// MD-50 (lib/v8flags.sh die line, prefixed): the allowlist refusal comes AFTER the --version and --v8-options reads.
+const V8MSG = (f) => `--v8-flags must not set ${f}: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)`;
+// refusedRead: exit 2, stdout empty, stderr exactly the die line + VERDICT NO-VERDICT, node spawned exactly [--version, --v8-options], 0 mktemp, nothing written
+function refusedRead(g, args, msg, o = {}) {
+    const b0 = g.ents();
+    const r = g.run(args, o);
+    const what = JSON.stringify(args);
+    assert.equal(r.error, undefined, `${what}: spawn error ${r.error}`);
+    assert.equal(r.status, 2, `${what}\n${r.out}`);
+    assert.equal(r.stdout, '', `${what}: stdout`);
+    assert.equal(r.stderr, `${P} ${msg}\nVERDICT NO-VERDICT\n`, what);
+    assert.deepEqual(r.argv, ['--version', '--v8-options'], `${what}: spawns`);
+    assert.deepEqual(r.mk, [], `${what}: mktemp called`);
+    assert.deepEqual(readdirSync(join(g.d, 'tmp')), [], `${what}: TMPDIR entries`);
+    assert.deepEqual(g.ents(), b0, `${what}: entries written`);
+    return r;
+}
 const keep = (p, want, what) => assert.equal(readFileSync(p, 'utf8'), want, `${what} bytes unchanged`);
 const D = (g) => [g.a, g.b];
 const N = (g, ...rest) => ['--node', g.node, ...rest];
@@ -207,10 +228,11 @@ for (const f of ['---x', '--1', '--=x']) {
         refused(g, N(g, '--v8-flags', f, ...D(g)), `--v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
     });
 }
-row('B4B-ok control --v8-flags --expose-gc accepted: exit 0, --runs 3 = 7 spawns + 1 mktemp, every run carries the flag', (g) => {
+row('B4B-ok control --v8-flags --expose-gc accepted: exit 0, --runs 3 = 8 spawns + 1 mktemp, every run carries the flag', (g) => {
     const r = g.run(N(g, '--runs', '3', '--v8-flags', '--expose-gc', ...D(g)));
     accepted(r);
-    assert.equal(r.argv.length, 7, r.argv.join('\n'));
+    assert.equal(r.argv.length, 8, r.argv.join('\n'));
+    assert.deepEqual(r.argv.slice(0, 2), ['--version', '--v8-options'], r.argv.join('\n'));
     assert.equal(r.mk.length, 1, r.mk.join('\n'));
     assert.equal(r.argv.filter((l) => l.startsWith('--expose-gc ')).length, 6, r.argv.join('\n'));
 });
@@ -240,8 +262,8 @@ for (const [name, dirName, arg] of [['--node -/node (dir named -)', '-', '-/node
         g.fake(join(g.cwd, dirName, 'node'));
         const r = g.run(['--node', arg, '--runs', '2', ...D(g)]);
         accepted(r, arg);
-        assert.equal(r.argv.length, 5, `1 + 2 x 2 spawns, got:\n${r.argv.join('\n')}`);
-        assert.equal(lines(join(g.cwd, dirName, 'log')).length, 5, 'every spawn is the named fake');
+        assert.equal(r.argv.length, 6, `2 + 2 x 2 spawns, got:\n${r.argv.join('\n')}`);
+        assert.equal(lines(join(g.cwd, dirName, 'log')).length, 6, 'every spawn is the named fake');
         assert.equal(lines(join(g.d, 'fk', 'log')).length, 0, 'no other fake ran');
         assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${g.cwd}/${dirName}/node  (NODE_OPTIONS stripped)`), r.out);
     });
@@ -259,12 +281,8 @@ row('MOD --v8-flags --loader=F / --loader / --experimental-loader=F / --experime
 row('MOD-r --v8-flags "-r ./p.js" refused at the letter gate: exit 2, "got \'-r\'", 0 spawns', (g) => {
     refused(g, N(g, '--v8-flags', '-r ./p.js', ...D(g)), "--v8-flags takes flags only (each starts with -- and a letter), got '-r'");
 });
-row('MOD-ok control --v8-flags --experimental-require-module accepted: exit 0, --runs 3 = 7 spawns + 1 mktemp', (g) => {
-    const r = g.run(N(g, '--runs', '3', '--v8-flags', '--experimental-require-module', ...D(g)));
-    accepted(r);
-    assert.equal(r.argv.length, 7, r.argv.join('\n'));
-    assert.equal(r.mk.length, 1, r.mk.join('\n'));
-    assert.equal(r.argv.filter((l) => l.startsWith('--experimental-require-module ')).length, 6, r.argv.join('\n'));
+row('MOD-node --v8-flags --experimental-require-module (a node option, not a V8 flag) refused after the --v8-options read: exit 2, argv exactly [--version, --v8-options], 0 mktemp', (g) => {
+    refusedRead(g, N(g, '--runs', '3', '--v8-flags', '--experimental-require-module', ...D(g)), V8MSG('--experimental-require-module'));
 });
 
 const EVALMSG = (f) => `--v8-flags must not set ${f}: it runs code of yours in the measured process instead of the driver (node evaluates it; the driver becomes argv and never runs)`;
@@ -280,12 +298,41 @@ row('EVAL-ep --v8-flags "-e 1" / "-p 1" refused at the letter gate: exit 2, "got
     refused(g, N(g, '--v8-flags', '-e 1', ...D(g)), "--v8-flags takes flags only (each starts with -- and a letter), got '-e'");
     refused(g, N(g, '--v8-flags', '-p 1', ...D(g)), "--v8-flags takes flags only (each starts with -- and a letter), got '-p'");
 });
-row('EVAL-ok control --v8-flags --experimental-print-required-tla accepted: exit 0, --runs 3 = 7 spawns + 1 mktemp', (g) => {
-    const r = g.run(N(g, '--runs', '3', '--v8-flags', '--experimental-print-required-tla', ...D(g)));
+row('EVAL-node --v8-flags --experimental-print-required-tla (a node option, not a V8 flag) refused after the --v8-options read: exit 2, argv exactly [--version, --v8-options], 0 mktemp', (g) => {
+    refusedRead(g, N(g, '--runs', '3', '--v8-flags', '--experimental-print-required-tla', ...D(g)), V8MSG('--experimental-print-required-tla'));
+});
+
+// F15 (MD-50): node options that no earlier arm names are refused by the allowlist after the read (2 spawns, nothing written).
+for (const f of ['--snapshot-blob=F', '--build-snapshot', '--openssl-config=F']) {
+    row(`F15 --v8-flags ${f} refused after the --v8-options read: exit 2, argv exactly [--version, --v8-options], 0 mktemp`, (g) => {
+        refusedRead(g, N(g, '--v8-flags', f, ...D(g)), V8MSG(f));
+    });
+}
+// V8-ok: V8 tuning flags listed by the node (bool negated, int with =N) are accepted: --runs 3 = 8 spawns, 1 mktemp, the 6 runs carry both flags first.
+row('V8-ok --v8-flags "--no-lazy-feedback-allocation --max-inlined-bytecode-size=30" accepted: exit 0, --runs 3 = 8 spawns + 1 mktemp, every run carries both flags', (g) => {
+    const r = g.run(N(g, '--runs', '3', '--v8-flags', '--no-lazy-feedback-allocation --max-inlined-bytecode-size=30', ...D(g)));
     accepted(r);
-    assert.equal(r.argv.length, 7, r.argv.join('\n'));
+    assert.equal(r.argv.length, 8, r.argv.join('\n'));
+    assert.deepEqual(r.argv.slice(0, 2), ['--version', '--v8-options'], r.argv.join('\n'));
     assert.equal(r.mk.length, 1, r.mk.join('\n'));
-    assert.equal(r.argv.filter((l) => l.startsWith('--experimental-print-required-tla ')).length, 6, r.argv.join('\n'));
+    assert.equal(r.argv.filter((l) => l.startsWith('--no-lazy-feedback-allocation --max-inlined-bytecode-size=30 ')).length, 6, r.argv.join('\n'));
+});
+// V8R retention (PLAN A4): 20 cycles of an allowlist refusal (--snapshot-blob=F) + an accepted V8 run leave TMPDIR empty; cwd and the driver dirs unchanged.
+row('V8R retention: 20 cycles of --snapshot-blob=F refusal (2 spawns) + V8-ok accept (--runs 2 = 6 spawns) leave TMPDIR, cwd and the driver dirs unchanged', (g) => {
+    const lsr = (p) => readdirSync(p, { recursive: true }).sort().join(',');
+    const cwdLs = lsr(g.cwd), drLs = lsr(join(g.d, 'dr'));
+    for (let c = 0; c < 20; c++) {
+        const bad = g.run(N(g, '--v8-flags', '--snapshot-blob=F', ...D(g)));
+        assert.equal(bad.status, 2, `cycle ${c} refusal\n${bad.out}`);
+        assert.deepEqual(bad.argv, ['--version', '--v8-options'], `cycle ${c} refusal spawns`);
+        assert.deepEqual(readdirSync(join(g.d, 'tmp')), [], `cycle ${c}: TMPDIR after refusal`);
+        const ok = g.run(N(g, '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation --max-inlined-bytecode-size=30', ...D(g)));
+        accepted(ok, `cycle ${c} accept`);
+        assert.equal(ok.argv.length, 6, `cycle ${c} accept spawns\n${ok.argv.join('\n')}`);
+        assert.deepEqual(readdirSync(join(g.d, 'tmp')), [], `cycle ${c}: TMPDIR after accept`);
+        assert.equal(lsr(g.cwd), cwdLs, `cycle ${c}: cwd listing changed`);
+        assert.equal(lsr(join(g.d, 'dr')), drLs, `cycle ${c}: driver dirs changed`);
+    }
 });
 
 // D2-9: a node named -nd found on PATH (a dash-led bare name) is data, not an option. Red on frozen (no `--` on command -v).
@@ -293,7 +340,7 @@ row('B3 --node -nd (an executable -nd on PATH): exit 0, every spawn is <S>/pn/-n
     const f = g.fake(join(g.d, 'pn', '-nd'));
     const r = g.run(['--node', '-nd', '--runs', '2', ...D(g)], { env: { PATH: g.pathOf(join(g.d, 'pn')) } });
     accepted(r, '-nd');
-    assert.deepEqual([r.argv.length, lines(join(g.d, 'pn', 'log')).length], [5, 5], r.argv.join('\n'));
+    assert.deepEqual([r.argv.length, lines(join(g.d, 'pn', 'log')).length], [6, 6], r.argv.join('\n'));
     assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${f}  (NODE_OPTIONS stripped)`), r.out);
 });
 
@@ -394,14 +441,14 @@ row('DRV1 --out D with DRIVER D/report.txt (single-link file): exit 2, one "repo
     keep(dv, '// driver\n', 'driver');
     assert.deepEqual(readdirSync(o), ['report.txt']);
 });
-row('MD37c control: existing single-link report.txt, no raw/ -> exit 0, report rewritten, --runs 3 = 7 spawns + 1 mktemp', (g) => {
+row('MD37c control: existing single-link report.txt, no raw/ -> exit 0, report rewritten, --runs 3 = 8 spawns + 1 mktemp', (g) => {
     const o = join(g.d, 'o37c'); mkdirSync(o); writeFileSync(join(o, 'report.txt'), 'old\n');
     const r = g.run(N(g, '--runs', '3', '--out', o, ...D(g)));
     accepted(r);
     const rep = readFileSync(join(o, 'report.txt'), 'utf8');
     assert.ok(rep.length > 0 && rep !== 'old\n', `report.txt rewritten, got ${JSON.stringify(rep)}`);
     assert.ok(statSync(join(o, 'raw', 'before')).isDirectory() && statSync(join(o, 'raw', 'after')).isDirectory(), 'raw/before + raw/after');
-    assert.equal(r.argv.length, 7, r.argv.join('\n'));
+    assert.equal(r.argv.length, 8, r.argv.join('\n'));
     assert.equal(r.mk.length, 1, r.mk.join('\n'));
 });
 
@@ -442,14 +489,14 @@ row('N32 OUT mode 0555 with a writable report.txt, no raw/: exit 2, "(<OUT> is n
     assert.equal(existsSync(join(o, 'raw')), false, 'no raw/'); keep(join(o, 'report.txt'), 'old\n', 'report.txt');
 }, { root: true });
 // N33 control: an absent NESTED OUT (S/new/a/b) and a bare relative `--out o` both succeed (a walk over the immediate parent only is red).
-row('N33 control: absent nested OUT S/new/a/b and bare relative --out o -> exit 0, report.txt + raw/before + raw/after, 7 spawns + 1 mktemp each', (g) => {
+row('N33 control: absent nested OUT S/new/a/b and bare relative --out o -> exit 0, report.txt + raw/before + raw/after, 8 spawns + 1 mktemp each', (g) => {
     const nested = join(g.d, 'new', 'a', 'b');
     for (const [out, dir] of [[nested, nested], ['o', join(g.cwd, 'o')]]) {
         const r = g.run(N(g, '--runs', '3', '--out', out, ...D(g)));
         accepted(r, `--out ${out}`);
         assert.ok(statSync(join(dir, 'report.txt')).size > 0, `${dir}/report.txt non-empty`);
         assert.ok(statSync(join(dir, 'raw', 'before')).isDirectory() && statSync(join(dir, 'raw', 'after')).isDirectory(), `${dir}/raw/before + after`);
-        assert.equal(r.argv.length, 7, r.argv.join('\n'));
+        assert.equal(r.argv.length, 8, r.argv.join('\n'));
         assert.equal(r.mk.length, 1, r.mk.join('\n'));
     }
 });
@@ -557,7 +604,7 @@ row('B1 control: relative PATH entry, every spawn runs the one node resolved fro
     const r = g.run(['--runs', '2', ...D(g)], { env: { PATH: `mybin:${join(g.d, 'sysbin')}:${join(g.d, 'mk')}:${process.env.PATH}` } });
     accepted(r);
     assert.equal(lines(join(g.d, 'sysbin', 'log')).length, 0, `sysbin must never run\n${r.out}`);
-    assert.equal(lines(join(g.cwd, 'mybin', 'log')).length, 5, `mybin spawns: 1 + 2 x 2\n${r.out}`);
+    assert.equal(lines(join(g.cwd, 'mybin', 'log')).length, 6, `mybin spawns: 2 + 2 x 2\n${r.out}`);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

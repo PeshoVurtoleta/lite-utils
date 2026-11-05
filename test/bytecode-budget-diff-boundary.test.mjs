@@ -132,7 +132,7 @@ exit 0
 `;
     const p = join(dir, 'node');
     writeFileSync(p, sh); chmodSync(p, 0o755);
-    return { path: p, spawns: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0), reset: () => rmSync(log, { force: true }) };
+    return { path: p, spawns: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []), reset: () => rmSync(log, { force: true }) };
 }
 const NV = ['--node-version', 'v26.8.2'];
 const PARITY_CASES = [
@@ -162,15 +162,21 @@ function parity(script) {
         return PARITY_CASES.map(([name, args]) => {
             f.reset(); rmSync(out, { recursive: true, force: true });
             const r = run(script, ['--node', f.path, ...args.map((a) => (a === '@OUT@' ? out : a))], { cwd: dir });
-            const text = `rc=${r.status}\n--stdout\n${r.stdout}--stderr\n${r.stderr}--spawns ${f.spawns()}\n--out\n${outTree(out)}`;
-            return { name, text: text.split(dir).join('@TMP@') };   // the private temp dir differs per call
+            // MD-46 G3: the --v8-flags allowlist adds ONE --v8-options read after --version, so the parity text counts
+            // the spawns that are NOT --v8-options; the --v8-options reads are checked apart (live = base + 1 iff the base spawned)
+            const sp = f.spawns(), v8 = sp.filter((l) => l === '--v8-options').length;
+            const text = `rc=${r.status}\n--stdout\n${r.stdout}--stderr\n${r.stderr}--spawns ${sp.length - v8}\n--out\n${outTree(out)}`;
+            return { name, text: text.split(dir).join('@TMP@'), v8, all: sp.length };   // the private temp dir differs per call
         });
     } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the a26e9f15 base (stdout, stderr, rc, spawns, --out tree)', { skip: baseSkip }, () => {
     histGate(haveBase);
     const want = parityBase(), got = parity(SCRIPT);
-    for (let i = 0; i < want.length; i++) assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
+    for (let i = 0; i < want.length; i++) {
+        assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
+        assert.equal(got[i].v8, want[i].v8 + (want[i].all > 0 ? 1 : 0), `parity case ${want[i].name}: --v8-options reads (base ${want[i].v8} of ${want[i].all} spawns)`);
+    }
 });
 for (const [mname, from, to, caseName] of [
     ['A1-control-matches', 'say "  $fn: $n match(es): $lens"', 'say "  $fn: $n matches: $lens"', 'report --fn read,dup'],
@@ -254,7 +260,7 @@ test('bytecode-budget diff QA MUTANT M-sort-text (sort -k3,3 without n): the asc
 });
 
 // =====================================================================================================
-// boundary matrix: --runs (refused before any spawn; 2 and 20 run with 2 + 2R spawns), --fn mid,mid
+// boundary matrix: --runs (refused before any spawn; 2 and 20 run with 3 + 2R spawns: --version, 2 x --v8-options), --fn mid,mid
 // =====================================================================================================
 const RUNS_BAD = ['1', '21', '0', '-1', '-0', 'NaN', 'null', 'undefined', '020', '1.5', '2e1',
     '1073741824', '2147483647', '2147483648', '4294967295', '4294967296', '9007199254740991', '9007199254740992'];
@@ -271,12 +277,12 @@ diffRow(`--runs refusals before any spawn (exit 2, 0 spawns): ${RUNS_BAD.join(' 
     assert.equal(x.r.status, 2); assert.equal(x.spawns.length, 0);
     assert.ok(x.r.stderr.includes("--runs needs a non-empty value"), x.r.stderr);
 });
-diffRow('--runs 2 and --runs 20 run: exactly 2 + 2 x R spawns (6 and 42), alternating sides', (script) => {
-    for (const [v, n] of [['2', 6], ['20', 42], ['02', 6]]) {
+diffRow('--runs 2 and --runs 20 run: exactly 3 + 2 x R spawns (7 and 43), alternating sides', (script) => {
+    for (const [v, n] of [['2', 7], ['20', 43], ['02', 7]]) {
         const { r, spawns } = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid', script, ['--runs', v]);
         assert.equal(r.status, 1, `--runs ${v}: ` + r.stdout + r.stderr);
         assert.equal(spawns.length, n, `--runs ${v}`);
-        assert.equal(probeOrder(spawns), Array(n === 42 ? 20 : 2).fill('b a').join(' '));
+        assert.equal(probeOrder(spawns), Array(n === 43 ? 20 : 2).fill('b a').join(' '));
     }
 });
 test('bytecode-budget diff QA MUTANT M-runs-wide ([1, 21]): --runs 1 and 21 now spawn (the refusal row goes red)', { skip }, () => {
@@ -330,15 +336,15 @@ test('bytecode-budget diff QA MUTANT M-no-cap (any digit run is a length, as 686
 });
 
 // =====================================================================================================
-// --node-version in diff mode: match -> probes run; mismatch -> exit 2 after exactly 1 spawn, one report-mode
+// --node-version in diff mode: match -> probes run; mismatch -> exit 2 after exactly 2 spawns (--version, --v8-options), one report-mode
 // line per fn (red on M-ver-skip-diff, a version check that skips diff mode)
 // =====================================================================================================
-diffRow('--node-version: match runs (6 spawns); mismatch exits 2 after exactly 1 spawn, report wording per fn', (script) => {
+diffRow('--node-version: match runs (7 spawns); mismatch exits 2 after exactly 2 spawns, report wording per fn', (script) => {
     const m = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid', script, NV);
-    assert.equal(m.r.status, 1, m.r.stdout + m.r.stderr); assert.equal(m.spawns.length, 6);
+    assert.equal(m.r.status, 1, m.r.stdout + m.r.stderr); assert.equal(m.spawns.length, 7);
     const x = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid,add', script, NV, { env: { ...process.env, FAKE_VER: 'v26.8.1' } });
     assert.equal(x.r.status, 2, x.r.stdout + x.r.stderr);
-    assert.equal(x.spawns.length, 1, x.spawns.join('\n'));
+    assert.deepEqual(x.spawns.map((l) => l.slice(l.indexOf(' ') + 1)), ['--version', '--v8-options']);   // the fake logs "<cwd basename> <argv>"
     assert.match(x.r.stdout, /^ {2}mid: NO-VERDICT -- node version mismatch: \S+ --version is v26\.8\.1, --node-version is v26\.8\.2$/m);
     assert.match(x.r.stdout, /^ {2}add: NO-VERDICT -- node version mismatch: \S+ --version is v26\.8\.1, --node-version is v26\.8\.2$/m);
     assert.match(x.r.stdout, /^VERDICT NO-VERDICT$/m);
@@ -348,7 +354,7 @@ test('bytecode-budget diff QA MUTANT M-ver-skip-diff: a version check skipped in
     try {
         const p = variant(dir, 'ver-skip-diff', 'if [[ -n "$WANT_VER" && "$GOT_VER" != "$WANT_VER" ]]; then', 'if [[ $DIFFMODE == 0 && -n "$WANT_VER" && "$GOT_VER" != "$WANT_VER" ]]; then');
         const x = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid', p, NV, { env: { ...process.env, FAKE_VER: 'v26.8.1' } });
-        assert.notEqual(x.spawns.length, 1);
+        assert.notEqual(x.spawns.length, 2);
         assert.equal(x.r.status, 1, x.r.stdout + x.r.stderr);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -91,17 +91,17 @@ test('diagnostic: exact-line assertions run only on node v26.8.2 (this node: ' +
     assert.ok(true, EXACT ? 'exact lines + exit codes' : 'exit codes only on ' + process.version);
 });
 
-test('L1 deopt vs mono: exit 1, DIFF lines (exact on v26.8.2), 7 node spawns', { skip }, () => {
+test('L1 deopt vs mono: exit 1, DIFF lines (exact on v26.8.2), 8 node spawns (--version, --v8-options, 3 + 3 runs)', { skip }, () => {
     const r = live(SCRIPT, DEOPT, MONO);
     checkL1(r);
-    assert.equal(r.spawns, 7, 'node spawns (A4 budget)');
+    assert.equal(r.spawns, 8, 'node spawns (A4 budget + the MD-46 --v8-options read)');
 });
 
-test('L2 deopt vs a byte-identical copy: exit 0, SAME lines (exact on v26.8.2), 7 node spawns', { skip }, () => {
+test('L2 deopt vs a byte-identical copy: exit 0, SAME lines (exact on v26.8.2), 8 node spawns (--version, --v8-options, 3 + 3 runs)', { skip }, () => {
     withCopy((copy) => {
         const r = live(SCRIPT, DEOPT, copy);
         checkL2(r);
-        assert.equal(r.spawns, 7, 'node spawns (A4 budget)');
+        assert.equal(r.spawns, 8, 'node spawns (A4 budget + the MD-46 --v8-options read)');
     });
 });
 

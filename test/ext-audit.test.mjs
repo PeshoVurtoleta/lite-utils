@@ -5,7 +5,7 @@
 // (fake nodes written into a per-row temp dir; no V8 spawn, except the two --self-test rows which use the script's
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh,
-// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests.
+// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests; + MD-46 G2 rung 1 (dd: MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15-blob / F15-build / F15-ossl / V8-ok / RETv8) = 210 tests; + MD-46 G3 rung 2 (bb: the same flip and the same 5 new rows, V8-ok / RETv8 keyed per tool) = 215 tests; + MD-46 G4 rung 3 (ic: N15 8 -> 9, MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15a / F15b / F15c, 4 V8R, V8OK, V8RET = 9 new rows) = 224 tests.
 // A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (10 s timeout = red); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
@@ -35,13 +35,18 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(process.env.EXT_AUDIT_ROOT || join(HERE, '..'));
 const skip = process.platform === 'win32' ? 'bash scripts: POSIX hosts only' : false;
 const BASH = '/bin/bash';
+// Node v26.8.2 `--v8-options` capture: the v8fl tools (MD-50..58) read it (dd once per run: the allowlist; bb twice: the allowlist,
+// then the limits); the fake node cats it when T.v8fl. Its default: fields equal bb's node 26 fallbacks, so bb's limits line is
+// unchanged and only the ASSUMED NOTE goes (G3 RISK, decided in rung 2: bb V8-ok pins both).
+const V8O = join(HERE, 'fixtures', 'v8flags', 'v8-options.v26.8.2.txt');
+if (!existsSync(V8O)) throw new Error(`missing fixture ${V8O}`);
 
 // Canned dd trace line (the same compile line the dd self-test uses; fn = add).
 const E9 = '[completed compiling 0x060e65bf5b89 <JSFunction add (sfi = 0xf7e008dc999)> (target TURBOFAN_JS) - took 0.009, 0.245, 0.003 ms]';
 
 const TOOLS = [
-    { key: 'bb', file: 'bytecode-budget.sh', label: 'bytecode-budget', dd: false },
-    { key: 'dd', file: 'deopt-diff.sh', label: 'deopt-diff', dd: true },
+    { key: 'bb', file: 'bytecode-budget.sh', label: 'bytecode-budget', dd: false, v8fl: true },
+    { key: 'dd', file: 'deopt-diff.sh', label: 'deopt-diff', dd: true, v8fl: true },
 ];
 for (const T of TOOLS) T.script = join(ROOT, T.file);
 
@@ -58,7 +63,7 @@ function mkNode(path, id, log, T, { len = 6, bad = false } = {}) {
     writeFileSync(path, [
         '#!/bin/sh',
         `printf '%s|%s|%s\\n' '${id}' "$PWD" "$*" >>'${log}'`,
-        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) exit 0 ;; esac',
+        `case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) ${T.v8fl ? `cat '${V8O}'; ` : ''}exit 0 ;; esac`,
         'for a in "$@"; do last=$a; done',
         'case "$last" in -*) exit 9 ;; esac',
         out, 'exit 0', ''].join('\n'));
@@ -507,7 +512,7 @@ for (const T of TOOLS) {
             assert.equal(spawnSync('/bin/sh', ['-c', 'command -v git'], { env: R.env }).status, 0, 'git must resolve on the pinned PATH (the tools need git in ref mode)');
             const genv = noGit(R.env);
             const repo = join(R.S, 'repo'); mkdirSync(join(repo, 'm'), { recursive: true });
-            const git = (...a) => assert.equal(spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, env: genv, encoding: 'utf8' }).status, 0, a.join(' '));
+            const git = (...a) => assert.equal(spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, env: genv, encoding: 'utf8' }).status, 0, a.join(' '));
             git('init', '-q');
             writeFileSync(join(repo, 'm', 'mod.txt'), '1\n'); git('add', '.'); git('commit', '-q', '-m', 'r1'); git('tag', 'r1');
             writeFileSync(join(repo, 'm', 'mod.txt'), '2\n'); git('add', '.'); git('commit', '-q', '-m', 'r2'); git('tag', 'r2');
@@ -790,6 +795,10 @@ for (const T of TOOLS) {
     // gB B-four dd B3 + bb B3 (PLAN-ext-audit-gB-four-dd.md TASK 7 + D1, PLAN-ext-audit-gB-four-bb.md TASK 6; MD-47, MD-48). Both tools:
     // the alloc-style refusals ported to deopt-diff and bytecode-budget. Expected texts are the reference allocation-diff.sh arms
     // (MD-36 / MD-37 / MD-38 and the v8-flags arms), prefixed with the tool's own "<label>:" (bb without alloc's "; a --require one ..." clause).
+    // MD-46 G2 rung 1: dd (T.v8fl) MOD-ok / EVAL-ok become MD51-MOD / MD51-EVAL refusals (+2 flipped) and gains F15-blob / F15-build / F15-ossl / V8-ok / RETv8 (+5 new): 7 dd rows red on the frozen b35-g2 dd root.
+    // MD-46 G3 rung 2: bb (T.v8fl) gets the same MD51-MOD / MD51-EVAL flip and F15-blob / F15-build / F15-ossl / V8-ok / RETv8 (V8-ok / RETv8 keyed per
+    // tool: bb reads --v8-options twice and has no SAME verdict): 7 bb rows red on the frozen b35-g3 bb root
+    // (4e364c6 / a2449a09: MD51-MOD MD51-EVAL F15-blob F15-build F15-ossl V8-ok RETv8); bb's other 67 rows green there.
     // Red on the frozen dd (HEAD 716daa9): MD36a MD36b MD36n MD37a MD38 ENV MOD EVAL RET. Controls (green on frozen): MD37c MOD-r MOD-ok EVAL-ep EVAL-ok.
     // Red on the frozen bb (HEAD 716daa9 / bb c3dc7772): the same set plus MD38n. MD38n for dd is a control (dd's own --node newline gate).
     // bb MD-37 carries the MD-48 `-f` guard: a directory report.txt still reads "cannot write" (row M1), not "has another hard link".
@@ -914,10 +923,67 @@ for (const T of TOOLS) {
         flagRow('MOD', '--v8-flags --require / --import / --loader / --experimental-loader forms (also underscore): exit 2, the "loads a module of yours" die, 0 spawns', MODS, MODT,);
         // MOD-r / EVAL-ep: the letter gate ("each starts with -- and a letter") already refuses the short forms (no new arm).
         flagRow('MOD-r', '(control) --v8-flags -r: refused by the letter gate, 0 spawns', ['-r'], (f) => `${P} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
-        acceptedRow('MOD-ok', '--v8-flags --experimental-require-module', '--experimental-require-module');
+        // MD-51 (v8fl tools): a node option is not a V8 flag of this node's --v8-options list -> refused after --version + one --v8-options read.
+        const V8DIE = (f) => `${P} --v8-flags must not set ${f}: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)`;
+        const V8SPAWNS = (R) => [`fk|${R.cwd}|--version`, `fk|${R.cwd}|--v8-options`];
+        const v8Refused = (id, desc, f) => test(`${k} ${id} ${desc}: exit 2, the allowlist die once, spawns == [--version, --v8-options], 0 probes`, { skip }, () => {
+            const R = rig(T);
+            try {
+                const r = run(T.script, flagArgs(R, f, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                dieOnce(r, V8DIE(f), f);
+                assert.deepEqual(R.spawns(), V8SPAWNS(R), r.out);
+                assert.equal(R.probes().length, 0, R.probes().join('\n'));
+            } finally { rmAll(R.S); }
+        });
+        const modOkRow = T.v8fl ? v8Refused : acceptedRow;
+        modOkRow(T.v8fl ? 'MD51-MOD' : 'MOD-ok', '--v8-flags --experimental-require-module', '--experimental-require-module');
         flagRow('EVAL', '--v8-flags --eval / --print / --print-* forms (also underscore): exit 2, the MD-47 "runs code of yours" die, 0 spawns', EVALS, EVALT,);
         flagRow('EVAL-ep', '(control) --v8-flags -e / -p: refused by the letter gate, 0 spawns', ['-e', '-p'], (f) => `${P} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
-        acceptedRow('EVAL-ok', '--v8-flags --experimental-print-required-tla', '--experimental-print-required-tla');
+        (T.v8fl ? v8Refused : acceptedRow)(T.v8fl ? 'MD51-EVAL' : 'EVAL-ok', '--v8-flags --experimental-print-required-tla', '--experimental-print-required-tla');
+        if (T.v8fl) {
+            // MD-52..58 (F15): file / snapshot / ssl node options are refused by the allowlist (none is a V8 flag of this node).
+            v8Refused('F15-blob', '--v8-flags --snapshot-blob=F', '--snapshot-blob=F');
+            v8Refused('F15-build', '--v8-flags --build-snapshot', '--build-snapshot');
+            v8Refused('F15-ossl', '--v8-flags --openssl-config=F', '--openssl-config=F');
+            // V8-ok control. dd: three V8 tuning flags listed by this node's --v8-options -> accepted, VERDICT SAME, exactly one
+            // --v8-options read. bb: --expose-gc (a listed bool) -> accepted, VERDICT REPORTED, spawns start [--version, --v8-options
+            // (allowlist), --v8-options (limits)], >= 1 probe; the limits line from the fixture's node 26 defaults, no ASSUMED NOTE.
+            const V8OK = T.dd ? '--allow-natives-syntax --no-lazy-feedback-allocation --max-inlined-bytecode-size=30' : '--expose-gc';
+            const BBLIM = 'limits  TurboFan small<=30 (<=75 if a HeapNumber may cross) single<=460 | Maglev eager (greedy small)<30 small<=27 single<100';
+            test(`${k} V8-ok (control) ${T.dd ? 'three listed V8 tuning flags: exit 0, VERDICT SAME, exactly 1 --v8-options spawn' : '--expose-gc: exit 0, VERDICT REPORTED, spawns [--version, --v8-options, --v8-options, probes...], >= 1 probe, fixture limits line, no NOTE'}`, { skip }, () => {
+                const R = rig(T);
+                try {
+                    const r = run(T.script, flagArgs(R, V8OK, R.drv('driver.mjs')), { cwd: R.cwd, env: R.env });
+                    assert.equal(r.status, 0, r.out);
+                    if (T.dd) {
+                        assert.ok(r.lines.includes('VERDICT SAME'), r.out);
+                        assert.equal(R.spawns().filter((l) => l.endsWith('|--v8-options')).length, 1, R.spawns().join('\n'));
+                    } else {
+                        assert.ok(r.lines.includes('VERDICT REPORTED'), r.out);
+                        assert.deepEqual(R.spawns().slice(0, 3), [...V8SPAWNS(R), `fk|${R.cwd}|--v8-options`], R.spawns().join('\n'));
+                        assert.equal(R.spawns().filter((l) => l.endsWith('|--v8-options')).length, 2, R.spawns().join('\n'));
+                        assert.ok(R.probes().length >= 1, `probes >= 1, got ${R.probes().length}\n${r.out}`);
+                        assert.equal(r.lines.filter((l) => l === BBLIM).length, 1, `exactly one "${BBLIM}"\n${r.out}`);
+                        assert.ok(!r.out.includes('ASSUMED'), r.out);
+                    }
+                } finally { rmAll(R.S); }
+            });
+            // RETv8: refusal and accept paths leak no TMPDIR entry over 20 cycles (regression pin). It sees only TMPDIR-honouring
+            // leaks: a bare macOS `mktemp -d` ignores TMPDIR and would survive unseen (the A4 retention row below says the same).
+            test(`${k} RETv8 20 cycles of V8-ok${T.dd ? '' : ' (--expose-gc)'} + F15-blob leave TMPDIR empty`, { skip }, () => {
+                const R = rig(T);
+                try {
+                    const tmp = join(R.S, 'tmp'); mkdirSync(tmp);
+                    const env = { ...R.env, TMPDIR: tmp };
+                    const d = R.drv('driver.mjs');
+                    for (let c = 0; c < 20; c++) {
+                        assert.equal(run(T.script, flagArgs(R, V8OK, d), { cwd: R.cwd, env }).status, 0, `cycle ${c}: V8-ok exit 0`);
+                        assert.equal(run(T.script, flagArgs(R, '--snapshot-blob=F', d), { cwd: R.cwd, env }).status, 2, `cycle ${c}: F15-blob exit 2`);
+                        assert.deepEqual(readdirSync(tmp), [], `cycle ${c}: TMPDIR holds entries`);
+                    }
+                } finally { rmAll(R.S); }
+            });
+        }
 
         // RET (A4 retention, D1-2: red on frozen). 20 cycles of the MD36a / MD36b / MD37a / ENV / MOD / EVAL inputs with TMPDIR=<S>/tmp:
         // 0 TMPDIR entries after every cycle, S/ext empty, S/h = "KEEP", S/nowhere absent, and 0 spawns in total.
@@ -1026,8 +1092,9 @@ for (const T of TOOLS) {
 // the --logfile, so an accepted run is VERDICT SAME, exit 0. Each fake logs into its OWN directory: "which binary ran" = which log.
 // Spawn counts are the sum of every fake's log lines (probes + trace runs; accepted --runs 3 = 2 + 6 = 8, PLAN A3).
 // gB B-four ic B3 (PLAN-ext-audit-gB-four-ic.md TASK 6 / A4 / A5; MD-47, MD-49): F2 is CLOSED in ic -- the old F2 pin is re-pinned as N29 (F2 closed), plus the dd walk rows N30-N32, N34-N36 (+ N33 control)
-// and the alloc-style class rows MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok) and one RET row (44 -> 65 ic rows). No DRIVER -ef port in ic (MD-49): no N1p analog, no DRV1 row.
+// and the alloc-style class rows MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok) and one RET row (44 -> 65 ic rows); MD-46 G4 rung 3 adds 9 rows (65 -> 74). No DRIVER -ef port in ic (MD-49): no N1p analog, no DRV1 row.
 // FROZEN EXPECTATION (HEAD 5e1f7a8 ic; PLAN-ext-audit-gB-four-ic.md A4): exactly 16 red (N29/F2, N30-N32, N34-N36, MD36a/b/n, MD37a, MD38, ENV, MOD, EVAL, RET) and 49 green (controls incl. N33, MD37c, MOD-r, MOD-ok, EVAL-ep, EVAL-ok). Fixed build: 65 green.
+// FROZEN EXPECTATION (MD-46 G4, frozen 151985d ic root b35-g4; PLAN-md46 G4 A5): exactly 7 planned groups = 10 of the 74 rows red (N15, MD51-MOD, MD51-EVAL, F15c, the 4 V8R rows, V8OK, V8RET), F15a / F15b green (controls), the other 64 green. New build: 74 green. mkIcNode serves the G1 fixture as --v8-options.
 // =====================================================================================================================
 const IC = join(ROOT, 'ic-diff.sh');
 const ICP = 'ic-diff:';
@@ -1037,7 +1104,7 @@ function mkIcNode(path) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, ['#!/bin/bash', 'd=$(dirname "$0")', 'printf "%s\\n" "$*" >>"$d/log"', 'printf "%s\\n" "$PWD" >>"$d/pwd"',
         'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi',
-        'case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) printf "Synopsis:\\n  a4 fake\\n"; exit 0 ;; esac',
+        `case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) cat '${V8O}'; exit 0 ;; esac`,
         'lf=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; done; last="${!#}"',
         'case "$last" in -*) echo "bad option: $last" >&2; exit 9 ;; esac',
         '[ -f "$last" ] || { echo "no driver: $last" >&2; exit 9; }',
@@ -1247,14 +1314,14 @@ function icRows() {
         assert.equal(r.status, 2, r.out); noNL(r, 'cannot write'); zero(R, r);
         assert.equal(existsSync(join(o, 'raw')), false, 'raw/ must not be created');
     }, true);
-    // N15 control: an existing EMPTY OUT is fine; accepted --runs 3 = exactly 8 spawns (PLAN A3).
-    icTest('N15 control: existing empty OUT -> exit 0, report.txt + raw/before + raw/after, exactly 8 spawns', (R) => {
+    // N15 control: an existing EMPTY OUT is fine; accepted --runs 3 = exactly 9 spawns (--version, 2 x --v8-options, 6 traces; MD-46 G4 A1: old code 8 = red).
+    icTest('N15 control: existing empty OUT -> exit 0, report.txt + raw/before + raw/after, exactly 9 spawns', (R) => {
         const o = join(R.S, 'o15'); mkdirSync(o);
         const r = A(R, ['--node', R.fk, '--out', o, ...D(R.drv('driver.mjs'))]);
         assert.equal(r.status, 0, r.out);
         assert.ok(statSync(join(o, 'report.txt')).isFile(), 'report.txt');
         assert.ok(existsSync(join(o, 'raw', 'before')) && existsSync(join(o, 'raw', 'after')), 'raw/before + raw/after');
-        assert.equal(R.spawns().length, 8, R.spawns().join('\n'));
+        assert.equal(R.spawns().length, 9, R.spawns().join('\n'));
     }, false);
     // N29 (F2 closed; PLAN gB-four-ic TASK 6): the former F2 pin. raw/ 0500 (empty) under a writable OUT is now refused by the C-11 walk BEFORE any spawn.
     // Expected from the spec (dd walk text pasted into ic): exit 2, one WALK(o, o/raw) die, 0 spawns, raw/ empty, no report.txt. Old code: 2 spawns + "cannot create ... raw/before and ... raw/after" without the parenthesis = red.
@@ -1485,6 +1552,19 @@ function icRows() {
     const mkDangling = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); symlinkSync(join(R.S, 'nowhere'), join(o, 'raw')); return o; };
     const mkHard = (R, at) => { const o = join(at, 'o'); mkdirSync(o, { recursive: true }); writeFileSync(join(R.S, 'h'), 'KEEP\n'); linkSync(join(R.S, 'h'), join(o, 'report.txt')); return o; };
     const outArgs = (R, o, d) => ['--node', R.fk, '--out', o, d, d];
+    // MD-51 (MD-46 G4): a node option / non-V8 flag is refused by the allowlist (v8fl_check) right after --version: exit 2, the G1 die once,
+    // exactly 2 spawns [--version, --v8-options], 0 traces, 0 mktemp (ic hashes a SECOND --v8-options only after the allowlist passes).
+    const V8DIE = (f) => `${ICP} --v8-flags must not set ${f}: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)`;
+    const V8SP = (R) => [`--version`, `--v8-options`];
+    const v8Refused = (id, desc, f, out = false) => icTest(`${id} ${desc}: exit 2, the allowlist die once, spawns == [--version, --v8-options], 0 traces, 0 mktemp${out ? ', no OUT dir' : ''}`, (R) => {
+        const o = join(R.S, 'ov8');
+        const r = A(R, [...flagArgs(R, f, R.drv('driver.mjs')).slice(0, 4), ...(out ? ['--out', o] : []), ...flagArgs(R, f, R.drv('driver.mjs')).slice(4)]);
+        dieOnce(r, V8DIE(f), f);
+        assert.deepEqual(R.spawns(), V8SP(R), r.out);
+        assert.equal(R.traces().length, 0, 'no trace run');
+        assert.deepEqual(readdirSync(join(R.S, 'mk')), [], '0 mktemp');
+        if (out) assert.equal(existsSync(o), false, 'OUT not created');
+    });
 
     icTest('MD36a raw/ is a symlink to an EMPTY dir: exit 2, "raw is a symlink", 0 spawns, target stays empty', (R) => {
         const o = mkSym(R, R.S);
@@ -1531,10 +1611,55 @@ function icRows() {
     flagRow('MOD', '--v8-flags --require / --import / --loader / --experimental-loader forms (also underscore): exit 2, the "loads a module of yours" die, 0 spawns', MODS, MODT);
     // MOD-r / EVAL-ep: the letter gate already refuses the short forms (no new arm).
     flagRow('MOD-r', '(control) --v8-flags -r: refused by the letter gate, 0 spawns', ['-r'], (f) => `${ICP} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
-    acceptedRow('MOD-ok', '--v8-flags --experimental-require-module', '--experimental-require-module');
+    v8Refused('MD51-MOD', '--v8-flags --experimental-require-module (a node option, not a V8 flag)', '--experimental-require-module');
     flagRow('EVAL', '--v8-flags --eval / --print / --print-* forms (also underscore): exit 2, the MD-47 "runs code of yours" die, 0 spawns', EVALS, EVALT);
     flagRow('EVAL-ep', '(control) --v8-flags -e / -p: refused by the letter gate, 0 spawns', ['-e', '-p'], (f) => `${ICP} --v8-flags takes flags only (each starts with -- and a letter), got '${f}'`);
-    acceptedRow('EVAL-ok', '--v8-flags --experimental-print-required-tla', '--experimental-print-required-tla');
+    v8Refused('MD51-EVAL', '--v8-flags --experimental-print-required-tla (a node option, not a V8 flag)', '--experimental-print-required-tla');
+
+    // MD-46 G4 (F15 in ic): --snapshot-blob=F / --build-snapshot are refused by ic's own `*snapshot*` arm with 0 spawns (controls: green on the frozen
+    // root too); --openssl-config=F reaches the allowlist (not a V8 flag of this node): 2 spawns (red on frozen: accepted).
+    icTest('F15a (control) --v8-flags --snapshot-blob=F: exit 2, a die naming the flag once, 0 spawns, 0 mktemp', (R) => {
+        const r = A(R, flagArgs(R, '--snapshot-blob=F', R.drv('driver.mjs')));
+        assert.equal(r.status, 2, r.out); noNL(r, 'must not set --snapshot-blob=F: the script sets'); zero(R, r);
+    });
+    icTest('F15b (control) --v8-flags --build-snapshot: exit 2, a die naming the flag once, 0 spawns, 0 mktemp', (R) => {
+        const r = A(R, flagArgs(R, '--build-snapshot', R.drv('driver.mjs')));
+        assert.equal(r.status, 2, r.out); noNL(r, 'must not set --build-snapshot: the script sets'); zero(R, r);
+    });
+    v8Refused('F15c', '--v8-flags --openssl-config=F (a node file option)', '--openssl-config=F', true);
+    // V8R: V8-looking flags the allowlist still refuses (MD-53 trace family, MD-52 string-typed, MD-51 "=" on a bool, numeric without "=N").
+    for (const [id, f, why] of [['V8R-trace', '--trace-osr', 'MD-53 trace family'], ['V8R-string', '--turbo-filter=x', 'string-typed flag'],
+        ['V8R-boolval', '--allow-natives-syntax=1', 'bool with a value'], ['V8R-bare', '--stack-size', 'numeric flag without =N']]) v8Refused(id, `${f} (${why})`, f);
+    // V8OK: --allow-natives-syntax (a listed bool, named in the fixture) -> exit 0, VERDICT SAME, 9 spawns (--version, 2 x --v8-options, 6 traces),
+    // the flag exactly once in each of the 6 trace argvs and in no probe argv. Old code accepts with 8 spawns = red.
+    icTest('V8OK --v8-flags --allow-natives-syntax: exit 0, VERDICT SAME, 9 spawns (--version, 2 x --v8-options, 6 traces), the flag once in each of the 6 trace argvs', (R) => {
+        const r = A(R, flagArgs(R, '--allow-natives-syntax', R.drv('driver.mjs')));
+        assert.equal(r.status, 0, r.out);
+        assert.ok(r.lines.includes('VERDICT SAME'), r.out);
+        const sp = R.spawns();
+        assert.equal(sp.length, 9, sp.join('\n'));
+        assert.deepEqual(sp.slice(0, 3), ['--version', '--v8-options', '--v8-options'], sp.join('\n'));
+        const tr = R.traces();
+        assert.equal(tr.length, 6, sp.join('\n'));
+        for (const t of tr) assert.equal(t.argv.split(' ').filter((a) => a === '--allow-natives-syntax').length, 1, `flag once in: ${t.argv}`);
+    });
+    // V8RET: 20 cycles of (--openssl-config=F with --out, refused) + (--trace-osr without --out, refused): TMPDIR 0 after every cycle, 0 OUT dirs,
+    // exactly 80 spawns (20 x 2 x [--version, --v8-options]). It sees only TMPDIR-honouring leaks: a bare macOS `mktemp -d` ignores TMPDIR and would
+    // survive unseen (the A4 retention rows say the same). Old code accepts both = red.
+    icTest('V8RET 20 cycles of F15c (with --out) + V8R-trace leave TMPDIR empty, no OUT dir, exactly 80 spawns', (R) => {
+        const tmp = join(R.S, 'tmp'); mkdirSync(tmp);
+        const env = { ...R.env, TMPDIR: tmp };
+        const d = R.drv('driver.mjs');
+        for (let c = 0; c < 20; c++) {
+            const o = join(R.S, `o${c}`);
+            assert.equal(run(IC, ['--fn', 'get', '--node', R.fk, '--v8-flags', '--openssl-config=F', '--out', o, d, d], { cwd: R.cwd, env }).status, 2, `cycle ${c}: F15c exit 2`);
+            assert.equal(run(IC, ['--fn', 'get', ...flagArgs(R, '--trace-osr', d)], { cwd: R.cwd, env }).status, 2, `cycle ${c}: V8R-trace exit 2`);
+            assert.deepEqual(readdirSync(tmp), [], `cycle ${c}: TMPDIR holds entries`);
+            assert.equal(existsSync(o), false, `cycle ${c}: OUT dir created`);
+        }
+        assert.equal(R.spawns().length, 80, R.spawns().length + ' spawns');
+        assert.deepEqual(readdirSync(R.S).filter((e) => /^o\d+$/.test(e)), [], 'no OUT dirs');
+    });
 
     // RET (PLAN A5; red on frozen): 20 cycles of the N31, N36, MD36a, MD36b, MD37a, ENV, MOD, EVAL inputs (+ N29, N30 when not root) with TMPDIR=<S>/tmp:
     // after every cycle TMPDIR has 0 entries, 0 spawns in total, S/h = "KEEP", S/ext empty, S/nowhere and the N31 / N36 targets absent / unchanged.
