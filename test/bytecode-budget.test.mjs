@@ -383,7 +383,8 @@ for (const t of ['--snapshot-blob=F', '--build-snapshot', '--openssl-config=F', 
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
-// A2: 25 accepted --v8-flags tokens (every flag the excerpt lists, =N; all of them happen to be int / float) still cost ONE allowlist read: 3 + 2 runs.
+// A2: 25 accepted --v8-flags tokens still cost ONE allowlist read: 3 + 2 runs. The regex takes every `  --name (` line of the
+// excerpt (every flag it lists, any type: 14 today, floor >= 13), each given as =N; it does not check a flag's type.
 test('bytecode-budget: 25 accepted --v8-flags tokens -> exit 0 REPORTED, still 1 allowlist read (5 spawns: --version, 2 x --v8-options, 2 runs)', { skip }, () => {
     const names = [...readFileSync(join(FIX, 'v8-options-excerpt.txt'), 'utf8').matchAll(/^ {2}--([a-z0-9-]+) \(/gm)].map((m) => m[1]);
     assert.ok(names.length >= 13, String(names.length));
@@ -401,12 +402,16 @@ test('bytecode-budget: 25 accepted --v8-flags tokens -> exit 0 REPORTED, still 1
 });
 // A4: under MD-57 bb's --out writes precede the allowlist read: a refusal leaves OUT/raw empty and report.txt 0 bytes
 // (report mode and diff mode), and 20 refuse + accept cycles leave a private TMPDIR and cwd empty with no mktemp call.
+// Both modes pin the COMPLETE recursive OUT listing: the script's --out block writes only `mkdir -p OUT/raw` and
+// `: >OUT/report.txt`, plus raw/before + raw/after in diff mode (stage/ is ref / file mode only), so an extra or a
+// missing entry is red in either mode.
 test('bytecode-budget: a --v8-flags refusal with --out leaves OUT/raw empty and report.txt 0 bytes (report and diff mode)', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-rejout-'));
     try {
         const f = fakeNode(dir);
         const out = join(dir, 'o');
         v8flRefused(run(SCRIPT, ['--node', f.path, '--fn', 'add', '--v8-flags', '--bogus-flag', '--out', out, DRIVER]), f, '--bogus-flag');
+        assert.deepEqual(readdirSync(out, { recursive: true }).sort(), ['raw', 'report.txt']);
         assert.deepEqual(readdirSync(join(out, 'raw')), []);
         assert.equal(readFileSync(join(out, 'report.txt'), 'utf8'), '');
         const s = diffSetup({ before: { add: [6] }, after: { add: [6] } });
@@ -414,6 +419,7 @@ test('bytecode-budget: a --v8-flags refusal with --out leaves OUT/raw empty and 
             const dout = join(s.dir, 'o');
             const r = run(SCRIPT, ['--diff', '--node', s.node, '--fn', 'add', '--v8-flags', '--bogus-flag', '--out', dout, s.B, s.A]);
             v8flRefused(r, s, '--bogus-flag');
+            assert.deepEqual(readdirSync(dout, { recursive: true }).sort(), ['raw', 'raw/after', 'raw/before', 'report.txt']);
             assert.deepEqual(readdirSync(join(dout, 'raw')).sort(), ['after', 'before']);
             assert.deepEqual(readdirSync(join(dout, 'raw', 'before')), []);
             assert.deepEqual(readdirSync(join(dout, 'raw', 'after')), []);
