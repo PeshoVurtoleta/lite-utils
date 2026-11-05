@@ -21,6 +21,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, '..');
@@ -36,7 +37,7 @@ function cleanEnv() {   // no editor vars, none of the six GIT_* location vars, 
     return e;
 }
 function git(cwd, ...a) {
-    const r = spawnSync('git', [...GITC, ...a], { cwd, encoding: 'utf8', env: cleanEnv(), timeout: 30000, killSignal: 'SIGTERM' });
+    const r = capSync('git', [...GITC, ...a], { cwd, encoding: 'utf8', env: cleanEnv(), killSignal: 'SIGTERM' }, 30000, `git ${a[0]}`);
     assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
     return r.stdout.trim();
 }
@@ -48,6 +49,10 @@ const D = '[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing 
 const ES = '[completed compiling 0x0a1 <JSFunction sub (sfi = 0x0b2)> (target MAGLEV) - took 0.1, 0.2, 0.3 ms]';
 const T_R1 = `${E}\n${ES}\n`, T_R2 = `${E}\n${D}\n${ES}\n`;
 const TRACE = '--trace-deopt-verbose --trace-opt --no-concurrent-recompilation';
+
+// section 9's /bin/bash probe, run before ROOT exists (it reads nothing from ROOT): a load-time throw leaves no ddsb-root-*
+// an absent /bin/bash stays the section 9 skip (a spawn ENOENT would throw in capSync); a hung one fails by name
+const bv = existsSync('/bin/bash') ? capSync('/bin/bash', ['--version'], { encoding: 'utf8' }, 30000, '/bin/bash --version') : { status: null, stdout: '' };
 
 // ---- shared read-only fixtures. REPO m/trace.txt: r1 = T_R1 (tag r1, annotated tag ar1, branch b1), r2 = T_R2 (tag r2,
 // HEAD). FROZEN = an untracked r1 copy under ANOTHER file name (file mode stages it as --after's name) ----
@@ -71,17 +76,17 @@ const repoState = () => ({ head: git(REPO, 'rev-parse', 'HEAD'), refs: git(REPO,
 
 // ---- the pre-G2 build (teeth), resolved by content ----
 let BASE = null;
-if (!skip) {
-    const revs = spawnSync('git', ['-C', PKG, 'rev-list', 'HEAD', '--', 'deopt-diff.sh'], { encoding: 'utf8', env: cleanEnv(), timeout: 30000 });
+if (!skip) try {
+    const revs = capSync('git', ['-C', PKG, 'rev-list', 'HEAD', '--', 'deopt-diff.sh'], { encoding: 'utf8', env: cleanEnv() }, 30000, 'git rev-list');
     if (revs.status === 0) {
         for (const c of revs.stdout.split('\n').filter(Boolean)) {
-            const s = spawnSync('git', ['-C', PKG, 'show', `${c}:deopt-diff.sh`], { env: cleanEnv(), maxBuffer: 64 << 20, timeout: 30000 });
+            const s = capSync('git', ['-C', PKG, 'show', `${c}:deopt-diff.sh`], { env: cleanEnv(), maxBuffer: 64 << 20 }, 30000, 'git show');
             if (s.status === 0 && sha8(s.stdout) === '221ff2ec') {
                 BASE = join(ROOT, 'base-221ff2ec.sh'); writeFileSync(BASE, s.stdout); chmodSync(BASE, 0o755); break;
             }
         }
     }
-}
+} catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
 const haveBase = BASE ? true : 'no commit of deopt-diff.sh with sha256/8 221ff2ec in the history (shallow clone?)';
 // CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
 // the reason. One spelling for every history row of this file.
@@ -123,7 +128,7 @@ const lines = (s) => s.split('\n');
 const has = (r, line) => lines(r.stdout).filter((l) => l === line).length;
 const verdict = (r, rc, v) => { assert.equal(r.status, rc, msg(r)); assert.equal(has(r, `VERDICT ${v}`), 1, msg(r)); };
 function shimDir(dir) {   // a logging mktemp first on PATH (macOS mktemp ignores TMPDIR; a bare `mktemp -d` lands in the real temp dir)
-    const real = spawnSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8', timeout: 30000 }).stdout.trim();
+    const real = capSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8' }, 30000, 'command -v mktemp').stdout.trim();
     assert.ok(real, 'no real mktemp on PATH');
     const bin = join(dir, 'shim'), log = join(dir, 'mktemp.log');
     mkdirSync(bin); writeFileSync(log, '');
@@ -164,9 +169,15 @@ function runAsync(cmd, args, opts) {
         let out = '', err = '';
         ch.stdout.setEncoding('utf8'); ch.stderr.setEncoding('utf8');
         ch.stdout.on('data', (d) => { out += d; }); ch.stderr.on('data', (d) => { err += d; });
-        const t = setTimeout(() => ch.kill('SIGTERM'), 90000);
-        ch.on('error', (e) => { clearTimeout(t); reject(e); });
-        ch.on('close', (status, signal) => { clearTimeout(t); resolve({ status, signal, stdout: out, stderr: err }); });
+        const h = armCap(ch, 90000, 'SIGTERM');
+        ch.on('error', (e) => { h.clear(); reject(e); });
+        ch.on('close', (status, signal) => {
+            h.clear();
+            const r = { status, signal, stdout: out, stderr: err };
+            // a run the cap killed rejects by name before any caller reads its status
+            try { noTimeout({ ...r, timedOut: h.timedOut, cap: h.cap }, [cmd, ...args.slice(0, 1)].join(' ')); } catch (e) { reject(e); return; }
+            resolve(r);
+        });
     });
 }
 async function withCase(script, cs, body) {
@@ -323,9 +334,11 @@ row('5 --repo RELATIVE, cwd outside the repo -> exit 1 DIFF, head shas from that
     },
 });
 row('5 no --repo, cwd outside any git work tree -> exit 2 "ref mode: the cwd is not inside a git work tree (give --repo DIR)", 0 spawns', {
+    // the precondition spawn runs in prep (withCase, before the run), never inside the teeth row's assert.throws
+    prep: (c) => { c.topStatus = capSync('git', ['rev-parse', '--show-toplevel'], { cwd: c.cwd, env: cleanEnv() }, 30000, 'git rev-parse').status; },
     args: (c) => refO(c, { '--repo': null }),
     check: (c, r) => {
-        assert.notEqual(spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: c.cwd, env: cleanEnv(), timeout: 30000 }).status, 0, 'precondition: cwd is inside a repo');
+        assert.notEqual(c.topStatus, 0, 'precondition: cwd is inside a repo');
         refuses('ref mode: the cwd is not inside a git work tree (give --repo DIR)')(c, r);
     },
 });
@@ -336,6 +349,7 @@ row('5 no --repo, cwd = <repo>/m (inside) -> the repo around cwd: exit 1 DIFF; H
     check: (c, r) => {
         verdict(r, 1, 'DIFF');
         assert.equal(has(r, `after   r2 @ ${SHA.r2.slice(0, 12)}  m/trace.txt  sha256/8 ${sha8(T_R2)}`), 1, msg(r));
+        // repoState() spawns (capSync): inside the teeth assert.throws it is unreachable today (the twin pins status 2, verdict(r, 1) throws first)
         assert.deepEqual(repoState(), c.pre);
     },
 });
@@ -420,7 +434,6 @@ mutant('M-opts-front', 'staged options moved to the FRONT of OPTS',
 // =====================================================================================================
 // 9. /bin/bash 3.2 (macOS system bash) runs a staged ref verdict
 // =====================================================================================================
-const bv = spawnSync('/bin/bash', ['--version'], { encoding: 'utf8', timeout: 30000 });
 const skip32 = skip || (bv.status === 0 && /version 3\.2\./.test(bv.stdout) ? false : '/bin/bash is not bash 3.2 on this host');
 row('9 /bin/bash 3.2 runs ref r1 | r2 -> exit 1 DIFF, 8 spawns, the before=0 after=1 line', {
     bash: '/bin/bash', rowSkip: skip32,
@@ -526,7 +539,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
             c = mkCase();
             const sh = shimDir(c.dir);
             const env = { ...cleanEnv(), TMPDIR: c.tmp, PATH: `${sh.bin}:${process.env.PATH}` };
-            const ctl = spawnSync('bash', ['-c', 'd=$(mktemp -d) && rmdir "$d"'], { env, timeout: 30000 });
+            const ctl = capSync('bash', ['-c', 'd=$(mktemp -d) && rmdir "$d"'], { env }, 30000, 'mktemp control');
             const shimLive = ctl.status === 0 && sh.made().length === 1;
             writeFileSync(join(c.dir, 'mktemp.log'), '');
             const pre = repoState(), res = [];
@@ -582,15 +595,17 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
             let out = '';
             ch.stdout.setEncoding('utf8'); ch.stdout.on('data', (d) => { out += d; }); ch.stderr.on('data', () => {});
             const done = new Promise((res) => ch.on('close', (code, signal) => res({ code, signal })));
-            let exitedEarly = false;
+            let exitedEarly = false, escalated = false;
             ch.on('exit', () => { exitedEarly = !existsSync(ready); });
             for (let i = 0; i < 1500 && !existsSync(ready) && ch.exitCode === null && ch.signalCode === null; i++) await new Promise((r) => setTimeout(r, 20));
             const wasReady = existsSync(ready);
             if (wasReady) process.kill(-ch.pid, 'SIGTERM');
-            const kill = setTimeout(() => { try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }, 30000);
+            const kill = setTimeout(() => { escalated = true; try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }, 30000);
             const st = await done; clearTimeout(kill);
             const made = sh.made(), leaked = made.filter((p) => existsSync(p));
             for (const p of leaked) rmSync(p, { recursive: true, force: true });
+            // outside sigCheck: a teeth / mutant assert.throws can never swallow it
+            if (escalated) assert.fail('deopt-diff.sh SIGTERM run timed out after 30000 ms (killed by SIGKILL)');
             return { wasReady, exitedEarly, st, out, made, leaked, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), spawns: c.spawns() };
         } finally {
             if (ch) { try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }
@@ -600,7 +615,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     const sigCheck = (x) => {
         assert.ok(x.wasReady && !x.exitedEarly, 'the run never reached driver run 3');
         assert.equal(x.spawns, 5, '--version + --v8-options + 3 driver spawns at the kill');
-        assert.ok(x.st.signal === 'SIGTERM' || x.st.code !== 0, JSON.stringify(x.st));
+        assert.ok(x.st.signal === 'SIGTERM' || (x.st.signal === null && x.st.code !== 0), JSON.stringify(x.st));
         assert.doesNotMatch(x.out, /^VERDICT /m);
         assert.deepEqual(x.made, [], 'mktemp was called');
         assert.deepEqual(x.leaked, []);

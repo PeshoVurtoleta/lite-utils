@@ -5,7 +5,7 @@
 // (one exact-once edit on a copy of the script) whose run must turn the same assertion red, checked in a sibling row.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
     mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync, statSync,
@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -48,7 +49,7 @@ function variant(dir, name, edits) {
 // TMPDIR cannot see a leaked bare `mktemp -d`; the shim logs "args<TAB>created path" and execs the real one.
 // The shim only sees a mktemp found through PATH (an absolute /usr/bin/mktemp or `command -p mktemp` call would bypass it).
 function mktempShim(dir) {
-    const real = spawnSync('bash', ['-c', 'command -v mktemp'], { encoding: 'utf8', timeout: 30000 }).stdout.trim();
+    const real = capSync('bash', ['-c', 'command -v mktemp'], { encoding: 'utf8' }, 30000, 'command -v mktemp').stdout.trim();
     assert.ok(real, 'no real mktemp on PATH');
     const bin = join(dir, 'shim-bin');
     mkdirSync(bin);
@@ -87,7 +88,7 @@ function rig(dir, drivers) {
         node: join(fk, 'node'), drv, cwd,
         run(script, args, env = {}) {
             writeFileSync(join(fk, 'log'), '');
-            const r = spawnSync('bash', [script, '--node', join(fk, 'node'), ...args], { encoding: 'utf8', timeout: 120000, cwd, env: { ...ENV, ...env } });
+            const r = capSync('bash', [script, '--node', join(fk, 'node'), ...args], { encoding: 'utf8', cwd, env: { ...ENV, ...env } }, 120000, basename(script));
             const out = r.stdout + r.stderr;
             const log = readFileSync(join(fk, 'log'), 'utf8').split('\n').filter(Boolean);
             return { status: r.status, out, lines: out.split('\n'), log, spawns: log.length, verdicts: out.split('\n').filter((l) => l.startsWith('VERDICT ')) };
@@ -166,7 +167,7 @@ test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim
         const pd = tmp('dd-a5-probe-');
         let honours, got = '';
         try {
-            const pr = spawnSync(c.real, ['-d'], { encoding: 'utf8', env: { ...ENV, TMPDIR: pd }, timeout: 30000 });
+            const pr = capSync(c.real, ['-d'], { encoding: 'utf8', env: { ...ENV, TMPDIR: pd } }, 30000, 'mktemp -d probe');
             got = pr.status === 0 ? pr.stdout.trim() : '';
             honours = got !== '' && (got.startsWith(pd + '/') || got.startsWith(realpathSync(pd) + '/'));
         } finally { rmAll(pd); if (got && !honours) rmdirSync(got); }   // a TMPDIR-ignoring mktemp (BSD) made its dir elsewhere
@@ -198,7 +199,7 @@ function selfTestRun(script, { term = false } = {}) {
         let out = '';
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
         // cap 240000 (was 120000): CI run 42056284029, job 127345428628 (macOS node 22): a row of this runner took 67.8 s
-        const kill = setTimeout(() => c.kill('SIGKILL'), 240000);
+        const h = armCap(c, 240000, 'SIGKILL');
         let poll = null;
         if (term) {
             // SIGTERM once the shim logged the self-test's dir and the self-test printed >= 5 check lines (so it is
@@ -206,14 +207,16 @@ function selfTestRun(script, { term = false } = {}) {
             poll = setInterval(() => { if (sh.paths().length > 0 && (out.match(/^ok /gm) || []).length >= 5) { clearInterval(poll); c.kill('SIGTERM'); } }, 20);
         }
         c.on('close', (status, signal) => {
-            clearTimeout(kill); if (poll) clearInterval(poll);
+            h.clear(); if (poll) clearInterval(poll);
             const paths = sh.paths();
             const r = { status, signal, out, shim: paths, live: paths.filter((p) => existsSync(p)), cwd: readdirSync(cwd), tmpdir: readdirSync(td) };
             for (const p of paths) rmAll(p);
             rmAll(dir, td);
+            // a run the cap killed rejects by name before any caller reads its status
+            try { noTimeout({ status, signal, stdout: out, stderr: '', timedOut: h.timedOut, cap: h.cap }, `${basename(script)} --self-test`); } catch (e) { rej(e); return; }
             res(r);
         });
-        c.on('error', rej);
+        c.on('error', (e) => { h.clear(); rej(e); });
     });
 }
 function assertNoDirs(r) {
@@ -349,9 +352,9 @@ test('A3 teeth: --runs refusal rows are red on mutants (3-digit regex: 020; refu
     const dir = tmp('dd-rbm-');
     try {
         const m3 = variant(dir, 'm3', [['[[ "$RUNS" =~ ^[0-9]{1,2}$ ]]', '[[ "$RUNS" =~ ^[0-9]{1,3}$ ]]']]);
-        for (const v of ['020']) assert.throws(() => assertRefused(runsBad(m3, v), runsLine(v)), assert.AssertionError);
+        for (const v of ['020']) { const r = runsBad(m3, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError); }
         const off = variant(dir, 'off', [['  || die "--runs must be an integer in [2, 20] (null control), got \'$RUNS\'"', '  || RUNS=2']]);
-        for (const v of RUNS_BAD) assert.throws(() => assertRefused(runsBad(off, v), runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the disabled check`);
+        for (const v of RUNS_BAD) { const r = runsBad(off, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the disabled check`); }
     } finally { rmAll(dir); }
 });
 
@@ -393,7 +396,7 @@ for (const [label, args, line, teeth] of MORE_BAD) {
     });
     test(`A3 teeth: ${label} row is red on its mutant`, { skip }, () => {
         const dir = tmp('dd-mbm-');
-        try { const p = variant(dir, 'm', teeth); assert.throws(() => assertRefused(moreBad(p, args), line), assert.AssertionError); } finally { rmAll(dir); }
+        try { const p = variant(dir, 'm', teeth); const r = moreBad(p, args); assert.throws(() => assertRefused(r, line), assert.AssertionError); } finally { rmAll(dir); }
     });
 }
 
@@ -474,7 +477,8 @@ test('A3 teeth: the empty-raw/ row is red on a mutant that refuses any existing 
     const dir = tmp('dd-outm-');
     try {
         const p = variant(dir, 'm', [['[[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die', '[[ ! -e "$OUT/raw" ]] || die']]);
-        assert.throws(() => assertOutAccepted(outRow(p, outEmptyRaw)), assert.AssertionError);
+        const r = outRow(p, outEmptyRaw);
+        assert.throws(() => assertOutAccepted(r), assert.AssertionError);
     } finally { rmAll(dir); }
 });
 // =====================================================================================================================
@@ -504,7 +508,7 @@ function fxRow(script, args, setup) {
         delete env.NODE;
         writeFileSync(join(g.node, '..', 'log'), '');
         // cap 240000 (was 120000): CI run 42056284029, job 127345428176 (macOS node 26.8.2): row R-only-pos took 73.1 s
-        const r = spawnSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', timeout: 240000, cwd: g.cwd, env });
+        const r = capSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', cwd: g.cwd, env }, 240000, basename(script));
         const out = r.stdout + r.stderr;
         const fake = readFileSync(join(g.node, '..', 'log'), 'utf8').split('\n').filter(Boolean).length;
         const pnode = readFileSync(plog, 'utf8').split('\n').filter(Boolean).length;
@@ -585,10 +589,10 @@ const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
 // bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
 const PARITY = [['inlining-budget-diff.sh', '740da13b']];
 function gitShow(rev, file) {
-    const r = spawnSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26, timeout: 30000 });
+    const r = capSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26 }, 30000, 'git show');
     return r.status === 0 ? r.stdout : null;
 }
-const hasGit = spawnSync('git', ['-C', ROOT, 'cat-file', '-e', 'bd1f283^{commit}'], { env: ENV, timeout: 30000 }).status === 0
+const hasGit = capSync('git', ['-C', ROOT, 'cat-file', '-e', 'bd1f283^{commit}'], { env: ENV }, 30000, 'git cat-file').status === 0
     ? true : 'no git history with bd1f283: not checked, never passed';
 // CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
 // the reason. One spelling for every history row of this file.
