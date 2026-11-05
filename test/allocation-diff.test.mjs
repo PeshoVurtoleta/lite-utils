@@ -739,6 +739,9 @@ const HELP_LINES = [
     '  newline. --self-test takes no other argument. --zero / --self-test / --help take no =value. An unknown option',
     '  exits 2 with a did-you-mean hint.',
     '                     non-flags). Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag',
+    // b37 Q-H1 (maintainer ruling "Say 'at the latest'"): the shared MD-46 refusal sentence, as wrapped in this -h
+    '                     snapshot / file flags. Refused, exit 2 at the latest after one --v8-options read and before any',
+    '                     measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,',
     '  exits 2 before any node is spawned and before anything is written, except a --v8-flags flag outside the allowlist',
 ];
 function assertHelp(script) {

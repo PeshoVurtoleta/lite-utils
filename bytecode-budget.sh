@@ -41,9 +41,9 @@
 #                          refused as non-flags.
 #                          Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never
 #                          --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot
-#                          / file flags. Refused, exit 2 after one --v8-options read and before any measured run: every
-#                          node option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob, ...),
-#                          every string-valued V8 flag, and the tool's own flags above.
+#                          / file flags. Refused, exit 2 at the latest after one --v8-options read and before any
+#                          measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
+#                          --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
 #                          bytecode-budget's exception: that read comes right after --version, so with --out (and in
 #                          ref / file mode) it comes after the DIR writes (raw/, an empty report.txt, stage/), as a
 #                          failing --version and a version mismatch do; a refusal leaves no file in raw/ and

@@ -520,6 +520,9 @@ const HELP_LINES = [
     '  ic-diff.sh --self-test                                       canned checks, a fake node (no real node)',
     '  -h, --help         this text (exit 2)',
     '                     "self-test: <n> check(s) FAILED" (exit 1)',
+    // b37 Q-H1 (maintainer ruling "Say 'at the latest'"): the shared MD-46 refusal sentence, as wrapped in ic-diff's -h
+    '                     file flags. Refused, exit 2 at the latest after one --v8-options read and before any measured',
+    '                     run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob,',
     'Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, two --v8-options (the',
     '  --v8-flags allowlist read, then the hashed probe), then 2 x runs trace runs (runs 3: 9 spawns); a failing probe',
     '  <node> --v8-options`, `ic-diff: <node> --v8-options printed nothing`, `ic-diff: <node> --v8-options lists no V8',

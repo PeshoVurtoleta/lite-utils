@@ -33,9 +33,9 @@
 #                      becomes argv; V8's --print-* flags, e.g. --print-bytecode, go with it; -e / -p are refused as
 #                      non-flags). Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag
 #                      (never --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump /
-#                      snapshot / file flags. Refused, exit 2 after one --v8-options read and before any measured run:
-#                      every node option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob,
-#                      ...), every string-valued V8 flag, and the tool's own flags above.
+#                      snapshot / file flags. Refused, exit 2 at the latest after one --v8-options read and before any
+#                      measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
+#                      --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
 #   --out DIR          keep DIR/report.txt, DIR/raw/<side>/run.<k>.txt (the raw stdout of run k) and
 #                      DIR/raw/<side>/run.<k>.err (its stderr); <side> = before / after, or driver with --zero.
 #                      DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;

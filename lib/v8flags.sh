@@ -6,9 +6,10 @@
 #: bash 3.2 safe (no ${x,,}, no declare -A, no mapfile; every =~ pattern sits in a variable).
 #: Shared -h text (G2-G5 copy it verbatim into each tool's -h, re-wrapped at the tool's column):
 #:   Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric as
-#:   --flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 after one
-#:   --v8-options read and before any measured run: every node option (--run, --test, --watch, --check, --inspect,
-#:   --cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
+#:   --flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 at the
+#:   latest after one --v8-options read and before any measured run: every node option (--run, --test, --watch,
+#:   --check, --inspect, --cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags
+#:   above.
 # `node --v8-options` -> "name type" per flag. A name line is exactly `  --<name> (` (one space before the paren: the
 # synopsis lines and uppercase names drop out); the NEXT line must be its `type:` line, else the name is dropped.
 # shellcheck disable=SC2016

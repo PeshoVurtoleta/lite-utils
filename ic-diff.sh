@@ -30,9 +30,9 @@
 #                      into the measured run). -r / -e / -p are refused as non-flags.
 #                      Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never
 #                      --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot /
-#                      file flags. Refused, exit 2 after one --v8-options read and before any measured run: every node
-#                      option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob, ...), every
-#                      string-valued V8 flag, and the tool's own flags above.
+#                      file flags. Refused, exit 2 at the latest after one --v8-options read and before any measured
+#                      run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof, --snapshot-blob,
+#                      ...), every string-valued V8 flag, and the tool's own flags above.
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
 #                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent, or an
 #                      empty, readable and writable directory that is not a symlink; DIR/report.txt must not be a

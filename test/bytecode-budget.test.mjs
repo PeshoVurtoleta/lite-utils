@@ -87,6 +87,24 @@ test('bytecode-budget --self-test --fixtures: exactly C+24 ok', { skip }, () => 
     assert.equal(okCount(r.stdout), C + F);
 });
 
+// b37 Q-H1 (maintainer ruling "Say 'at the latest'"): the shared MD-46 -h text (lib/v8flags.sh header), compared with
+// every whitespace run collapsed to one space, plus the two wrapped lines that carry the new words
+const V8FL_HELP = 'Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric as ' +
+    '--flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 at the latest ' +
+    'after one --v8-options read and before any measured run: every node option (--run, --test, --watch, --check, ' +
+    '--inspect, --cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool\'s own flags above.';
+test('bytecode-budget -h: exit 2, the shared MD-46 --v8-flags text exactly once, "exit 2 at the latest" (Q-H1)', { skip }, () => {
+    const r = run(SCRIPT, ['-h']);
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.equal(r.stderr, '');
+    assert.equal(r.stdout.replace(/\s+/g, ' ').split(V8FL_HELP).length - 1, 1, 'the shared MD-46 -h text exactly once (whitespace collapsed)');
+    const lines = r.stdout.split('\n');
+    for (const l of ['                         / file flags. Refused, exit 2 at the latest after one --v8-options read and before any',
+        '                         measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,']) {
+        assert.ok(lines.includes(l), `-h lacks the line "${l}"`);
+    }
+});
+
 test('bytecode-budget --self-test --fixtures: a copy without dup.txt exits 1', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-nodup-'));
     try {

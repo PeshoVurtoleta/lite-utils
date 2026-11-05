@@ -503,9 +503,9 @@ FIX_MUTANTS.forEach(([name, , rows], i) => {
 
 // PLAN-md46 G1 "Shared -h text for G2-G5, verbatim" (MD-46), compared with all whitespace runs collapsed to one space
 const V8FL_HELP = 'Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric as ' +
-    '--flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 after one ' +
-    '--v8-options read and before any measured run: every node option (--run, --test, --watch, --check, --inspect, ' +
-    '--cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool\'s own flags above.';
+    '--flag=N -- except log / trace / print / prof / perf / dump / snapshot / file flags. Refused, exit 2 at the latest ' +
+    'after one --v8-options read and before any measured run: every node option (--run, --test, --watch, --check, ' +
+    '--inspect, --cpu-prof, --snapshot-blob, ...), every string-valued V8 flag, and the tool\'s own flags above.';
 function assertHelp(r) {
     assert.equal(r.status, 2, r.stdout + r.stderr);
     assert.match(r.stdout, /^deopt-diff\.sh -- the DEOPTIMIZATIONS of NAMED functions/m);
