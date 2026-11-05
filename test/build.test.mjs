@@ -3,7 +3,7 @@
 // into a temp dir; anything that mutates src/ or lib/ works on a copy of the repo, never the live tree.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import {
     mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, cpSync, rmSync, existsSync, statSync, symlinkSync, chmodSync,
 } from 'node:fs';
@@ -38,7 +38,7 @@ function repoCopy() {
 function build(dir, out, shell = 'bash') {
     const args = ['build.sh'];
     if (out !== undefined) args.push(out);
-    return spawnSync(shell, args, { cwd: dir, encoding: 'utf8', timeout: 60000 });
+    return capSync(shell, args, { cwd: dir, encoding: 'utf8' }, 60000, `${shell} build.sh`);
 }
 function rootShFiles(dir) { return readdirSync(dir).filter((f) => f.endsWith('.sh') && f !== 'build.sh').sort(); }
 function tmpLeft(dir) { return readdirSync(dir).filter((f) => /^\..*\.tmp\./.test(f)); }
@@ -202,7 +202,7 @@ test('A4 fail closed: an abort on a later src publishes no earlier output', { sk
 test('A5: build from cwd / by absolute path into a new nested OUTDIR equals the committed scripts', { skip }, () => {
     try {
         const out = join(mk('bld-out-'), 'new', 'dir');
-        const r = spawnSync('bash', [join(ROOT, 'build.sh'), out], { cwd: '/', encoding: 'utf8', timeout: 60000 });
+        const r = capSync('bash', [join(ROOT, 'build.sh'), out], { cwd: '/', encoding: 'utf8' }, 60000, 'bash build.sh (cwd /)');
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.deepEqual(drift(out, ROOT), []);
     } finally { cleanup(); }
@@ -268,9 +268,9 @@ test('N6: a 0xff byte in a lib under LC_ALL=en_US.UTF-8 builds byte-exact', { sk
         const probe = Buffer.from('# \xff\n', 'latin1');
         writeFileSync(p, Buffer.concat([readFileSync(p), probe]));
         const out = mk('bld-out-');
-        const r = spawnSync('bash', ['build.sh', out], {
-            cwd: copy, encoding: 'utf8', timeout: 60000, env: { ...process.env, LC_ALL: 'en_US.UTF-8' },
-        });
+        const r = capSync('bash', ['build.sh', out], {
+            cwd: copy, encoding: 'utf8', env: { ...process.env, LC_ALL: 'en_US.UTF-8' },
+        }, 60000, 'bash build.sh (LC_ALL UTF-8)');
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.ok(readFileSync(join(out, NAME)).includes(probe), 'output lost the 0xff byte');
     } finally { cleanup(); }
@@ -284,9 +284,9 @@ test('N4: a failing chmod aborts with status 2 and "unexpected error"', { skip }
         writeFileSync(join(fake, 'chmod'), '#!/bin/sh\nexit 1\n');
         chmodSync(join(fake, 'chmod'), 0o755);
         const out = mk('bld-out-');
-        const r = spawnSync('bash', ['build.sh', out], {
-            cwd: copy, encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: fake + ':' + process.env.PATH },
-        });
+        const r = capSync('bash', ['build.sh', out], {
+            cwd: copy, encoding: 'utf8', env: { ...process.env, PATH: fake + ':' + process.env.PATH },
+        }, 60000, 'bash build.sh (failing chmod)');
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.match(r.stderr, /unexpected error/);
         assert.deepEqual(readdirSync(out), []);

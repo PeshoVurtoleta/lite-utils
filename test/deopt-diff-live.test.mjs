@@ -7,7 +7,7 @@
 // diagnostic row). The must-fail rows run mutants (one exact-once edit on a copy of the live script) that must go red.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, copyFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -48,8 +48,8 @@ function live(script, before, after) {
         const wrap = join(tmp, 'node-wrap.sh');
         writeFileSync(wrap, `#!/bin/sh\necho x >> '${log}'\nexec '${process.execPath}' "$@"\n`);
         chmodSync(wrap, 0o755);
-        const r = spawnSync('bash', [script, '--fn', 'add', '--node', wrap, '--v8-flags', '--allow-natives-syntax',
-            before, after], { encoding: 'utf8', timeout: 120000, cwd, env: { ...ENV, TMPDIR: tmp } });
+        const r = capSync('bash', [script, '--fn', 'add', '--node', wrap, '--v8-flags', '--allow-natives-syntax',
+            before, after], { encoding: 'utf8', cwd, env: { ...ENV, TMPDIR: tmp } }, 120000, 'deopt-diff.sh --fn add (live)');
         let spawns = 0;
         try { spawns = readFileSync(log, 'utf8').split('\n').filter(Boolean).length; } catch { /* none */ }
         return { status: r.status, out: r.stdout, err: r.stderr, spawns };

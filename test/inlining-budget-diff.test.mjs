@@ -4,7 +4,7 @@
 // that it has teeth (each mutant of the script must turn the self-test red).
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -20,7 +20,7 @@ const CHECKS = 43;   // every `check` call in self_test(); a new check moves thi
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
 function selfTest(path) {
-    return spawnSync('bash', [path, '--self-test'], { encoding: 'utf8', timeout: 60000 });
+    return capSync('bash', [path, '--self-test'], { encoding: 'utf8' }, 60000, 'inlining-budget-diff.sh --self-test');
 }
 function okCount(out) { return (out.match(/^ok {3}/gm) || []).length; }
 

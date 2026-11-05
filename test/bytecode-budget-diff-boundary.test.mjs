@@ -6,6 +6,7 @@ import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
@@ -22,9 +23,12 @@ const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
+// opts may override encoding / env / cwd, never the cap: capSync refuses an opts.timeout (no caller passes one)
 function run(path, args, opts = {}) {
-    return spawnSync('bash', [path, ...args], { encoding: 'utf8', timeout: 120000, ...opts });
+    return capSync('bash', [path, ...args], { encoding: 'utf8', ...opts }, 120000, 'bytecode-budget.sh --diff');
 }
+// a teeth row's expected red is an assertion, never a run its cap killed or a spawn that failed (capSync names both: fail closed)
+const redNotTimeout = (e) => e instanceof assert.AssertionError && !/ timed out after \d+ ms \(| spawn error /.test(e.message);
 function variant(dir, name, from, to) {
     const src = readFileSync(SCRIPT, 'utf8');
     const n = src.split(from).length - 1;
@@ -107,7 +111,7 @@ function diffRow(name, body) {
     // teeth: the SAME row body run against the base must fail (the base exits 2 "unknown option --diff")
     test(`bytecode-budget diff QA teeth: [${name}] is red on the a26e9f15 base`, { skip: baseSkip }, () => {
         histGate(haveBase);
-        assert.throws(() => body(BASE, false), assert.AssertionError);
+        assert.throws(() => body(BASE, false), redNotTimeout);
     });
 }
 
@@ -329,7 +333,7 @@ test('bytecode-budget diff QA MUTANT M-no-cap (any digit run is a length, as 686
     const dir = mkdtempSync(join(tmpdir(), 'bbq-cap-'));
     try {
         const p = variant(dir, 'no-cap', ' && length($3) <= 9 {', ' {');
-        assert.throws(() => lengthRow(p), assert.AssertionError);
+        assert.throws(() => lengthRow(p), redNotTimeout);
         const s = diffRun({ b: { mid: ['9007199254740992'] }, a: { mid: ['9007199254740993'] } }, 'mid', p);
         assert.equal(s.r.status, 0, s.r.stdout + s.r.stderr);   // the 686de5bf fail-open: 2^53 | 2^53 + 1 reads SAME
         const g = diffRun({ b: { mid: ['9007199254740992'] }, a: { mid: ['9007199254740993'] } }, 'mid');

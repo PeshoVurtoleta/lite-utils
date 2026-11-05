@@ -5,6 +5,7 @@ import { test, beforeEach, after } from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, cpSync, existsSync, appendFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -23,9 +24,12 @@ const C = 57;         // self-test ok lines without --fixtures (F1: B2 686de5bf'
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
+// opts may override encoding / env / cwd, never the cap: capSync refuses an opts.timeout (no caller passes one)
 function run(path, args, opts = {}) {
-    return spawnSync('bash', [path, ...args], { encoding: 'utf8', timeout: 120000, ...opts });
+    return capSync('bash', [path, ...args], { encoding: 'utf8', ...opts }, 120000, 'bytecode-budget.sh');
 }
+// a teeth row's expected red is an assertion, never a run its cap killed or a spawn that failed (capSync names both: fail closed)
+const redNotTimeout = (e) => e instanceof assert.AssertionError && !/ timed out after \d+ ms \(| spawn error /.test(e.message);
 function okCount(out) { return (out.match(/^ok {3}/gm) || []).length; }
 
 // A copy of the script with ONE exact edit (anchor must match exactly once).
@@ -975,12 +979,12 @@ for (const [name, body] of CAP_ROWS) {
     test(`bytecode-budget length cap ${name}`, { skip }, () => body(SCRIPT));
     test(`bytecode-budget length cap teeth: [${name}] is red on the 686de5bf build (no cap)`, { skip: skip || histSkip(haveCap) }, () => {
         histGate(haveCap);
-        assert.throws(() => body(CAP_BASE), assert.AssertionError);
+        assert.throws(() => body(CAP_BASE), redNotTimeout);
     });
     for (const [mname, to] of [['cap-8', 'length($3) <= 8'], ['cap-10', 'length($3) <= 10']]) {
         test(`bytecode-budget length cap MUTANT ${mname}: [${name}] goes red`, { skip }, () => {
             const dir = mkdtempSync(join(tmpdir(), `bb-${mname}-`));
-            try { const p = variant(dir, mname, 'length($3) <= 9', to); assert.throws(() => body(p), assert.AssertionError); }
+            try { const p = variant(dir, mname, 'length($3) <= 9', to); assert.throws(() => body(p), redNotTimeout); }
             finally { rmSync(dir, { recursive: true, force: true }); }
         });
     }

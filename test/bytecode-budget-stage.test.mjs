@@ -12,6 +12,7 @@ import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -125,7 +126,7 @@ function runOn(script, cs) {
     const c = mkCase();
     if (cs.prep) cs.prep(c);
     const env = { ...cleanEnv(), TMPDIR: c.tmp, ...(cs.env ? cs.env(c) : {}) };
-    const r = spawnSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', timeout: 120000, cwd: c.cwd, env });
+    const r = capSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', cwd: c.cwd, env }, 120000, 'bytecode-budget.sh (stage row)');
     return { c, r };
 }
 // ordered option sets (key order is argv order, so the staged option comes first: the pre-staging build dies on it)
@@ -374,7 +375,7 @@ test('bytecode-budget stage A4 retention: 20 ref runs keep 0 entries in TMPDIR a
     let spawns = 0;
     for (let i = 0; i < 20; i++) {
         const out = join(c.dir, 'outs', `o${i}`);
-        const r = spawnSync('bash', [SCRIPT, ...refO({ ...c, out }, {}, 'add,mid,dup')], { encoding: 'utf8', timeout: 120000, cwd: c.cwd, env: { ...cleanEnv(), TMPDIR: c.tmp } });
+        const r = capSync('bash', [SCRIPT, ...refO({ ...c, out }, {}, 'add,mid,dup')], { encoding: 'utf8', cwd: c.cwd, env: { ...cleanEnv(), TMPDIR: c.tmp } }, 120000, `bytecode-budget.sh (ref run ${i})`);
         assert.equal(r.status, 1, `run ${i}: ${msg(r)}`);
         const files = walk(out).map((f) => f.slice(out.length + 1)).sort();
         // report.txt + raw/before 6 (3 fns x 2 runs) + raw/after 6 + stage/before 2 (mod.js, driver.mjs) + stage/after 2
@@ -417,7 +418,7 @@ const ST_NAMES = [
 const NOGIT_NAME = 'ref / file modes: git on PATH (their rows need git; MD-7: no git fails closed)';
 const okLines = (o) => o.split('\n').filter((l) => l.startsWith('ok   '));
 const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
-const stRun = (script, env = cleanEnv()) => spawnSync('bash', [script, '--self-test'], { encoding: 'utf8', timeout: 240000, env });
+const stRun = (script, env = cleanEnv()) => capSync('bash', [script, '--self-test'], { encoding: 'utf8', env }, 240000, 'bytecode-budget.sh --self-test');
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok   ' + name)).length;
 
 test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 4 staged checks present exactly once, 57 ok', { skip }, () => {

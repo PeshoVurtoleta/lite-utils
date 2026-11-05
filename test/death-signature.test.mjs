@@ -7,7 +7,7 @@
 // MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { capSync } from './spawn-cap.mjs';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,8 +41,8 @@ function run(flags, fixture) {
   // runner.js FORCE_COLOR: node's runner sets FORCE_COLOR=1 in file children when a built-in reporter destination is a
   // color TTY; copied into the nested run it colors spec's lines and passed() stops matching. Pin plain text.
   delete env.FORCE_COLOR; env.NO_COLOR = '1';
-  const r = spawnSync(process.execPath, [...flags, FIX + fixture], { cwd: ROOT, env, encoding: 'utf8', timeout: 60000 });
-  assert.equal(r.error, undefined, 'nested node --test spawned and finished');
+  const r = capSync(process.execPath, [...flags, FIX + fixture], { cwd: ROOT, env, encoding: 'utf8' }, 60000, `nested node --test ${fixture}`);
+  assert.equal(r.error, undefined, 'nested node --test spawned and finished');   // backstop: capSync already throws on r.error
   return { status: r.status, out: r.stdout, err: r.stderr, died: (r.stdout + r.stderr).split('\n').filter((l) => l.startsWith('FILE DIED ')) };
 }
 
