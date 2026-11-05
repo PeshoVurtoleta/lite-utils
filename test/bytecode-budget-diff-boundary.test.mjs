@@ -175,6 +175,8 @@ test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the 
     const want = parityBase(), got = parity(SCRIPT);
     for (let i = 0; i < want.length; i++) {
         assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
+        // `all > 0 ? 1 : 0` assumes every base case that spawned at all passed its --version probe (only then does the live
+        // build reach its one --v8-options read); the parity fake always answers --version with exit 0, so this holds here
         assert.equal(got[i].v8, want[i].v8 + (want[i].all > 0 ? 1 : 0), `parity case ${want[i].name}: --v8-options reads (base ${want[i].v8} of ${want[i].all} spawns)`);
     }
 });

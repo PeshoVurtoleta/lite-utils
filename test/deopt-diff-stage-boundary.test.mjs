@@ -133,7 +133,9 @@ function shimDir(dir) {   // a logging mktemp first on PATH (macOS mktemp ignore
 }
 
 // ---- one case = one fresh dir: fake node (logs "$PWD|argv"), tmp, cwd, live file, OUT path; removed in finally ----
-// Fake node: --version prints v26.8.2; else cats ./trace.txt (cwd = OUT/stage/<side>), on the after side also cats
+// Fake node: --version prints v26.8.2; --v8-options prints two flag entries (--allow-natives-syntax bool,
+// --max-inlined-bytecode-size int default 460) and exits 0; neither probe bumps ./calls. Else cats ./trace.txt
+// (cwd = OUT/stage/<side>), on the after side also cats
 // $FAKE_AFTER_EXTRA; at driver call $FAKE_HANG_AT it touches $FAKE_READY and sleeps (the SIGTERM row).
 function mkCase() {
     const dir = mkdtempSync(join(ROOT, 'c-'));

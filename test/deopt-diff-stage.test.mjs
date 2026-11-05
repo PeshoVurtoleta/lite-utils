@@ -97,7 +97,9 @@ function variant(name, edits) {
 }
 
 // ---- one case = one fresh dir: fake node, tmp, cwd, live file, OUT path; removed in finally ----
-// Fake node (/bin/sh): logs every call; --version exits FAKE_VER_RC or prints v26.8.2; else cats ./trace.txt (cwd = OUT/stage/<side>),
+// Fake node (/bin/sh): logs every call; --version exits FAKE_VER_RC or prints v26.8.2; --v8-options prints two flag
+// entries (--allow-natives-syntax bool, --max-inlined-bytecode-size int default 460) and exits 0; neither probe bumps
+// ./calls, so it counts driver spawns only (2R). Else cats ./trace.txt (cwd = OUT/stage/<side>),
 // at call FAKE_AT rewrites FAKE_LIVE from FAKE_LIVE_SRC (after reading), and on the after side also cats FAKE_AFTER_EXTRA / exits FAKE_AFTER_RC.
 function mkCase() {
     const dir = mkdtempSync(join(ROOT, 'c-'));
@@ -205,6 +207,9 @@ const F_LIVE = {
         assert.equal(r.status, 0, msg(r));                                   // red on M-cp-ln (cp -> ln -s): after runs 2-3 read r2 -> null control, exit 2
         assert.equal(has(r, 'VERDICT SAME'), 1, msg(r));
         assert.equal(readFileSync(join(c.out, 'stage', 'after', 'trace.txt'), 'utf8'), T_R1);
+        // the counter counts driver spawns only (--version / --v8-options exit before it): R = 3 (default --runs) -> 2R = 6.
+        // Red when a probe is counted (FAKE_AT=3 would then land on driver call 2 or 1, and this row would still exit 0).
+        assert.equal(readFileSync(join(c.dir, 'calls'), 'utf8'), '6\n', 'fake node driver-call counter != 2R (6)');
     },
 };
 row('A1 file: the live --after rewritten at node call 3 -> exit 0 (the staged copy protects it)', F_LIVE);

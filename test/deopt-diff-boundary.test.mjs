@@ -60,8 +60,9 @@ function mktempShim(dir) {
 }
 
 // A fake node (bash): logs "<basename of its cwd>|<argv>" per spawn to its OWN dir (never cwd / TMPDIR), exits 7 if
-// NODE_OPTIONS reached it, answers --version with v26.8.2, else cats ./trace.txt of its cwd (the driver's dir) and
-// exits with ./rc (or 0). Driver dirs: name -> { trace, rc }.
+// NODE_OPTIONS reached it, answers --version with v26.8.2 and --v8-options with two flag entries (--allow-natives-syntax
+// bool, --max-inlined-bytecode-size int default 460), both exit 0; else cats ./trace.txt of its cwd (the driver's dir)
+// and exits with ./rc (or 0). Driver dirs: name -> { trace, rc }.
 function rig(dir, drivers) {
     const fk = join(dir, 'fk');
     mkdirSync(fk);

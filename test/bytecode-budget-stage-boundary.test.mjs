@@ -465,7 +465,7 @@ exec ${JSON.stringify(realAwk)} "$@"
 `);
         chmodSync(join(d, 'bin', 'awk'), 0o755);
         const ch = spawn('bash', [script, '--self-test'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), PATH: `${join(d, 'bin')}:${process.env.PATH}` } });
-        let out = '', killed = false, exited = false, ok = false, wasReady = false;
+        let out = '', killed = false, exited = false, ok = false, wasReady = false, waitedOut = false;
         const group = (sig) => { try { process.kill(-ch.pid, sig); } catch { /* group gone */ } };
         ch.stdout.on('data', (b) => { out += b; ok = ok || /^ok {3}/m.test(out); });
         ch.stderr.on('data', () => {});
@@ -475,7 +475,7 @@ exec ${JSON.stringify(realAwk)} "$@"
             for (let i = 0; i < 3000 && !exited && !(ok && existsSync(ready)); i++) await new Promise((r) => setTimeout(r, 20));
             wasReady = existsSync(ready);
             if (!exited && ok && wasReady) { killed = true; group('SIGINT'); hard = setTimeout(() => group('SIGKILL'), 30000); }
-            else group('SIGKILL');   // never ready (or exited first): no SIGINT, no 300 s sleep left behind
+            else { waitedOut = !exited; group('SIGKILL'); }   // never ready (or exited first): no SIGINT, no 300 s sleep left behind
         })();
         ch.on('close', (code, signal) => {
             if (hard) clearTimeout(hard);
@@ -485,13 +485,15 @@ exec ${JSON.stringify(realAwk)} "$@"
             const left = dirs.filter((x) => existsSync(x));
             const hasAdd = left.some((x) => existsSync(join(x, 'add')));
             for (const x of left) rmSync(x, { recursive: true, force: true });   // the test cleans what the script left
-            resolve({ code, signal, killed, wasReady, dirs, left, hasAdd, out });
+            resolve({ code, signal, killed, wasReady, waitedOut, ok, dirs, left, hasAdd, out });
         });
     });
 }
 const sigCheck = (s) => {
     assert.ok(s.wasReady, 'the self-test never reached the awk call on its "names" fixture (after the first ok line)');
-    assert.ok(s.killed, 'no ok line before exit');
+    assert.ok(s.killed, s.waitedOut
+        ? `the 60 s wait ran out (ok line seen: ${s.ok}, awk "names" call reached: ${s.wasReady}); the group was SIGKILLed, no SIGINT sent`
+        : `the self-test exited before the SIGINT was sent (${s.ok ? 'ok line seen, then exit' : 'no ok line before exit'})`);
     assert.ok(s.signal === 'SIGINT' || s.code === 130, `not terminated by SIGINT: code=${s.code} sig=${s.signal}`);
     assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
     assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);
