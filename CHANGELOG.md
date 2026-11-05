@@ -33,16 +33,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an
   empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags`
   of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
-  `--self-test` (54 canned checks; the 4 ref / file rows need git: with no git on PATH they are one
+  `--self-test` (54 canned checks, 57 after MD-46; the 4 ref / file rows need git: with no git on PATH they are one
   FAIL line and `--self-test` exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
-  DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 152 tests): the exact self-test
-  counts (54 and 54+24), 24 self-test mutant rows (17 report/gate, 3 of them on the length cap and 5 on the
-  B-four refusals, + 7 diff) plus a NODE_OPTIONS-leak and a version-prefix mutant that must each be caught,
-  gate rows on a fake node, 48 refusal rows with 0 node spawns (41 report/gate + 7 diff), the driver cwd,
-  spawn and retention counts (8 spawns for 3 fns x 2 runs), and a live pair on node v26.8.2 (`mid=211` exit 0,
-  `mid=210` exit 1; on any other node the pair must exit 2 with a version-mismatch NO-VERDICT).
-  REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
+  DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 152 tests; 161 after MD-46, 162 after
+  Q-H1): the exact self-test counts (54 and 54+24; 57 and 81 after MD-46), 24 self-test mutant rows (17 report/gate,
+  3 of them on the length cap and 5 on the B-four refusals, + 7 diff) plus a NODE_OPTIONS-leak and a version-prefix
+  mutant that must each be caught, gate rows on a fake node, 48 refusal rows with 0 node spawns (41 report/gate + 7
+  diff), the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs; 9 after MD-46), and a live pair on
+  node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must exit 2 with a version-mismatch
+  NO-VERDICT). REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
   distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
   load1 2.31 before / 2.49 after, 4 other node processes before / 8 after, none >= 10% CPU before,
   one after (another package's `node --test`)).
@@ -58,8 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fns (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. The head names
   `before` and `after` with each driver's `sha256/8`. `--out DIR` keeps `report.txt` plus
   `raw/before/<fn>.<k>.txt` and `raw/after/<fn>.<k>.txt` (gate and report mode still write
-  directly under `raw/`). Spawns: 1 `--version`, 1 `--v8-options`, then fn x runs x 2 probes
-  (3 fns x 2 runs = 14). Refuses with exit 2 and 0 spawns: `--diff` with `--max`, a count of
+  directly under `raw/`). Spawns: 1 `--version`, 1 `--v8-options` (2 after MD-46), then fn x runs x 2 probes
+  (3 fns x 2 runs = 14; 15 after MD-46). Refuses with exit 2 and 0 spawns: `--diff` with `--max`, a count of
   DRIVERs other than two, `--diff` twice, `--diff=x`, `--self-test` with `--diff`, and two
   DRIVERs without `--diff` (unchanged). Tier: DETERMINISTIC (both drivers on the same node binary;
   any run-to-run change on either side is NO-VERDICT). Gated in `test/bytecode-budget.test.mjs`:
@@ -81,14 +81,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   numeric, not text, ascending order of the count lines (9 20 100 3000); the `--runs` refusal matrix
   (1, 21, 0, -1, -0, NaN, null, undefined, 020, 1.5, 2e1 and the 2^30 .. 2^53 values up to
   9007199254740992, plus `--fn mid,mid` and an empty `--runs=`: exit 2, 0 spawns) and `--runs` 2 / 20 /
-  02 running 6 / 42 / 6 spawns; the length matrix (L | L -> SAME and L | L+1 -> DIFF at L = 0, 1,
-  99999999, 100000000, 999999998; 999999999 | 1000000000 -> NO-VERDICT on the after side only; a
+  02 running 6 / 42 / 6 spawns (7 / 43 / 7 after MD-46); the length matrix (L | L -> SAME and L | L+1 -> DIFF at L =
+  0, 1, 99999999, 100000000, 999999998; 999999999 | 1000000000 -> NO-VERDICT on the after side only; a
   length of 10+ digits (1000000000, 2^30, 2^31-1, 2^32, 2^53, 2^53+1, 20 digits) on both sides ->
   NO-VERDICT unknown format, never SAME or DIFF, which M-no-cap (the 686de5bf length scan) turns
   red); the diff-mode `--node-version` check
-  (a match runs 6 spawns; a mismatch exits 2 after exactly 1 spawn, one NO-VERDICT line per fn);
-  exact function names (`read` never matches `read.set`, `readAll`, `Store.read`); driver stderr (plain
-  stderr keeps the verdict; a header-shaped stderr line is NO-VERDICT, unknown format); the same
+  (a match runs 6 spawns, 7 after MD-46; a mismatch exits 2 after exactly 1 spawn, 2 after MD-46, one NO-VERDICT
+  line per fn); exact function names (`read` never matches `read.set`, `readAll`, `Store.read`); driver stderr
+  (plain stderr keeps the verdict; a header-shaped stderr line is NO-VERDICT, unknown format); the same
   basename for both drivers (each side runs with cwd = its own dir); `--out` into an existing
   directory (other files kept, `raw/before` and `raw/after` created; a `raw/` holding an empty
   `before/` is refused with 0 spawns); an adversarial driver (BEFORE rewrites the AFTER capture
@@ -139,8 +139,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `<top>/<same name>`; a git error while checking (e.g. safe.directory "dubious ownership") reads as
   untracked, so a tracked `--before` behind it is not refused. Tier: DETERMINISTIC (one node binary;
   each staged side keeps its null control). Gated in `npm test` by
-  `test/bytecode-budget-stage.test.mjs` (119 tests; they need git and skip without it): verdict rows
-  on a fake node whose length is the staged module's bytes (r1 = 211, r2 = 212, hand-derived),
+  `test/bytecode-budget-stage.test.mjs` (119 tests, 123 after MD-46; they need git and skip without it): verdict
+  rows on a fake node whose length is the staged module's bytes (r1 = 211, r2 = 212, hand-derived),
   refusal rows (exit 2, 0 spawns, the OUT dir is not created, except the stage-not-empty row, which
   starts from an existing OUT holding stage/junk and a 4-byte report.txt and leaves it as it was:
   report.txt still 4 bytes, no raw/), each row also run on the pre-staging build 9173830d (`git show
@@ -150,13 +150,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   M7-M13, M-stage-order, M-git-env (x4), M-relimport-sibling-staged (ref + file), G2 x3, U1-U3 and
   STAGE_SAME-forced-1, each of which must turn its row red; retention (20 ref runs, each into a new
   `--out`: 0 entries left in TMPDIR and the cwd, the repo untouched, exactly 17 files per `--out`)
-  with a mutant that stages under TMPDIR; and the `--self-test` count rows (54 ok, with the 4 staged
+  with a mutant that stages under TMPDIR; and the `--self-test` count rows (54 ok, 57 after MD-46, with the 4 staged
   checks present once each, absent from the 9173830d build; self-test mutants M7 and M10; a PATH
-  without git -> exit 1 with one FAIL line; the six GIT_* vars set -> still 54 ok; the 9173830d build
-  stays at 45). No REPORTED (timed or measured) numbers exist for this entry.
+  without git -> exit 1 with one FAIL line; the six GIT_* vars set -> still 54 ok (57 after MD-46); the 9173830d
+  build stays at 45). No REPORTED (timed or measured) numbers exist for this entry.
 - `bytecode-budget.sh --diff` ref / file staging, QA boundary rows. Tier: DETERMINISTIC. Gated in `npm test`
-  by `test/bytecode-budget-stage-boundary.test.mjs` (63 tests; they need git and skip without it): 24
-  boundary rows, each with a teeth twin on the pre-staging build 9173830d (`git show
+  by `test/bytecode-budget-stage-boundary.test.mjs` (63 tests, 64 after CI on Linux; they need git and skip without
+  it): 24 boundary rows, each with a teeth twin on the pre-staging build 9173830d (`git show
   6835177:bytecode-budget.sh`) where it must exit 2 "unknown option" and its own check must go red; 5
   `--self-test` rows (a real git < 2.32, skipped here; an emulated git < 2.32 and its 9173830d twin; a
   SIGINT run on this build and on 9173830d); and 10 one-edit mutant tests (8 distinct exact-once edits of a
@@ -166,9 +166,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   existing but empty `OUT/stage` (allowed) versus one holding a file (refused), and a `--self-test` run with
   a git older than 2.32. A real git < 2.32 row is skipped on git 2.54.0. KNOWN GAPS, pinned as current
   behaviour (not features; each is a later code fix): a git-tracked symlink as `--module` stages the link
-  and ends NO-VERDICT (driver exits non-zero) after 6 spawns; `git replace` of the module's blob changes the
-  staged bytes (the script does not pass `--no-replace-objects`); `OUT/stage` as a regular file is refused
-  with the reason "--out: <OUT>/stage is not empty (give a new or empty DIR)"; an emulated
+  and ends NO-VERDICT (driver exits non-zero) after 6 spawns (7 after MD-46); `git replace` of the module's blob
+  changes the staged bytes (the script does not pass `--no-replace-objects`); `OUT/stage` as a regular file is
+  refused with the reason "--out: <OUT>/stage is not empty (give a new or empty DIR)"; an emulated
   git < 2.32 with `tag.gpgSign=true` makes `--self-test` exit 1
   (its tag helper lacks `-c tag.gpgSign=false`); SIGINT during `--self-test` leaves its temp dir (no INT /
   TERM trap; pre-existing, not new in group 2b). `npm test`: 401 tests, 400 pass, 1 skip, 0 fail (node
@@ -204,26 +204,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   driver exit), `driver exited <rc> in run <k>`, an X record (unparseable line, or a NUL / glued
   `[bailout` that BSD awk would have cut), a null-control difference in E or D records, and no E and
   no D record in run 1. Every refused argument exits 2 before any spawn and before anything is
-  written; spawns are one `node --version` plus 2 x runs. Maintainer decisions: the bytecode offset
-  is not in the key; the null control covers E and D; a deopt counts only for the JSFunction on the
-  bailout line (an inlinee's deopt counts for its caller); a dependency invalidation of code not on
-  the stack (no bailout line) and a driver that itself prints `[bailout` / `[completed compiling `
+  written; spawns are one `node --version` plus 2 x runs (after MD-46 also one `node --v8-options`). Maintainer
+  decisions: the bytecode offset is not in the key; the null control covers E and D; a deopt counts only for the
+  JSFunction on the bailout line (an inlinee's deopt counts for its caller); a dependency invalidation of code not
+  on the stack (no bailout line) and a driver that itself prints `[bailout` / `[completed compiling `
   at line start (read as V8 trace output) are Not detected; `--runs` default 3. Tier: `--self-test`
   is DETERMINISTIC (canned trace text and a fake node that counts spawns); a verdict on a user
   driver is STATISTICAL (deopts follow tier-up timing; run it under the host quiet lock). Gated in
-  `npm test` by `test/deopt-diff.test.mjs` (137 tests): the exact self-test count (89), an unmodified
-  copy outside the repo, 36 mutants of the script, each of which must turn its own self-test row red (and each
-  with a revert row: the kill assertion fails on the unmutated run), 5 more (OUT_MUTANTS M36, M37, M40, M42,
-  M44, the B-four refusals: each kills exactly one of checks 85-89, plus a revert row), a 16-row tier mutant
-  table (G1-G6, V1-V3, TW1-TW7: each must turn its designed T row(s) red, each with a revert row), 2 controls
-  that must survive (an awk crash the old records helper swallowed), `-h`, and 3 end-to-end rows on a fake
-  node with their revert rows (a glued `[completed compiling` line, `abc<CR>[bailout`, a CRLF bailout line:
-  each NO-VERDICT with its own reason).
+  `npm test` by `test/deopt-diff.test.mjs` (137 tests; 141 after MD-46, 145 after CI on Linux, 146 after the b38 cap
+  row): the exact self-test count (89; 92 after MD-46), an unmodified copy outside the repo, 36 mutants of the
+  script, each of which must turn its own self-test row red (and each with a revert row: the kill assertion fails on
+  the unmutated run), 5 more (OUT_MUTANTS M36, M37, M40, M42, M44, the B-four refusals: each kills exactly one of
+  checks 85-89, plus a revert row), a 16-row tier mutant table (G1-G6, V1-V3, TW1-TW7: each must turn its designed T
+  row(s) red, each with a revert row), 2 controls that must survive (an awk crash the old records helper swallowed),
+  `-h`, and 3 end-to-end rows on a fake node with their revert rows (a glued `[completed compiling` line,
+  `abc<CR>[bailout`, a CRLF bailout line: each NO-VERDICT with its own reason).
   `test/deopt-diff-boundary.test.mjs` (111 tests) adds outside rows, each with a mutant row that must turn
   it red: retention over 3 cycles of SAME / DIFF / NO-VERDICT without `--out` (cwd, TMPDIR and a
-  logging mktemp shim stay empty; 7 spawns each), the self-test leaving 0 dirs (also when killed by
-  SIGTERM mid-run), `--runs` 2 / 20 / 08 / 09 (5 / 41 / 17 / 19 spawns, before / after alternating,
-  exact argv), 26 refused `--runs` values,
+  logging mktemp shim stay empty; 7 spawns each, 8 after MD-46), the self-test leaving 0 dirs (also when killed by
+  SIGTERM mid-run), `--runs` 2 / 20 / 08 / 09 (5 / 41 / 17 / 19 spawns, 6 / 42 / 18 / 20 after MD-46, before / after
+  alternating, exact argv), 26 refused `--runs` values,
   11 further refusals and 7 `--out` refusals (exit 2, 0 spawns, OUT unchanged), and A4 parity of
   inlining-budget-diff.sh 740da13b. REPORTED (not gated; one
   PRELIMINARY run under the quiet lock, 2026-11-02 20:43 EET, Darwin arm64, node v26.8.2,
@@ -242,9 +242,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not the same file as `--after`). `--out DIR` is required and `DIR/stage` must be absent or an
   empty directory (a regular file, a symlink to a file or a dangling symlink at `DIR/stage` is
   refused: `--out: DIR/stage exists and is not a directory`, exit 2, 0 spawns, nothing written);
-  after the `node --version` spawn, `DIR/stage/before` and `DIR/stage/after` each get the module
-  as NAME plus a copy of the driver, and each side runs from there (the driver must import
-  `./NAME`; a module with relative imports of its own fails closed: NO-VERDICT). Nothing is
+  after the `node --version` spawn (and, after MD-46, the `--v8-options` read), `DIR/stage/before` and
+  `DIR/stage/after` each get the module as NAME plus a copy of the driver, and each side runs from there (the driver
+  must import `./NAME`; a module with relative imports of its own fails closed: NO-VERDICT). Nothing is
   written before `node --version` succeeds. The head gains a `driver  <abs>  sha256/8 x` line (x =
   the staged copy's) and the mode line reads `diff (ref)` or `diff (file)`. When the two staged
   modules are byte-identical a NOTE line says the run is a null control (expect SAME), and a DIFF
@@ -266,11 +266,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   byte-identical DIFF -> NO-VERDICT; R1-R14: refusals, each with its own die line), 53 -> 71 checks;
   with no git on PATH, or a failed repo set-up, the 18 rows are ONE FAIL line. Its git calls are
   isolated (no editor, global or system config, hooks or signing; the six `GIT_*` variables unset).
-  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin now 89) and
+  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin now 89; 92 after MD-46) and
   `test/deopt-diff-stage.test.mjs` (65 tests: 22 verdict / refusal rows, each with a twin that must
   exit 2 `unknown option` and go red on the pre-group build; 11 exact-once mutants; 2 retention
-  rows, 20 staged runs = 140 spawns and 11 files per OUT; 8 self-test rows: env, no git, two control
-  mutants, the pre-group count) and `test/deopt-diff-stage-boundary.test.mjs` (95 tests: 40
+  rows, 20 staged runs = 140 spawns (160 after MD-46) and 11 files per OUT; 8 self-test rows: env, no git, two
+  control mutants, the pre-group count) and `test/deopt-diff-stage-boundary.test.mjs` (95 tests: 40
   boundary rows of the ref / file modes -- 35 new behaviour, 2 pre-existing --runs refusals, 3
   KNOWN GAP pins -- each with a twin on the pre-group build; 1 parity row + twin; retention over 3
   cycles of SAME / DIFF / NO-VERDICT / refusal and a SIGTERM mid-run, each row + twin + mutant; 7
@@ -297,15 +297,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   writer (`console.log`, `process.stdout.write`) is not proven to keep its order against the trace
   under a full pipe, and ops are only as fine as the marker spacing. Tier: REPORTED, gates nothing;
   it never moves the exit code or a verdict line, and every non-`tier` line stays byte-identical.
-  `--self-test` gains 13 tier rows (T1-T13), 71 -> 84 checks (89 after the B-four refusals), gated by a
-  16-row tier mutant table in `test/deopt-diff.test.mjs`.
+  `--self-test` gains 13 tier rows (T1-T13), 71 -> 84 checks (89 after the B-four refusals; 92 after MD-46), gated
+  by a 16-row tier mutant table in `test/deopt-diff.test.mjs`.
 
 - `deopt-diff.sh --self-test --fixtures DIR` (Phase 3 group 4): 17 more rows, F1-F17 ("ok fixture ..."), read
   from the real node v26.8.2 traces in DIR (`test/fixtures/deopt-diff/node-26.8.2`; each `<driver>.txt`
   through the record awk and the tier section, `deopt.txt` and `mono.txt` end to end through the fake node;
-  0 real-node spawns), so a clean run is 89 -> 106 checks; plain `--self-test` stays 89. A missing or
-  unreadable `<driver>.txt` is one more "FAIL fixture <driver>.txt: missing or not a readable file" line
-  (exit 1) and the rows reading it get empty text. New refusals, each exit 2 before any spawn:
+  0 real-node spawns), so a clean run is 89 -> 106 checks (92 -> 109 after MD-46); plain `--self-test` stays 89 (92
+  after MD-46). A missing or unreadable `<driver>.txt` is one more "FAIL fixture <driver>.txt: missing or not a
+  readable file" line (exit 1) and the rows reading it get empty text. New refusals, each exit 2 before any spawn:
   "--self-test takes only --fixtures DIR", "--fixtures goes with --self-test", "--fixtures: a newline is not
   allowed", "--fixtures: not a readable directory: DIR". The hot body is unchanged. Tier: the `--fixtures`
   self-test and the natives pair below are DETERMINISTIC. Gated in `test/deopt-diff.test.mjs` (+12 tests: the
@@ -314,10 +314,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   revert rows) and `test/deopt-diff-boundary.test.mjs` (+27: 9 rows over the four refusals, each with a teeth
   mutant and a revert row, 0 spawns).
 - `test/deopt-diff-live.test.mjs` (5 tests): `deopt-diff.sh` driver mode on REAL node (the S-8 natives pair),
-  7 node spawns each, no `--out`. L1: `--fn add --v8-flags --allow-natives-syntax deopt.mjs mono.mjs` exits 1
-  with `VERDICT DIFF` and `before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)`; L2: `deopt.mjs`
-  against a byte-identical copy exits 0 with SAME. Exit codes are asserted on every node, the exact lines
-  on node v26.8.2 only (MD-21 (a)). Mutants Z1 (the D print removed: L1 exits 0) and Z2 (the D record is
+  7 node spawns each (8 after MD-46), no `--out`. L1: `--fn add --v8-flags --allow-natives-syntax deopt.mjs
+  mono.mjs` exits 1 with `VERDICT DIFF` and `before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)`; L2:
+  `deopt.mjs` against a byte-identical copy exits 0 with SAME. Exit codes are asserted on every node, the exact
+  lines on node v26.8.2 only (MD-21 (a)). Mutants Z1 (the D print removed: L1 exits 0) and Z2 (the D record is
   the whole trace line: L1 and L2 exit 2) must go red. Tier: DETERMINISTIC.
 - `test/fixtures/deopt-diff/node-26.8.2/`: real node v26.8.2 traces (S-9), captured verbatim with
   `--allow-natives-syntax --trace-deopt-verbose --trace-opt --no-concurrent-recompilation` (NODE_OPTIONS
@@ -345,10 +345,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   v8-version line count != 1, a NUL byte, no final newline, and when fn has no IC site or only X sites
   in run 1 (hint `--v8-flags=--no-lazy-feedback-allocation`). Every spawn runs under `env -u
   NODE_OPTIONS -u NODE_COMPILE_CACHE`: one `--version`, one `--v8-options`, then 2 x runs trace runs
-  (runs 3: 8 spawns); a failing probe exits 2 before anything is written. Refuses before any spawn or
-  disk write (exit 2): a repeated or empty value option, a newline in `--fn` / `--v8-flags` / `--out` /
-  `--node`, a stray comma in `--fn`, a repeated fn, an unknown option (a did-you-mean hint when it
-  shares a prefix with a known option), a `--v8-flags` flag matching `*log*`, `*prof*`,
+  (runs 3: 8 spawns; 9 after MD-46, which adds the allowlist `--v8-options` read first); a failing probe exits 2
+  before anything is written. Refuses before any spawn or disk write (exit 2): a repeated or empty value option, a
+  newline in `--fn` / `--v8-flags` / `--out` / `--node`, a stray comma in `--fn`, a repeated fn, an unknown option
+  (a did-you-mean hint when it shares a prefix with a known option), a `--v8-flags` flag matching `*log*`, `*prof*`,
   `*concurrent-recompilation*`, `*interpreted-frames-native-stack*` or `*snapshot*`, a node binary that
   does not exist, and a non-empty `DIR/raw`. An IC pc, code-creation start or code-move from / to wider
   than `0x` + 13 hex digits is an X line (awk sums those in a double, exact to 2^53); a driver file name
@@ -357,7 +357,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   + 1 files. The header carries `v8-opts sha256/8 <x>` (the hash of the `--v8-options` byte stream),
   REPORTED, never part of the verdict. Tier: on a user driver the verdict is STATISTICAL (IC states
   follow warm-up, GC and tier-up timing; run it under the host quiet lock) and gated nowhere;
-  `--self-test` is DETERMINISTIC. `--self-test` (72 checks, no real node): canned node v26.8.2
+  `--self-test` is DETERMINISTIC. `--self-test` (72 checks, 75 after MD-46; no real node): canned node v26.8.2
   `--log-ic` text through the record awk, judge and diff_fn (records, every X reason, the
   basename-collision and keyed-Symbol rows), then the script end to end on a fake node that counts
   spawns and mktemp calls (spawn budget, exact probe argvs, env stripped on every spawn, 13 files under
@@ -368,10 +368,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `-h`): after a run with != 1 isolate file, those files stay in the run dir and later runs of that side
   count them too (still NO-VERDICT). Not yet in this group: ref / file modes, per-kind IC totals and
   `--deterministic`, the map section (G3), the natives control pair and node fixtures (G4).
-- `test/ic-diff.test.mjs` (171 tests): `--self-test` exact count (72), an unmodified-copy baseline, a row table
-  that names each printed check, 76 self-test mutant rows (each an exact-once edit of a temp copy
-  that must turn the self-test red on its designed rows, each with a revert check on the unmutated
-  copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs, is
+- `test/ic-diff.test.mjs` (171 tests; 177 after MD-46): `--self-test` exact count (72; 75 after MD-46), an
+  unmodified-copy baseline, a row table that names each printed check, 76 self-test mutant rows (each an exact-once
+  edit of a temp copy that must turn the self-test red on its designed rows, each with a revert check on the
+  unmutated copy; the one mutant that survives on bash 3.2, an INT / TERM landing while mktemp runs, is
   host-semantics and not in the table), the exit wiring (a flipped expectation gives exit 1 and one
   FAIL), the `-h` text with its revert checks, and 6 rows on the file's own fake node, each with
   revert checks (spawn and mktemp counts, 13 files under `--out`, retention, a `-x.js` driver, the
@@ -389,13 +389,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unparseable trace, a missing guard count, an old-generation GC in the window, a driver failure and a
   failed null control (runs 2..N must give run 1's multiset). The `-h` text holds the driver contract,
   every record and NO-VERDICT reason, and the Not detected list. Tier: the script logic is
-  DETERMINISTIC (`--self-test`, 76 checks, no real node); a verdict on a user driver is STATISTICAL,
+  DETERMINISTIC (`--self-test`, 76 checks, 78 after MD-46, no real node); a verdict on a user driver is STATISTICAL,
   REPORTED only (no statistical host in this repo).
-- `test/allocation-diff.test.mjs`: `--self-test` exact count (76) on the in-repo script and a copy
+- `test/allocation-diff.test.mjs`: `--self-test` exact count (76; 78 after MD-46) on the in-repo script and a copy
   outside the repo, one row per printed check, self-test mutant rows (each an exact-once edit of a temp
   copy that must turn the self-test red at its designed rows, with a revert check on the unmutated
   copy), the exit wiring, `-h` / `--help` exit 2, and refusal rows on the file's own fake node and
-  mktemp shim. 200 tests. DETERMINISTIC; no real V8 run.
+  mktemp shim. 200 tests (206 after MD-46, 208 after CI on Linux). DETERMINISTIC; no real V8 run.
 - `deopt-diff.sh` / `bytecode-budget.sh` / `ic-diff.sh` / `allocation-diff.sh`: `--v8-flags` is a runtime allowlist
   (`lib/v8flags.sh`, MD-46 G1-G5, MD-50..58; one shared entry, per-tool deltas below). Right after its `--version`
   probe each tool makes one `node --v8-options` read (even with no `--v8-flags`), then every token must be a V8
@@ -407,7 +407,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refusal that spawned nothing before still spawns nothing (MD-55). `deopt-diff`: the read is before the `--out`
   mkdir; 2 + 2R spawns (8 at R=3); self-test 92 checks (+17 with `--fixtures`). `bytecode-budget`: the read sits
   after its `--out` / stage writes (MD-57), so a refusal leaves `OUT/raw` empty and `report.txt` 0 bytes; +1 spawn
-  per run; self-test 57 (81 with `--fixtures`). `ic-diff`: 3 + 2R spawns (9 at R=3); a refusal comes before any disk
+  overall; self-test 57 (81 with `--fixtures`). `ic-diff`: 3 + 2R spawns (9 at R=3); a refusal comes before any disk
   write or trace run; self-test 75. `allocation-diff`: a refusal is before the trap / mktemp; 8 spawns at `--runs 3`
   (5 with `--zero`); self-test 78. Hot bodies are byte-identical. DETERMINISTIC (`test/v8flags.test.mjs`, every
   tool's test file, `test/ext-audit*.test.mjs`, `test/build.test.mjs` include roster); the `-h` of each tool carries
@@ -435,6 +435,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reads "Refused, exit 2 at the latest after one --v8-options read": in deopt-diff, bytecode-budget and
   allocation-diff a node option is refused after the --version probe and that read (2 spawns); ic-diff refuses
   `--cpu-prof` and `--snapshot-blob` by its own checks at 0 spawns, its other node options after 2.
+- CI-TIMEOUT (burst 38, test side only; not yet confirmed by CI, needs a push): on CI run 42056284029 (218bb48) the
+  `deopt-diff.test.mjs` NUL-shim control run was killed at its 180 s cap on the macOS node 22 and node 26.8.2 legs,
+  and the plain self-test row used about 90% of its 120 s cap. Per-run caps in `test/deopt-diff.test.mjs`: plain
+  self-test 360 s, the NUL-shim control run 900 s, mutant runs stay 180 s; a run its cap kills now fails as "timed
+  out after <cap> ms" (one gate row: a 5 s fake self-test at a 300 ms cap must time out, at 60000 ms it must exit 0,
+  which is the +1 test) and the NUL control row logs its elapsed ms. Per-spawn caps raised where one spawn used 50%
+  or more of its cap on that run: `deopt-diff-boundary` fxRow and selfTestRun 240 s, `ext-audit-alloc` B2 480 s,
+  `v8flags` run() 420 s. The rule was a new cap of at least 3x the longest CI row, rounded up to a multiple of 60 s,
+  at most 900 s. `package.json` "test" now runs `node --test --test-timeout=1800000` (maintainer ruling Q-TT1,
+  2026-11-05: 30 min per test), so a hung async test fails by name instead of using up the 120-minute CI job. No
+  script, lib or hot path changed.
+- SIGINT-FLAKE (burst 38, test side only): `bytecode-budget-stage-boundary` row 9 (`--self-test` SIGINT after its
+  first ok line -> killed by SIGINT, its temp dir left behind) failed once on CI (b692aa0, node 22) with code=0
+  because the signal could land after the self-test had finished. The row now puts an awk PATH shim first and sends
+  SIGINT to the process group only once the self-test is provably blocked after its first ok line (the shim catches
+  the self-test's awk call on its `names` file, which is written after that line, then writes `ready` and sleeps);
+  no `ready` within the bound means SIGKILL and a failed row, never a SIGINT. All assertions kept; the 9173830d base
+  row uses the same shim. The file stays at 64 tests. Linux not yet verified (no local bash 5 / uutils); the next CI
+  push is the check.
+- EA-NITS (burst 38, test side only): the `ext-audit.test.mjs` ic and bb `--v8-flags` allowlist refusal rows also
+  pin `VERDICT NO-VERDICT` exactly once and 0 stdout bytes; a dead ic `acceptedRow` helper was removed. The file
+  stays at 224 tests.
 
 ### Changed
 
@@ -521,7 +543,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `--out` with such a `..` writes into the directory that was checked and the header prints its
     physical path.
   Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (205 tests in the file: 65 in the
-  `ic-diff.sh` block, 140 in the bb / dd block; fake nodes, no V8 run; the first 72 rows (bb 35 /
+  `ic-diff.sh` block, 140 in the bb / dd block; 224 after MD-46; fake nodes, no V8 run; the first 72 rows (bb 35 /
   dd 37) are red on 8070907's scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907
   already had: the controls B4B x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is
   red there). In `npm test`.
@@ -569,8 +591,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     exited 2 "--out: cannot create DIR/raw/before and DIR/raw/after").
   Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (the ic block: fake nodes, no V8 run; the
   F2 pin of the 12fa753 era became N29 "F2 closed", with walk rows N30-N36, N33 a control) and
-  `test/ic-diff.test.mjs` (`--self-test` prints "self-test: 72 check(s) ok"; checks 64 and 65 are the
-  node refusals "node binary is not an executable file: ./nonode" and "node binary not found: nonode", and
+  `test/ic-diff.test.mjs` (`--self-test` prints "self-test: 72 check(s) ok", 75 after MD-46; checks 64 and 65 are
+  the node refusals "node binary is not an executable file: ./nonode" and "node binary not found: nonode", and
   checks 66-72 are the --out walk and the B-four refusals, see the F2 and B-four bullets). In `npm test`.
 
 - `deopt-diff.sh`, `bytecode-budget.sh`, `ic-diff.sh`, external-audit group B-four (exit 2 refusals, all before
@@ -653,9 +675,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     paths are joined with `${X%/}`, so a node or DRIVER directly under `/` prints `/<name>`, not `//<name>`.
   - `--self-test` 73 -> 76 checks: the new last three are MD-39 (env-file / config-file), MD-42 (module
     loaders) and MD-44 (eval / print).
-  Tier: DETERMINISTIC. Gated in `test/ext-audit-alloc.test.mjs` (50 tests; fake nodes, no V8 run; each
-  refusal row asserts exit 2, the exact die line once, 0 spawns, 0 mktemp and 0 new entries; on
+  Tier: DETERMINISTIC. Gated in `test/ext-audit-alloc.test.mjs` (50 tests, 55 after MD-46; fake nodes, no V8 run;
+  each refusal row asserts exit 2, the exact die line once, 0 spawns, 0 mktemp and 0 new entries; on
   73508a2's `allocation-diff.sh` 42 are red and 8 are controls that pin behavior it already had; on the
-  fixed script all 50 are green) and `test/allocation-diff.test.mjs` (200 tests; `--self-test` prints
-  "self-test: 76 check(s) ok"). `test/death-signature.test.mjs` lists the new file among the await-free
-  spawnSync files. In `npm test`.
+  fixed script all 50 are green) and `test/allocation-diff.test.mjs` (200 tests, 206 after MD-46, 208 after CI on
+  Linux; `--self-test` prints "self-test: 76 check(s) ok", 78 after MD-46). `test/death-signature.test.mjs` lists
+  the new file among the await-free spawnSync files. In `npm test`.
