@@ -414,7 +414,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Phase 2 freeze, MD-32 (a)); the `inlining-budget-diff.sh` pin (740da13b) stays.
 - `npm test` runs `test/death-reporter.mjs` on stderr next to spec on stdout. A test-file child that dies prints
   `FILE DIED <file> exitCode=<x> signal=<y> after=<ms>ms`; a file that dies after a failed subtest (node then hides
-  its exit status) prints `exitCode=unknown signal=unknown`. Ordinary passing or failing tests print nothing. The
+  its exit status) prints `exitCode=unknown signal=unknown` on node >= 24 only (node 22 stamps no data.entryFile:
+  there such a death prints no FILE DIED line, the run still fails, and the gate's hidden-status row skips with that
+  reason). Ordinary passing or failing tests print nothing. The
   await-free spawnSync files (`ext-audit`, `build`, `bytecode-budget`, `bytecode-budget-stage`,
   `bytecode-budget-diff-boundary`, `inlining-budget-diff`) yield in a `beforeEach` so a death names the last test
   that passed; their test counts are unchanged. Gated in `npm test` by `test/death-signature.test.mjs` (7 tests,

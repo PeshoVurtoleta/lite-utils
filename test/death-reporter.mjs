@@ -14,6 +14,9 @@ import { relative } from 'node:path';
 // - When the file already failed a subtest, node marks the death 'subtestsFailed' and DROPS the file-level
 //   event (FileTest #skipReporting). Such a death is caught by its missing per-file `test:summary`: every child
 //   that ends normally emits one; the parent stamps data.entryFile on it and on every other item the child forwards.
+// - Node >= 24 ONLY for that hidden death: node 22 (probed v22.23.4) stamps no data.entryFile, so `seen` stays empty
+//   and a death after a failed subtest prints no FILE DIED line (the file still fails the run). Signal / exit-code
+//   deaths carry exitCode / signal and are named on node 22 too. Gate row: test/death-signature.test.mjs hidden-status.
 export default async function* deathReporter(source) {
   const seen = new Set(); // entry files that reported at least one test event (process isolation only)
   const summarized = new Set(); // entry files whose child emitted its own test:summary

@@ -1,0 +1,79 @@
+# nightly.yml -- lite-utils daily run on the newest node and the engines floor (.handoff/PLAN-ci.md, burst 35;
+# ruling Q-CI-2). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync), on node 'latest'
+# and node 22 (check-latest: the newest 22.x every night) x ubuntu-latest / macos-latest. A failure turns the
+# nightly red; it is never a required check for a push. GitHub runs a schedule only from the default branch
+# and pauses it after 60 days without repository activity (re-enable in the Actions tab).
+# History: as in ci.yml, the pins live in the test files (under CI=true a pinned-commit row FAILS when its commit
+# is missing); the history step only refuses a shallow clone. Hidden-death detection is node >= 24 only.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: nightly (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['latest', '22']
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # no lockfile and no dependencies: no `npm ci`, no npm cache
+      - name: setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+      - name: provenance
+        run: |
+          bash --version | head -1
+          /bin/bash --version | head -1
+          node --version
+          git --version
+          uname -a
+          echo "bash on PATH: $(command -v bash)"
+          echo "awk on PATH: $(command -v awk)"
+      - name: macOS bash on PATH is /bin/bash
+        if: runner.os == 'macOS'
+        run: test "$(command -v bash)" = /bin/bash
+      # the pins live in the test files only: under CI=true a pinned-commit row whose commit is missing FAILS
+      - name: full history (not a shallow clone)
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+      - name: npm test
+        run: npm test
+      - name: allocation-diff --self-test
+        run: bash allocation-diff.sh --self-test
+      - name: bytecode-budget --self-test
+        run: bash bytecode-budget.sh --self-test
+      - name: deopt-diff --self-test
+        run: bash deopt-diff.sh --self-test
+      - name: ic-diff --self-test
+        run: bash ic-diff.sh --self-test
+      - name: inlining-budget-diff --self-test
+        run: bash inlining-budget-diff.sh --self-test
+      - name: bytecode-budget --self-test --fixtures (node 26.8.2 captures)
+        run: bash bytecode-budget.sh --self-test --fixtures test/fixtures/bytecode-budget/node-26.8.2
+      - name: deopt-diff --self-test --fixtures (node 26.8.2 traces)
+        run: bash deopt-diff.sh --self-test --fixtures test/fixtures/deopt-diff/node-26.8.2

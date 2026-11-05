@@ -1,6 +1,6 @@
 // test/bytecode-budget-diff-boundary.test.mjs -- QA rows for ../bytecode-budget.sh --diff (P2G2 group 2a).
 // Oracle: the Phase 2 group 2a ASSERTIONS A1-A4 + the usage header's diff statements, not the code.
-// Each row is red on the frozen a26e9f15 base (`git show b376a5a:bytecode-budget.sh`, no --diff) or on the
+// Each row is red on the frozen a26e9f15 base (`git show 6bda2c8:bytecode-budget.sh`, no --diff) or on the
 // mutant it names. The A1 parity rows use that base as the oracle, so they are red on their named mutants.
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,8 +37,8 @@ function variant(dir, name, from, to) {
 const sha8 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex').slice(0, 8);
 
 // ---- the frozen base (no --diff) ----
-const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', 'b376a5a:bytecode-budget.sh']);
-const haveBase = baseSrc.status === 0 ? true : 'git show b376a5a:bytecode-budget.sh failed (shallow clone or no git)';
+const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '6bda2c8:bytecode-budget.sh']);
+const haveBase = baseSrc.status === 0 ? true : 'git show 6bda2c8:bytecode-budget.sh failed (shallow clone or no git)';
 let BASE = null;
 if (haveBase === true) {
     assert.equal(createHash('sha256').update(baseSrc.stdout).digest('hex').slice(0, 8), 'a26e9f15', 'base is not a26e9f15');
@@ -47,7 +47,12 @@ if (haveBase === true) {
     writeFileSync(BASE, baseSrc.stdout); chmodSync(BASE, 0o755);
     after(() => rmSync(bd, { recursive: true, force: true }));
 }
-const baseSkip = skip || (haveBase === true ? false : haveBase);
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+const baseSkip = skip || histSkip(haveBase);
 
 // ---- diff fake node: logs "<cwd basename> <argv>", serves ./<fn>.<k>.txt or ./<fn>.txt from its cwd (the
 // driver dir), exits 1 when the DRIVER file is gone (as node does), sources ./hook.sh (adversarial side effects),
@@ -101,6 +106,7 @@ function diffRow(name, body) {
     test(`bytecode-budget diff QA: ${name}`, { skip }, () => body(SCRIPT, true));
     // teeth: the SAME row body run against the base must fail (the base exits 2 "unknown option --diff")
     test(`bytecode-budget diff QA teeth: [${name}] is red on the a26e9f15 base`, { skip: baseSkip }, () => {
+        histGate(haveBase);
         assert.throws(() => body(BASE, false), assert.AssertionError);
     });
 }
@@ -162,6 +168,7 @@ function parity(script) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the a26e9f15 base (stdout, stderr, rc, spawns, --out tree)', { skip: baseSkip }, () => {
+    histGate(haveBase);
     const want = parityBase(), got = parity(SCRIPT);
     for (let i = 0; i < want.length; i++) assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
 });
@@ -170,6 +177,7 @@ for (const [mname, from, to, caseName] of [
     ['A1-gate-raw-name', '"${fn// /-}.$k.txt")"); done', '"${fn// /-}.k$k.txt")"); done', 'gate --out tree'],
 ]) {
     test(`bytecode-budget A1 parity MUTANT ${mname}: its parity case differs from the base`, { skip: baseSkip }, () => {
+        histGate(haveBase);
         const dir = mkdtempSync(join(tmpdir(), `bbq-${mname}-`));
         try {
             const p = variant(dir, mname, from, to);

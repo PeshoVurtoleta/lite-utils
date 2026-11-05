@@ -559,7 +559,7 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 }
 
 // =====================================================================================================================
-// A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show cb9fa65:<file>` (sha256/8 pinned)
+// A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show bd1f283:<file>` (sha256/8 pinned)
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
@@ -569,7 +569,13 @@ function gitShow(rev, file) {
     const r = spawnSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26, timeout: 30000 });
     return r.status === 0 ? r.stdout : null;
 }
-const hasGit = spawnSync('git', ['-C', ROOT, 'cat-file', '-e', 'cb9fa65^{commit}'], { env: ENV, timeout: 30000 }).status === 0;
+const hasGit = spawnSync('git', ['-C', ROOT, 'cat-file', '-e', 'bd1f283^{commit}'], { env: ENV, timeout: 30000 }).status === 0
+    ? true : 'no git history with bd1f283: not checked, never passed';
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
 function assertParity(live, ref, want) {
     assert.equal(sha8(live), want, 'live sha256/8');
     assert.ok(Buffer.compare(live, ref) === 0, 'live differs from the reference copy');
@@ -580,9 +586,10 @@ for (const [file, want] of PARITY) {
         { skip: skip || (existsSync(frozen) ? false : 'frozen copy absent (.handoff/ is gitignored): not checked, never passed') }, () => {
             assertParity(readFileSync(join(ROOT, file)), readFileSync(frozen), want);
         });
-    test(`A4: ${file} cmp-equal to git show cb9fa65:${file}`,
-        { skip: skip || (hasGit ? false : 'no git history with cb9fa65: not checked, never passed') }, () => {
-            const ref = gitShow('cb9fa65', file);
+    test(`A4: ${file} cmp-equal to git show bd1f283:${file}`,
+        { skip: skip || histSkip(hasGit) }, () => {
+            histGate(hasGit);
+            const ref = gitShow('bd1f283', file);
             assert.ok(ref, 'git show failed');
             assertParity(readFileSync(join(ROOT, file)), ref, want);
         });

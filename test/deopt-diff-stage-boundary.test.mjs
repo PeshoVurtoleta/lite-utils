@@ -82,7 +82,13 @@ if (!skip) {
         }
     }
 }
-const baseSkip = skip || (BASE ? false : 'no commit of deopt-diff.sh with sha256/8 221ff2ec in the history (shallow clone?)');
+const haveBase = BASE ? true : 'no commit of deopt-diff.sh with sha256/8 221ff2ec in the history (shallow clone?)';
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+const baseSkip = skip || histSkip(haveBase);
 
 // ---- mutants: exact-once edits of a temp copy of the built script ----
 function variant(name, edits) {
@@ -478,15 +484,19 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
         const sk = x.cs.rowSkip !== undefined ? x.cs.rowSkip : skip;
         if (x.kind === 'row') {
             test(`stage boundary: ${x.name}`, { skip: sk }, () => withCase(SCRIPT, x.cs, (c, r) => x.cs.check(c, r)));
-            test(`stage boundary teeth: [${x.name}] on the pre-G2 build (221ff2ec): exits 2 at its own option and the check is red`, { skip: sk || baseSkip }, () =>
-                withCase(BASE, x.cs, (c, r) => {
+            test(`stage boundary teeth: [${x.name}] on the pre-G2 build (221ff2ec): exits 2 at its own option and the check is red`, { skip: sk || baseSkip }, () => {
+                histGate(haveBase);
+                return withCase(BASE, x.cs, (c, r) => {
                     (x.cs.twin instanceof RegExp ? (q) => { assert.equal(q.status, 2, msg(q)); assert.match(q.stderr, x.cs.twin, msg(q)); } : (x.cs.twin || twinDefault))(r);
                     assert.throws(() => x.cs.check(c, r), assert.AssertionError, 'the row check must be red on the pre-G2 build');
-                }));
+                });
+            });
         } else if (x.kind === 'parity') {
             test(`stage boundary: ${x.name}`, { skip: sk }, () => withCase(SCRIPT, x.cs, (c, r) => x.cs.check(c, r)));
-            test(`stage boundary parity: [${x.name}] the same check passes on the pre-G2 build (221ff2ec)`, { skip: sk || baseSkip }, () =>
-                withCase(BASE, x.cs, (c, r) => x.cs.check(c, r)));
+            test(`stage boundary parity: [${x.name}] the same check passes on the pre-G2 build (221ff2ec)`, { skip: sk || baseSkip }, () => {
+                histGate(haveBase);
+                return withCase(BASE, x.cs, (c, r) => x.cs.check(c, r));
+            });
         } else {
             test(`stage boundary MUTANT ${x.name} (${x.desc}): its row goes red`, { skip: sk }, (t) => withCase(variant(x.name, x.edits), x.cs, (c, r) => {
                 t.diagnostic(`${x.name}: rc=${r.status} stderr=${JSON.stringify(r.stderr.trim().slice(0, 200))}`);
@@ -545,6 +555,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
         retCheck(await retention(SCRIPT));
     });
     test('stage boundary teeth: [11 retention] on the pre-G2 build (221ff2ec) every run exits 2 -> red', { skip: baseSkip }, async () => {
+        histGate(haveBase);
         const x = await retention(BASE);
         assert.ok(x.res.every((q) => q.status === 2), JSON.stringify(x.res));
         assert.throws(() => retCheck(x), assert.AssertionError);
@@ -597,6 +608,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
         sigCheck(await sigterm(SCRIPT));
     });
     test('stage boundary teeth: [12 SIGTERM] on the pre-G2 build (221ff2ec) the run exits before any driver spawn -> red', { skip: baseSkip }, async () => {
+        histGate(haveBase);
         const x = await sigterm(BASE);
         assert.equal(x.wasReady, false);
         assert.throws(() => sigCheck(x), assert.AssertionError);

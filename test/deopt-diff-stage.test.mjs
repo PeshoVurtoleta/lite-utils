@@ -75,7 +75,13 @@ if (!skip) {
         }
     }
 }
-const baseSkip = skip || (BASE ? false : 'no commit of deopt-diff.sh with sha256/8 221ff2ec in the history (shallow clone?)');
+const haveBase = BASE ? true : 'no commit of deopt-diff.sh with sha256/8 221ff2ec in the history (shallow clone?)';
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+const baseSkip = skip || histSkip(haveBase);
 
 // ---- mutants: exact-once edits of a temp copy of the built script ----
 function variant(name, edits) {
@@ -134,12 +140,14 @@ const fileO = (c, over = {}) => [...flat({ '--before': FROZEN, '--after': c.live
 const TWIN = /unknown option --before(-ref)?\b/;
 function row(name, cs) {
     test(`deopt-diff stage: ${name}`, { skip }, () => withCase(SCRIPT, cs, (c, r) => cs.check(c, r)));
-    test(`deopt-diff stage teeth: [${name}] exits 2 'unknown option' on the pre-G2 build (221ff2ec) and its check is red`, { skip: baseSkip }, () =>
-        withCase(BASE, cs, (c, r) => {
+    test(`deopt-diff stage teeth: [${name}] exits 2 'unknown option' on the pre-G2 build (221ff2ec) and its check is red`, { skip: baseSkip }, () => {
+        histGate(haveBase);
+        return withCase(BASE, cs, (c, r) => {
             assert.equal(r.status, 2, r.stdout + r.stderr);
             assert.match(r.stderr, cs.twin || TWIN);
             assert.throws(() => cs.check(c, r), assert.AssertionError, 'the row check must be red on the pre-G2 build');
-        }));
+        });
+    });
 }
 const msg = (r) => `rc=${r.status}\n${r.stdout}${r.stderr}`;
 const lines = (s) => s.split('\n');
@@ -396,6 +404,7 @@ test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of t
     assert.equal(ST_NAMES.length, 18);
 });
 test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 18 staged checks; host-env ok count = pre-G2 count + 36 (18 staged + 13 G3 B2 + 5 B-four dd)', { skip: baseSkip }, async () => {
+    histGate(haveBase);
     const r = await ST.pre;
     assert.equal(r.status, 0, r.out + r.err);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 0, n);

@@ -1,6 +1,6 @@
 // test/bytecode-budget-stage.test.mjs -- QA rows for ../bytecode-budget.sh ref + file staging (P2G2 group 2b, batch B3).
 // Oracle: PLAN-phase2-g2b.md ASSERTIONS A2 (verdicts), A3 (refusals, incl. addendum A3), A4 (retention), not the code.
-// Every A2/A3 row also runs on the pre-staging build (`git show 6835177:bytecode-budget.sh`, sha256/8 9173830d), where
+// Every A2/A3 row also runs on the pre-staging build (`git show 3b2209a:bytecode-budget.sh`, sha256/8 9173830d), where
 // it must exit 2 "unknown option --before(-ref)"; the mutant rows M7..M13, M-stage-order, M-git-env,
 // M-relimport-sibling-staged, M-relimport-sibling-staged-file are exact-once
 // string edits of a copy of the built script, each red for the reason named in its row.
@@ -30,9 +30,9 @@ const haveGit = spawnSync('git', ['--version']).status === 0;
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : (haveGit ? false : 'git not available');
 const GITC = ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgSign=false'];
 
-function cleanEnv() {   // the child env: none of the 6 GIT_* location vars, global/system git config off
+function cleanEnv() {   // the child env: none of the 6 GIT_* location vars nor an editor, global/system git config off
     const e = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    for (const k of GITVARS) delete e[k];
+    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete e[k];
     return e;
 }
 function git(cwd, ...a) {
@@ -64,15 +64,20 @@ if (!skip) try {
 } catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
 
 // ---- the pre-staging build (teeth) ----
-const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '6835177:bytecode-budget.sh'], { env: cleanEnv() });
-const haveBase = baseSrc.status === 0 ? true : 'git show 6835177:bytecode-budget.sh failed (shallow clone or no git history)';
+const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '3b2209a:bytecode-budget.sh'], { env: cleanEnv() });
+const haveBase = baseSrc.status === 0 ? true : 'git show 3b2209a:bytecode-budget.sh failed (shallow clone or no git history)';
 let BASE = null;
 if (haveBase === true) {
     if (sha8(baseSrc.stdout) !== '9173830d') { rmSync(ROOT, { recursive: true, force: true }); assert.fail('pre-staging base is not 9173830d'); }
     BASE = join(ROOT, 'base-9173830d.sh');
     writeFileSync(BASE, baseSrc.stdout); chmodSync(BASE, 0o755);
 }
-const baseSkip = skip || (haveBase === true ? false : haveBase);
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+const baseSkip = skip || histSkip(haveBase);
 
 // ---- mutants: exact-once edits of a copy of the built script ----
 function variant(name, edits) {
@@ -137,6 +142,7 @@ function row(name, cs) {
         cs.check(c, r);
     });
     test(`bytecode-budget stage teeth: [${name}] exits 2 'unknown option --before(-ref)' on the 9173830d build`, { skip: baseSkip }, () => {
+        histGate(haveBase);
         const { c, r } = runOn(BASE, cs);
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.match(r.stderr, cs.twin || TWIN);
@@ -404,6 +410,7 @@ test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 4 
     assert.equal(okLines(r.stdout).length, 54);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44); also pinned by bytecode-budget.test.mjs C
 });
 test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 4 staged checks (and 45 ok)', { skip: baseSkip }, () => {
+    histGate(haveBase);
     const r = stRun(BASE);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);
     assert.equal(okLines(r.stdout).length, 45);

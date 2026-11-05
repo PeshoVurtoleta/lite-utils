@@ -22,6 +22,10 @@ const GLOB = "'test/*.test.mjs'";
 const DEATH = '--test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr';
 const SPEC_ONLY = ['--test', '--test-reporter=spec'];
 const PASS = '\u2714 '; // spec's pass mark
+// node < 24 stamps no data.entryFile on a file child's events (probed on v22.23.4, .handoff/evidence/b35-ci/
+// entryfile-probe.log): the reporter cannot see a death that node hid after a failed subtest, so that row skips there.
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+const HIDDEN_SKIP = NODE_MAJOR < 24 ? 'node < 24 stamps no data.entryFile: a hidden death is not detectable (reporter: node >= 24 only)' : false;
 
 // package.json "test" minus `node` and the glob: the gate runs what npm test runs
 function npmTestFlags() {
@@ -70,7 +74,7 @@ test('exit-code row: process.exit(3) -> exactly one FILE DIED line with exitCode
   assert.ok(passed(r.out, 'three-sync-pass'), 'third test reported passed before the exit:\n' + r.out);
 });
 
-test('hidden-status row: a death after a failed subtest (node drops its file event) -> one FILE DIED line, status unknown', () => {
+test('hidden-status row: a death after a failed subtest (node drops its file event) -> one FILE DIED line, status unknown', { skip: HIDDEN_SKIP }, () => {
   const r = run(npmTestFlags(), 'fail-then-term.fixture.mjs');
   assert.equal(r.status, 1, 'the run fails');
   assert.equal(r.died.length, 1, 'one FILE DIED line:\n' + r.err);

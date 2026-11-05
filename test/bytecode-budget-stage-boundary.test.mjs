@@ -1,7 +1,7 @@
 // test/bytecode-budget-stage-boundary.test.mjs -- QA boundary rows for ../bytecode-budget.sh ref + file staging
 // (P2G2 group 2b, lib/stage.sh). Oracle: PLAN-phase2-g2b.md ASSERTIONS A1-A5 + ADDENDA A1-A4, not the code.
 // Helpers copied from bytecode-budget-stage.test.mjs (this file does not import or edit it).
-// Teeth: every row of NEW (group 2b) behaviour also runs on the pre-staging build (`git show 6835177:bytecode-budget.sh`,
+// Teeth: every row of NEW (group 2b) behaviour also runs on the pre-staging build (`git show 3b2209a:bytecode-budget.sh`,
 // sha256/8 9173830d), where it must exit 2 "unknown option --before(-ref)" AND its own check must go red. Rows that
 // pin a KNOWN GAP or a pre-existing behaviour say so, and each has a named one-edit mutant of a copy (exact-once
 // string edit, abort otherwise) that the row must be red on (row 2 has none: its fix is the deferred ls-tree mode FILLER).
@@ -26,7 +26,7 @@ const GITVER = haveGit ? (gv.stdout.match(/(\d+)\.(\d+)/) || []).slice(1).map(Nu
 
 function cleanEnv() {
     const e = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    for (const k of GITVARS) delete e[k];
+    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete e[k];
     return e;
 }
 function git(cwd, ...a) {
@@ -75,15 +75,20 @@ if (!skip) try {
 } catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
 
 // ---- the pre-staging build (teeth) ----
-const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '6835177:bytecode-budget.sh'], { env: cleanEnv() });
-const haveBase = baseSrc.status === 0 ? true : 'git show 6835177:bytecode-budget.sh failed (shallow clone or no git history)';
+const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', '3b2209a:bytecode-budget.sh'], { env: cleanEnv() });
+const haveBase = baseSrc.status === 0 ? true : 'git show 3b2209a:bytecode-budget.sh failed (shallow clone or no git history)';
 let BASE = null;
 if (haveBase === true) {
     if (sha8(baseSrc.stdout) !== '9173830d') { rmSync(ROOT, { recursive: true, force: true }); assert.fail('pre-staging base is not 9173830d'); }
     BASE = join(ROOT, 'base-9173830d.sh');
     writeFileSync(BASE, baseSrc.stdout); chmodSync(BASE, 0o755);
 }
-const baseSkip = skip || (haveBase === true ? false : haveBase);
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+const baseSkip = skip || histSkip(haveBase);
 
 // ---- mutants: exact-once edits of a copy of the built script ----
 function variant(name, edits) {
@@ -144,6 +149,7 @@ const TWIN = /^bytecode-budget: unknown option --before(-ref)? \(see --help\)\nV
 function row(name, cs) {
     test(`stage boundary: ${name}`, { skip }, () => { const { c, r } = runOn(SCRIPT, cs); cs.check(c, r); });
     test(`stage boundary teeth: [${name}] exits 2 'unknown option --before(-ref)' on 9173830d and its check goes red`, { skip: baseSkip }, () => {
+        histGate(haveBase);
         const { c, r } = runOn(BASE, cs);
         assert.equal(r.status, 2, msg(r));
         assert.match(r.stderr, TWIN);
@@ -400,6 +406,7 @@ test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign
     emuCheck(stRun(SCRIPT, emuEnv()));
 });
 test('stage boundary teeth: [8 KNOWN GAP EMULATED] the 9173830d build has no staged rows (exit 0) -> the row is red', { skip: baseSkip }, () => {
+    histGate(haveBase);
     const r = stRun(BASE, emuEnv());
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.throws(() => emuCheck(r), assert.AssertionError);
@@ -447,6 +454,7 @@ test('stage boundary: 9 PRE-EXISTING --self-test SIGINT after the first ok line 
     sigCheck(await sigintRun(SCRIPT));
 });
 test('stage boundary: 9 PRE-EXISTING same on the 9173830d build (not new in group 2b)', { skip: baseSkip }, async () => {
+    histGate(haveBase);
     sigCheck(await sigintRun(BASE));
 });
 test('stage boundary MUTANT M-int-trap (self_test gains an INT/TERM cleanup trap): the row goes red (dir removed)', { skip }, async () => {

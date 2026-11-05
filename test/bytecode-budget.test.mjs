@@ -468,7 +468,12 @@ test('bytecode-budget live: mid=210 is OVER on v26.8.2 (else NO-VERDICT 2)', { s
 // BEFORE and AFTER driver directories can print different lengths. A fn with no capture file prints nothing
 // (zero matches). Expected verdicts come from the plan, not from a run.
 // =====================================================================================================
-const BASE_COMMIT = 'b376a5a'; // its bytecode-budget.sh is a26e9f15, the last build without --diff
+const BASE_COMMIT = '6bda2c8'; // its bytecode-budget.sh is a26e9f15, the last build without --diff
+// CI=true (GitHub Actions): a history row whose commit is missing FAILS instead of skipping; locally it skips with
+// the reason. One spelling for every history row of this file.
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
 const baseSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', `${BASE_COMMIT}:bytecode-budget.sh`]);
 const haveBase = baseSrc.status === 0 ? true : `git show ${BASE_COMMIT}:bytecode-budget.sh failed (shallow clone or no git)`;
 let FROZEN_BASE = null;
@@ -542,7 +547,8 @@ for (const [name, spec, fns, code, re] of DIFF_ROWS) {
         assert.equal(r.status, code, r.stdout + r.stderr);
         assert.match(r.stdout, re);
     });
-    test(`bytecode-budget diff teeth: [${name}] exits 2 "unknown option --diff" on the frozen a26e9f15 base`, { skip: skip || (haveBase === true ? false : haveBase) }, () => {
+    test(`bytecode-budget diff teeth: [${name}] exits 2 "unknown option --diff" on the frozen a26e9f15 base`, { skip: skip || histSkip(haveBase) }, () => {
+        histGate(haveBase);
         const { r } = diffRun(spec, fns, FROZEN_BASE);
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.ok((r.stdout + r.stderr).includes('unknown option --diff'), r.stdout + r.stderr);
@@ -797,10 +803,10 @@ test('bytecode-budget: an unreadable DRIVER (chmod 000) is refused, exit 2, 0 sp
 // precision past 2^53 and bash (( )) wraps past 2^63, so the 686de5bf build read 2^53 | 2^53+1 as SAME and gated
 // 2^63 / 2^64+1 against max 6 as WITHIN. N has 1..9 digits (< 10^9: exact in awk doubles and bash (( )); real V8
 // lengths are far smaller), so a longer N is NO-VERDICT: 9 digits (999999999) are still a length.
-// Each row is red on 686de5bf (`git show 41720de:bytecode-budget.sh`, the last build without the cap) and on the
+// Each row is red on 686de5bf (`git show 50a1879:bytecode-budget.sh`, the last build without the cap) and on the
 // off-by-one mutants (<= 8 refuses 999999999, <= 10 accepts 1000000000).
 // =====================================================================================================
-const CAP_COMMIT = '41720de';
+const CAP_COMMIT = '50a1879';
 const capSrc = spawnSync('git', ['-C', join(HERE, '..'), 'show', `${CAP_COMMIT}:bytecode-budget.sh`]);
 const haveCap = capSrc.status === 0 ? true : `git show ${CAP_COMMIT}:bytecode-budget.sh failed (shallow clone or no git)`;
 let CAP_BASE = null;
@@ -849,7 +855,8 @@ const CAP_ROWS = [
 ];
 for (const [name, body] of CAP_ROWS) {
     test(`bytecode-budget length cap ${name}`, { skip }, () => body(SCRIPT));
-    test(`bytecode-budget length cap teeth: [${name}] is red on the 686de5bf build (no cap)`, { skip: skip || (haveCap === true ? false : haveCap) }, () => {
+    test(`bytecode-budget length cap teeth: [${name}] is red on the 686de5bf build (no cap)`, { skip: skip || histSkip(haveCap) }, () => {
+        histGate(haveCap);
         assert.throws(() => body(CAP_BASE), assert.AssertionError);
     });
     for (const [mname, to] of [['cap-8', 'length($3) <= 8'], ['cap-10', 'length($3) <= 10']]) {
