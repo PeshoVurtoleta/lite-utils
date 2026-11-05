@@ -131,6 +131,9 @@ cat "$FAKE_OUT"
 exit "\${FAKE_RC:-0}"
 `);
 chmodSync(FAKE, 0o755);
+const HANG = join(WORK, 'hangnode'); // a node that hangs 3 s holding none of the driver's pipes (the run() cap self-test)
+writeFileSync(HANG, '#!/bin/sh\nexec sleep 3 </dev/null >/dev/null 2>&1\n');
+chmodSync(HANG, 0o755);
 
 function rig(content, rc = 0) { // a fresh log + canned --v8-options output for the fake node
     const d = mk('v8fl-rig-');
@@ -138,12 +141,32 @@ function rig(content, rc = 0) { // a fresh log + canned --v8-options output for 
     writeFileSync(out, content); writeFileSync(log, '');
     return { out, log, rc, spawns: () => readFileSync(log, 'utf8').split('\n').filter(Boolean) };
 }
-function run(shell, frag, node, mode, args = [], o = {}) {
+// cap 420000 (was 120000): CI run 42056284029, row A5 M4 (2 sweep spawns) took 127.1 s on macOS node 26.8.2 (A5 M3 115.2 s; node 22 max 104.7 s)
+const RUN_CAP = 420000;
+// A4 per-spawn cap 60000 (was RUN_CAP; 40 sequential spawns x 420 s = 280 min > the 120-min CI job cap, and node --test-timeout cannot
+// fire inside spawnSync): CI run 42056284029, on the 2 logged macOS legs the WHOLE A4 row (40 spawns) took at most 7.7 s (job 127345428176 macOS node 26.8.2:
+// bash 7728.9 ms, /bin/bash 4382.1 ms; job 127345428628 macOS node 22: 4520.3 / 3006.4 ms; the other 6 legs' logs were not kept), ~193 ms per spawn. Even one spawn taking
+// the whole row's 7.7 s is < 1/3 of 60000 (the cap-rule floor: >= 3x, a multiple of 60000). All-hang worst case: 40 x 60 s = 40 min per A4 row.
+const A4_CAP = 60000;
+const LIVE_CAP = 120000; // the A5 live-lane `node --v8-options` spawn
+// spawnDriver: one driver spawn, raw (timedOut / cap recorded). run() = spawnDriver + spawnOk: every driver result goes through the check,
+// so a run its cap killed (status null, SIGTERM, ETIMEDOUT) fails as "timed out after <cap> ms", never reads as a plain `null !== 0`.
+function spawnDriver(shell, frag, node, mode, args = [], o = {}) {
     const env = { ...ENV, ...(o.env || {}) };
     if (o.rig) Object.assign(env, { FAKE_LOG: o.rig.log, FAKE_OUT: o.rig.out, FAKE_RC: String(o.rig.rc) });
-    // cap 420000 (was 120000): CI run 42056284029, row A5 M4 (2 sweep spawns) took 127.1 s on macOS node 26.8.2 (A5 M3 115.2 s; node 22 max 104.7 s)
-    return spawnSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', timeout: 420000, env, cwd: o.cwd, input: o.input });
+    const cap = o.cap === undefined ? RUN_CAP : o.cap;
+    assert.ok(Number.isInteger(cap) && cap > 0, `driver cap must be a positive integer ms, got ${cap}`); // 0 would mean "no timeout"
+    return capped(spawnSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', timeout: cap, env, cwd: o.cwd, input: o.input }), cap);
 }
+function capped(r, cap) { r.timedOut = !!(r.error && r.error.code === 'ETIMEDOUT'); r.cap = cap; return r; }
+// a timed-out or failed-to-spawn result is an unverified state: fail closed with the cap (or the spawn error) named
+function spawnOk(r, what) {
+    const tail = `\n${String(r.stdout || '').split('\n').slice(-8).join('\n')}${r.stderr || ''}`;
+    assert.ok(!r.timedOut, `${what} timed out after ${r.cap} ms (killed by ${r.signal || 'SIGTERM'})${tail}`);
+    assert.ok(!r.error, `${what} spawn error ${r.error && (r.error.code || r.error.message)}${tail}`);
+    return r;
+}
+function run(shell, frag, node, mode, args = [], o = {}) { return spawnOk(spawnDriver(shell, frag, node, mode, args, o), `driver (${shell} ${mode})`); }
 function bits(r) { assert.equal(r.status, 0, `driver status ${r.status}: ${r.stderr}`); assert.equal(r.stderr, ''); return r.stdout.split('\n').filter(Boolean).map((x) => x === '1'); }
 function probe(shell, frag, tokens, node = FAKE, rg = rig(FIX_TEXT)) { return bits(run(shell, frag, node, 'tokens', [], { rig: rg, input: tokens.join('\n') + '\n' })); }
 const names = [...FIX.keys()];
@@ -271,9 +294,9 @@ for (const sh of SHELLS) {
         try {
             const td = mk('v8fl-tmpdir-'), cw = mk('v8fl-cwd-'), rg = rig(FIX_TEXT);
             for (let i = 0; i < 20; i++) {
-                const a = run(sh, FRAG, FAKE, 'check', ['--no-opt', '--stack-size=2000'], { rig: rg, cwd: cw, env: { TMPDIR: td } });
+                const a = run(sh, FRAG, FAKE, 'check', ['--no-opt', '--stack-size=2000'], { rig: rg, cwd: cw, env: { TMPDIR: td }, cap: A4_CAP });
                 assert.equal(a.status, 0, a.stderr);
-                const b = run(sh, FRAG, FAKE, 'check', ['--no-opt', '--trace-osr'], { rig: rg, cwd: cw, env: { TMPDIR: td } });
+                const b = run(sh, FRAG, FAKE, 'check', ['--no-opt', '--trace-osr'], { rig: rg, cwd: cw, env: { TMPDIR: td }, cap: A4_CAP });
                 assert.equal(b.status, 2);
             }
             assert.deepEqual(readdirSync(td), []);
@@ -285,7 +308,7 @@ for (const sh of SHELLS) {
     // ---- A5: live lane (process.execPath) ----
     test(`A5 live (${sh}): oracle == bash for every live name (4 forms), HARM 0/52 live, live table == JS parse`, { skip: sk }, () => {
         try {
-            const lr = spawnSync(process.execPath, ['--v8-options'], { encoding: 'utf8', env: ENV, maxBuffer: 1 << 26, timeout: 120000 });
+            const lr = spawnOk(capped(spawnSync(process.execPath, ['--v8-options'], { encoding: 'utf8', env: ENV, maxBuffer: 1 << 26, timeout: LIVE_CAP }), LIVE_CAP), 'live node --v8-options');
             assert.equal(lr.status, 0);
             const live = parseOptions(lr.stdout);
             assert.ok(live.size > 500, `live name count ${live.size}`);
@@ -340,5 +363,19 @@ test('A5 M5 (fragment absent = old code): every driver mode fails, no row can pa
             assert.notEqual(r.stdout, mode === 'check' ? 'ok\n' : '1\n');
         }
         assert.equal(rg.spawns().length, 0);
+    } finally { cleanup(); }
+});
+
+// ---- the run() cap check itself (b39): without it a hang reads as a pass in A5 M5 (status null passes notEqual(status, 0)) ----
+test('run() cap: a hanging node under a 300 ms cap -> timedOut, status null, run() throws "timed out after 300 ms"; under 60000 ms -> exit 2 die, no timeout; a missing shell -> "spawn error ENOENT"', { skip }, () => {
+    try {
+        const r = spawnDriver('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 300 });
+        assert.deepEqual([r.timedOut, r.status, r.cap], [true, null, 300], `signal ${r.signal} error ${r.error && r.error.code}`);
+        assert.throws(() => spawnOk(r, 'x'), /x timed out after 300 ms/);
+        assert.throws(() => run('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 300 }), /driver \(bash check\) timed out after 300 ms/);
+        assert.throws(() => spawnDriver('bash', FRAG, HANG, 'check', [], { cap: 0 }), /positive integer/);
+        assert.throws(() => run(join(WORK, 'no-such-shell'), FRAG, FAKE, 'check', []), /driver \(\S+no-such-shell check\) spawn error ENOENT/); // not a timeout, still not a status
+        const c = run('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 60000 }); // the inverse control: a cap above the 3 s hang
+        assert.deepEqual([c.timedOut, c.status, c.stdout, c.stderr], [false, 2, '', `stub: ${HANG} --v8-options printed nothing\nVERDICT NO-VERDICT\n`]);
     } finally { cleanup(); }
 });
