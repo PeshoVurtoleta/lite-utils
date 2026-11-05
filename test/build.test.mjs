@@ -292,3 +292,43 @@ test('N4: a failing chmod aborts with status 2 and "unexpected error"', { skip }
         assert.deepEqual(readdirSync(out), []);
     } finally { cleanup(); }
 });
+
+// ---- MD-46 G1 TASK 7: the roster of src files that include lib/v8flags.sh ----
+// ORACLE: .handoff/PLAN-md46.md G1 TASK 7: the set must be a subset of {deopt-diff, bytecode-budget, ic-diff,
+// allocation-diff}; inlining-budget-diff never includes it. Marker grammar: build.sh header (the WHOLE line). Today the set is
+// empty, so the subset holds; the control proves the predicate has teeth (a copy of ibd's src with the marker appended).
+const V8FL_MARKER = '# @include lib/v8flags.sh';
+const V8FL_ALLOWED = new Set(['deopt-diff', 'bytecode-budget', 'ic-diff', 'allocation-diff']);
+function includesV8fl(text) { return text.split('\n').includes(V8FL_MARKER); }
+function v8flRoster(srcTexts) { // Map<file, text> -> sorted names (no .sh) of the files that include the fragment
+    return [...srcTexts].filter(([, t]) => includesV8fl(t)).map(([f]) => f.replace(/\.sh$/, '')).sort();
+}
+function v8flRosterOk(srcTexts) {
+    const set = v8flRoster(srcTexts);
+    return set.every((n) => V8FL_ALLOWED.has(n)) && !set.includes('inlining-budget-diff');
+}
+const liveSrc = () => new Map(GEN.map((f) => [f, readFileSync(join(ROOT, 'src', f), 'utf8')]));
+
+test('G1 T7 roster: src files including lib/v8flags.sh are a subset of {dd, bb, ic, alloc}; ibd never', { skip }, () => {
+    const m = liveSrc();
+    assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
+    const set = v8flRoster(m);
+    for (const n of set) assert.ok(V8FL_ALLOWED.has(n), `${n} may not include lib/v8flags.sh`);
+    assert.ok(!set.includes('inlining-budget-diff'), 'inlining-budget-diff must never include lib/v8flags.sh');
+    assert.equal(v8flRosterOk(m), true);
+});
+
+test('G1 T7 control: ibd src with the marker appended fails the roster predicate (must-fail control)', { skip }, () => {
+    const m = liveSrc();
+    m.set(NAME, m.get(NAME) + '\n' + V8FL_MARKER + '\n');
+    assert.deepEqual(v8flRoster(m).includes('inlining-budget-diff'), true);
+    assert.equal(v8flRosterOk(m), false);
+    // and an allowed tool does not fail it (the predicate is not a blanket refusal)
+    const m2 = liveSrc();
+    m2.set('ic-diff.sh', m2.get('ic-diff.sh') + '\n' + V8FL_MARKER + '\n');
+    assert.equal(v8flRosterOk(m2), true);
+    // a near-miss (trailing space) is not a marker: build.sh would abort it, the roster does not count it
+    const m3 = liveSrc();
+    m3.set(NAME, m3.get(NAME) + '\n' + V8FL_MARKER + ' \n');
+    assert.equal(v8flRoster(m3).includes('inlining-budget-diff'), false);
+});
