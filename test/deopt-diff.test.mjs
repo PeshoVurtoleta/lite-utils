@@ -9,21 +9,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
 const CHECKS = 89;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
-                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44); a new check moves this literal
+                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44); a new check moves this literal.
+                     // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
+// P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows
+const FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'deopt-diff', 'node-26.8.2');
+const FIXTURE_ROWS = 17;
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
 const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
 
-function selfTest(path) {
-    return spawnSync('bash', [path, '--self-test'], { encoding: 'utf8', timeout: 120000, env: ENV });
+function selfTest(path, extra = []) {
+    return spawnSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', timeout: 120000, env: ENV });
 }
 function okCount(out) { return (out.match(/^ok /gm) || []).length; }
 
@@ -241,9 +245,9 @@ let active = 0;
 const waiting = [];
 function gate() { return new Promise((res) => { const go = () => { active++; res(); }; if (active < 6) go(); else waiting.push(go); }); }
 function release() { active--; const w = waiting.shift(); if (w) w(); }
-function runOne(path) {
+function runOne(path, extra = []) {
     return new Promise((res) => {
-        const c = spawn('bash', [path, '--self-test'], { env: ENV });
+        const c = spawn('bash', [path, '--self-test', ...extra], { env: ENV });
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the script's EXIT trap then removes its own mktemp dir
         const t = setTimeout(() => c.kill('SIGTERM'), 180000);
@@ -252,11 +256,11 @@ function runOne(path) {
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most 6 dirs, never one per mutant
-function launch(name, edits) {
+function launch(name, edits, extra = []) {
     return (async () => {
         await gate();
         const dir = mkdtempSync(join(tmpdir(), `dd-${name.slice(0, 3)}-`));
-        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits)); }
+        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits), extra); }
         finally { rmSync(dir, { recursive: true, force: true }); release(); }
     })();
 }
@@ -286,6 +290,90 @@ CONTROLS.forEach(([name], i) => {
         const r = await SURV[i];
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.equal(okCount(r.stdout), CHECKS);
+    });
+});
+
+// =====================================================================================================================
+// P3G4 T4: --self-test --fixtures FIX (the S-9 real-trace rows F1-F17). ORACLE: the P3G4 G4 plan (C + F ok rows and the
+// summary line computed from the constants; one `FAIL fixture <driver>.txt` line per missing file; the DESIGNED F rows
+// of the M1 / M3 / S1 mutants from .handoff/evidence/p3g4/gv-mutants/MANIFEST.txt), never what the script printed.
+// =====================================================================================================================
+const FIXN = CHECKS + FIXTURE_ROWS;
+const FX = (n) => `fixture F${n} `;   // ends in a space: `fixture F1 ` never names F10-F17
+function assertFixturesOk(r) {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /^FAIL /m);
+    assert.equal(okCount(r.stdout), FIXN, `want ${CHECKS} + ${FIXTURE_ROWS} ok rows`);
+    const fx = r.stdout.split('\n').filter((l) => l.startsWith('ok fixture '));
+    assert.equal(fx.length, FIXTURE_ROWS, `want ${FIXTURE_ROWS} 'ok fixture ' rows`);
+    for (let n = 1; n <= FIXTURE_ROWS; n++) assert.equal(fx.filter((l) => l.startsWith('ok ' + FX(n))).length, 1, `one ok row for F${n}`);
+    const lines = r.stdout.split('\n').filter((l) => l !== '');
+    assert.equal(lines[lines.length - 1], `self-test: ${FIXN} check(s) ok`);
+}
+// a copy of FIX without deopt.txt: exit 1, the summary FAILED line, exactly one missing-file line and it names deopt.txt
+const MISSING = (x) => `FAIL fixture ${x}.txt: missing or not a readable file`;
+function assertMissingDeopt(r) {
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
+    const lines = r.stdout.split('\n');
+    assert.ok(lines.includes(MISSING('deopt')), `missing "${MISSING('deopt')}"\n${r.stdout}`);
+    assert.deepEqual(lines.filter((l) => /^FAIL fixture \S+\.txt: missing or not a readable file$/.test(l)), [MISSING('deopt')]);
+}
+// ifalse: the fixture block never runs, so the run is green with C rows and no fixture row -- red on the C + F count only
+function assertCountKill(r) {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(okCount(r.stdout), CHECKS);
+    assert.doesNotMatch(r.stdout, /^ok fixture /m);
+    assert.throws(() => assertFixturesOk(r), new RegExp(`want ${CHECKS} \\+ ${FIXTURE_ROWS} ok rows`));
+}
+const MUT_EDITS = (n) => MUTANTS.find(([m]) => m === n)[1];   // the same exact-once edits as the canned-trace table
+const FIX_MUTANTS = [
+    ['M1-offset-kept-in-D', MUT_EDITS('M1-offset-kept-in-D'), [1, 3, 5, 7, 12, 15, 16].map(FX)],
+    ['M3-prefix-name-match', MUT_EDITS('M3-prefix-name-match'), [8, 10].map(FX)],
+    ['S1-OSR-dropped', MUT_EDITS('S1-no-OSR-suffix'), [6, 17].map(FX)],
+];
+const IFALSE = [['  if [[ -n "$FIXTURES" ]]; then\n    local FXD', '  if false; then\n    local FXD']];
+const FXARGS = ['--fixtures', FIX];
+const FBASE = skip ? null : launch('baseline-fix', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], FXARGS);
+const FKILLS = skip ? null : FIX_MUTANTS.map(([name, edits]) => launch(name, edits, FXARGS));
+const IKILL = skip ? null : launch('ifalse', IFALSE, FXARGS);
+for (const p of [FBASE, IKILL, ...(FKILLS || [])]) if (p) p.catch(() => {});
+
+test(`deopt-diff --self-test --fixtures FIX: exit 0, ${CHECKS} + ${FIXTURE_ROWS} ok rows, ${FIXTURE_ROWS} 'ok fixture ' rows, last line 'self-test: ${FIXN} check(s) ok'`, { skip }, () => {
+    assertFixturesOk(selfTest(SCRIPT, FXARGS));
+});
+test('deopt-diff --self-test --fixtures FIX: an unmodified copy outside the repo passes (baseline for the fixture mutants)', { skip }, async () => {
+    assertFixturesOk(await FBASE);
+});
+test('deopt-diff --self-test --fixtures COPY (FIX without deopt.txt) -> exit 1 and a FAIL fixture deopt.txt line', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dd-fx-'));
+    try {
+        const cp = join(dir, 'fx');
+        mkdirSync(cp);
+        for (const n of readdirSync(FIX)) if (n !== 'deopt.txt') copyFileSync(join(FIX, n), join(cp, n));
+        assertMissingDeopt(selfTest(SCRIPT, ['--fixtures', cp]));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('deopt-diff --fixtures missing-file row: revert check (the full FIX run fails the same assertion)', { skip }, async () => {
+    const b = await FBASE;
+    assert.throws(() => assertMissingDeopt(b), assert.AssertionError);
+});
+test(`deopt-diff --self-test --fixtures MUST FAIL the C + F count on mutant ifalse (the fixture block never runs)`, { skip }, async () => {
+    assertCountKill(await IKILL);
+});
+test('deopt-diff mutant ifalse: revert check (the unmutated --fixtures run fails the same assertion)', { skip }, async () => {
+    const b = await FBASE;
+    assert.throws(() => assertCountKill(b), assert.AssertionError);
+});
+FIX_MUTANTS.forEach(([name, , rows], i) => {
+    test(`deopt-diff --self-test --fixtures MUST FAIL on mutant ${name} (its designed fixture rows)`, { skip }, async () => {
+        assertKilled(name, await FKILLS[i], rows);
+    });
+    test(`deopt-diff mutant ${name} --fixtures: revert check (the unmutated run fails the same assertion)`, { skip }, async () => {
+        const b = await FBASE;
+        const oks = b.stdout.split('\n').filter((l) => l.startsWith('ok '));
+        for (const row of rows) assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, `prefix "${row}" must match exactly one self-test row`);
+        assert.throws(() => assertKilled(name, b, rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
 });
 

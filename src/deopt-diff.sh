@@ -7,7 +7,7 @@
 #   deopt-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER     driver mode: two drivers, one verdict
 #   deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before-ref REF --after-ref REF --module REL   ref mode
 #   deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before FILE --after FILE                     file mode
-#   deopt-diff.sh --self-test                                       canned checks, no real node
+#   deopt-diff.sh --self-test [--fixtures DIR]                      canned checks, no real node
 #   deopt-diff.sh -h | --help                                       this text
 #
 #   e.g. deopt-diff.sh --fn add,get\ value --v8-flags --allow-natives-syntax before/driver.js after/driver.js
@@ -52,10 +52,18 @@
 #                      end with a fake node that counts spawns, then the ref / file modes on a temp git repo): one
 #                      "ok <label>" or "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0)
 #                      or "self-test: <n> check(s) FAILED" (exit 1)
+#   --fixtures DIR     with --self-test only: also the 17 fixture rows F1-F17 ("ok fixture ..."), read from the real
+#                      node v26.8.2 traces in DIR (test/fixtures/deopt-diff/node-26.8.2; each <driver>.txt through the
+#                      record awk and the tier section, deopt.txt and mono.txt end to end through the fake node: no
+#                      real node spawn), so a clean run counts 17 more checks. A missing or unreadable <driver>.txt
+#                      is one more "FAIL fixture <driver>.txt: missing or not a readable file" line (exit 1), and
+#                      the rows reading it get empty text, so some of them fail too.
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline
-#   and --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no
-#   =value.
+#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node / --fixtures take
+#   no newline and --fn no empty entry (stray comma). --self-test with any other value option or a positional
+#   argument exits "--self-test takes only --fixtures DIR"; --fixtures without --self-test exits "--fixtures goes
+#   with --self-test"; DIR with a newline exits "--fixtures: a newline is not allowed", and DIR that is not a
+#   readable, searchable directory "--fixtures: not a readable directory: DIR". --self-test / --help take no =value.
 #   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
 #   ref / file values take no newline.
 #
@@ -184,7 +192,11 @@
 #   does not separate the writers); ops are only as fine as the marker spacing.
 # Tier (tier section): REPORTED, gates nothing; it never moves the exit code or a verdict line.
 # Tier: on a user driver the verdict is STATISTICAL (deopts follow tier-up timing; run it under the host quiet
-#   lock); --self-test is DETERMINISTIC (canned text and a fake node).
+#   lock); --self-test is DETERMINISTIC (canned text and a fake node), and so is --self-test --fixtures DIR (recorded
+#   traces and the fake node). The natives pair is DETERMINISTIC too: DIR's deopt.mjs and mono.mjs on a real node,
+#   `--fn add --v8-flags --allow-natives-syntax deopt.mjs mono.mjs` exits 1 DIFF and deopt.mjs against a
+#   byte-identical copy exits 0 SAME (npm test asserts the exit codes on every node, the exact lines on
+#   node v26.8.2 only).
 # Tier (ref / file mode): STATISTICAL on the same terms (each staged side is a user driver; its null control stays),
 #   while the staging, the refusals and the byte-identical NO-VERDICT are DETERMINISTIC, gated in npm test by the
 #   --self-test ref / file rows (a temp git repo and a fake node; with no git on PATH they are one FAIL line and
@@ -945,6 +957,64 @@ EOF
   check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns" \
     "$o" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
 
+  # --- S-9 real-trace fixtures (--fixtures DIR, the node v26.8.2 set in test/fixtures/deopt-diff/node-26.8.2): F1-F17.
+  # Expected values are that README's grep census; trace lines are picked by fn name (never by counting or indexing
+  # MAGLEV or separator lines). Each file is read by redirection only; a missing or unreadable one is one more
+  # `FAIL fixture <file>` line, and the rows reading it get empty text (some fail too). F12 / F13 run this script
+  # on fixture copies served by the fake node above (0 real-node spawns) ---
+  if [[ -n "$FIXTURES" ]]; then
+    local FXD FXM FXA FXB FXC FXO FXE FXF nb ndx
+    for x in deopt mono a-lazy b-invalidate c-inlined d-osr e-getter f-marks; do
+      [[ -f "$FIXTURES/$x.txt" && -r "$FIXTURES/$x.txt" ]] || check "fixture $x.txt" "missing or not a readable file" "a readable file"
+    done
+    fxt() { if [[ -f "$FIXTURES/$1.txt" && -r "$FIXTURES/$1.txt" ]]; then cat <"$FIXTURES/$1.txt"; fi; }
+    fdx() { printf '%s\n' "$2" | awk -v fn="$1" "$DEOPT_AWK" | grep -c -e '^D ' -e '^X ' || true; }
+    FXD=$(fxt deopt); FXM=$(fxt mono); FXA=$(fxt a-lazy); FXB=$(fxt b-invalidate)
+    FXC=$(fxt c-inlined); FXO=$(fxt d-osr); FXE=$(fxt e-getter); FXF=$(fxt f-marks)
+    check "fixture F1 deopt.txt: fn=add -> exactly 'E add@TURBOFAN_JS' and 'D add@TURBOFAN_JS<TAB>deopt-eager (not a Smi)'" \
+      "$(rec add "$FXD")" "E add@TURBOFAN_JS;D add@TURBOFAN_JS|deopt-eager (not a Smi);"
+    check "fixture F2 mono.txt: fn=add -> exactly 'E add@TURBOFAN_JS' (no bailout)" "$(rec add "$FXM")" "E add@TURBOFAN_JS;"
+    check "fixture F3 a-lazy.txt: fn=lazyFn -> its E and the lazy D (reason with parens); the marking-dependent-code line gives none" \
+      "$(rec lazyFn "$FXA")" "E lazyFn@TURBOFAN_JS;D lazyFn@TURBOFAN_JS|deopt-lazy ((unknown));"
+    check "fixture F4 b-invalidate.txt: fn=offFn -> only its E (the one marking-dependent-code line naming offFn gives no D)" \
+      "$(printf '%s\n' "$FXB" | grep -c -F -e '<SharedFunctionInfo offFn>' || true)|$(rec offFn "$FXB")" "1|E offFn@TURBOFAN_JS;"
+    check "fixture F5 c-inlined.txt: fn=outer -> its E and D; fn=inner (named on 2 frame-dump lines) -> 0 records" \
+      "$(rec outer "$FXC")#$(printf '%s\n' "$FXC" | grep -c -F -e '<JSFunction inner (sfi = ' || true)|$(rec inner "$FXC")" \
+      "E outer@TURBOFAN_JS;D outer@TURBOFAN_JS|deopt-eager (not a Smi);#2|"
+    check "fixture F6 d-osr.txt: fn=loopFn -> exactly 'E loopFn@MAGLEV-OSR' (the compiling-method OSR line gives none)" \
+      "$(rec loopFn "$FXO")" "E loopFn@MAGLEV-OSR;"
+    check "fixture F7 e-getter.txt: fn='get value' -> its E and D (out of bounds)" \
+      "$(rec 'get value' "$FXE")" "E get value@TURBOFAN_JS;D get value@TURBOFAN_JS|deopt-eager (out of bounds);"
+    check "fixture F8 e-getter.txt: exact names -- fn=value and fn=get -> 0 records each" "$(rec value "$FXE")#$(rec get "$FXE")" "#"
+    check "fixture F9 f-marks.txt: fn=add -> exactly 'E add@TURBOFAN_JS' (the 10 marker lines give none)" "$(rec add "$FXF")" "E add@TURBOFAN_JS;"
+    check "fixture F10 deopt.txt: exact names -- fn=ad and fn=addX -> 0 records each" "$(rec ad "$FXD")#$(rec addX "$FXD")" "#"
+    nb=$(printf '%s\n' "$FXD" "$FXM" "$FXA" "$FXB" "$FXC" "$FXO" "$FXE" "$FXF" | grep -c -e '^\[bailout (' || true)
+    ndx=$(( $(fdx add "$FXD") + $(fdx add "$FXM") + $(fdx lazyFn "$FXA") + $(fdx offFn "$FXB") + $(fdx outer "$FXC") \
+      + $(fdx loopFn "$FXO") + $(fdx 'get value' "$FXE") + $(fdx add "$FXF") ))
+    check "fixture F11 all 8 files: line-start '[bailout (' lines == D + X records of each file's fn (add add lazyFn offFn outer loopFn 'get value' add)" \
+      "$nb|$ndx" "4|4"
+    mkdir -p "$d/fxd" "$d/fxd2" "$d/fxm"
+    for x in fxd fxd2 fxm; do : >"$d/$x/driver.js"; done
+    fxt deopt >"$d/fxd/trace.txt"; fxt deopt >"$d/fxd2/trace.txt"; fxt mono >"$d/fxm/trace.txt"
+    check "fixture F12 e2e (the fake node serving deopt.txt | mono.txt): --fn add -> exit 1 DIFF, 7 spawns, 'before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)'" \
+      "$(spawn - --fn add "$d/fxd/driver.js" "$d/fxm/driver.js")|$(has '  add: DIFF -- deopt multiset differs (before 1 | after 0)')|$(has '    before=1 after=0  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" \
+      "1|VERDICT DIFF|7|1|1"
+    check "fixture F13 e2e (the fake node serving deopt.txt | a copy): --fn add -> exit 0 SAME (before 1 | after 1), 7 spawns" \
+      "$(spawn - --fn add "$d/fxd/driver.js" "$d/fxd2/driver.js")|$(has '  add: SAME -- identical deopt multiset (before 1 | after 1)')" "0|VERDICT SAME|7|1"
+    check "fixture F14 f-marks.txt tier lines: fn=add -> TURBOFAN_JS 1, 'cycles 0: TURBOFAN_JS', 'ops until TURBOFAN_JS: after op 50, before op 60'" \
+      "$(tie add "$FXF")" \
+      "compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0;cycles 0: TURBOFAN_JS;ops until TURBOFAN_JS: after op 50, before op 60;"
+    check "fixture F15 deopt.txt tier lines: fn=add -> the deopt at offset 2, 'at deopt.mjs:2:31', 'after op 2, before op 3'" \
+      "$(tie add "$FXD")" \
+      "compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0;cycles 0: TURBOFAN_JS > deopt;deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at deopt.mjs:2:31;ops until TURBOFAN_JS: after op 2, before op 3;"
+    check "fixture F16 c-inlined.txt tier lines: fn=outer -> 'at c-inlined.mjs:2:33 inlined at c-inlined.mjs:3:31'" \
+      "$(tie outer "$FXC")" \
+      "compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 1, TURBOFAN_JS-OSR 0;cycles 0: TURBOFAN_JS > deopt;deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at c-inlined.mjs:2:33 inlined at c-inlined.mjs:3:31;ops until TURBOFAN_JS: no @@LITE-MARK op lines;"
+    check "fixture F17 d-osr.txt tier lines: fn=loopFn -> 'MAGLEV-OSR 1', 'cycles 0: MAGLEV-OSR'" \
+      "$(tie loopFn "$FXO")" \
+      "compiles MAGLEV 0, MAGLEV-OSR 1, TURBOFAN_JS 0, TURBOFAN_JS-OSR 0;cycles 0: MAGLEV-OSR;ops until TURBOFAN_JS: no @@LITE-MARK op lines;"
+  fi
+
   rm -rf "$d"
   if [[ -n "$old" ]]; then trap -- "$old" EXIT; else trap - EXIT; fi
   echo
@@ -955,7 +1025,7 @@ EOF
 # ---------------------------------------------------------------------------------------------
 # options (every check below runs before any node is spawned and before any disk write)
 # ---------------------------------------------------------------------------------------------
-FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null
+FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; REPORT=/dev/null
 BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; STAGE_SAME=0
 OPTS="--fn --runs --node --v8-flags --out --self-test --help --before-ref --after-ref --before --after --module --driver --repo"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
@@ -966,13 +1036,14 @@ while [[ $# -gt 0 ]]; do
   case "$a" in
     -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
-    --fn|--runs|--node|--v8-flags|--out|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
+    --fn|--runs|--node|--v8-flags|--out|--fixtures|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
       GOTOPT="$GOTOPT $a "
       if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
       [[ -n "$v" ]] || die "$a needs a non-empty value"
       case "$a" in
         --fn) FNLIST="$v" ;; --runs) RUNS="$v" ;; --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;;
+        --fixtures) FIXTURES="$v" ;;
         --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;; --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
         --module) MODULE="$v" ;; --driver) DRIVER="$v" ;; --repo) REPO="$v" ;;
       esac ;;
@@ -983,9 +1054,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $SELFTEST == 1 ]]; then
-  [[ -z "${GOTOPT// /}" && ${#POS[@]} -eq 0 ]] || die "--self-test takes no other argument"
+  [[ ( -z "${GOTOPT// /}" || "$GOTOPT" == "  --fixtures " ) && ${#POS[@]} -eq 0 ]] || die "--self-test takes only --fixtures DIR"
+  if [[ -n "$FIXTURES" ]]; then
+    [[ "$FIXTURES" != *$'\n'* ]] || die "--fixtures: a newline is not allowed"
+    [[ -d "$FIXTURES" && -r "$FIXTURES" && -x "$FIXTURES" ]] || die "--fixtures: not a readable directory: $FIXTURES"
+  fi
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
+[[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 1 || -z "$DRIVER$MODULE$REPO" ]] || die "--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after"
 [[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--fn / --v8-flags / --out / --node: a newline is not allowed"

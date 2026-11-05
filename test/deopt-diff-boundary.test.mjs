@@ -9,6 +9,7 @@ import { spawnSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
     mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync, statSync,
+    copyFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -458,6 +459,105 @@ test('A3 teeth: the empty-raw/ row is red on a mutant that refuses any existing 
         assert.throws(() => assertOutAccepted(outRow(p, outEmptyRaw)), assert.AssertionError);
     } finally { rmAll(dir); }
 });
+// =====================================================================================================================
+// P3G4 D9: --self-test / --fixtures refusals (-h; P3G4 G4 plan D9). ORACLE: the plan's refusal texts, never the
+// script's print. Each row: exit 2, the exact die line, 0 spawns -- the fake --node logs nothing and a PATH `node` shim
+// (logs, exits 97) logs nothing. Each row has its own teeth mutant (built outside assert.throws) whose designed field
+// flips, and a revert check: on the unmutated run BOTH halves of the kill assertion must throw (the designed field is
+// not flipped, and the row is green), so neither half alone can carry the kill.
+// =====================================================================================================================
+const FIX = join(HERE, 'fixtures', 'deopt-diff', 'node-26.8.2');
+const euid0 = typeof process.geteuid === 'function' && process.geteuid() === 0;
+// args placeholders: FIX, FAKE (the rig's logging node), D1 / D2 (rig drivers), DIR (from setup(dir) -> { DIR, undo })
+function fxRow(script, args, setup) {
+    const dir = tmp('dd-fx-');
+    let undo = null;
+    try {
+        const g = rig(dir, STD);
+        const pb = join(dir, 'path-bin');
+        const plog = join(dir, 'path-node.log');
+        mkdirSync(pb);
+        writeFileSync(plog, '');
+        writeFileSync(join(pb, 'node'), `#!/bin/bash\nprintf '%s\\n' "$*" >>'${plog}'\nexit 97\n`);
+        chmodSync(join(pb, 'node'), 0o755);
+        const map = { FIX, FAKE: g.node, D1: g.drv.monoA, D2: g.drv.monoB };
+        if (setup) { const s = setup(dir); map.DIR = s.DIR; undo = s.undo || null; }
+        const env = { ...ENV, PATH: pb + ':' + process.env.PATH };
+        delete env.NODE;
+        writeFileSync(join(g.node, '..', 'log'), '');
+        const r = spawnSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', timeout: 120000, cwd: g.cwd, env });
+        const out = r.stdout + r.stderr;
+        const fake = readFileSync(join(g.node, '..', 'log'), 'utf8').split('\n').filter(Boolean).length;
+        const pnode = readFileSync(plog, 'utf8').split('\n').filter(Boolean).length;
+        return { status: r.status, out, lines: out.split('\n'), fake, pnode, DIR: map.DIR };
+    } finally { if (undo) undo(); rmAll(dir); }
+}
+function assertFx(r, line) {
+    assert.equal(r.status, 2, r.out);
+    assert.equal(r.fake, 0, 'the fake --node was spawned');
+    assert.equal(r.pnode, 0, 'a PATH node was spawned');
+    assert.ok(r.lines.includes('deopt-diff: ' + line), `missing "deopt-diff: ${line}"\n${r.out}`);
+    assert.doesNotMatch(r.out, /^VERDICT (SAME|DIFF)$/m);
+    assert.doesNotMatch(r.out, /^self-test: /m);
+}
+const GOES = () => '--fixtures goes with --self-test';
+const ONLY = () => '--self-test takes only --fixtures DIR';
+const NOTDIR = (r) => `--fixtures: not a readable directory: ${r.DIR}`;
+const M_GOES = [['[[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"', 'true || die "--fixtures goes with --self-test"']];
+const M_ONLY_GOTOPT = [['[[ ( -z "${GOTOPT// /}" || "$GOTOPT" == "  --fixtures " ) && ', '[[ ']];
+const M_ONLY_POS = [[' && ${#POS[@]} -eq 0 ]] || die "--self-test takes only --fixtures DIR"', ' ]] || die "--self-test takes only --fixtures DIR"']];
+const M_DIR = [['[[ -d "$FIXTURES" && -r "$FIXTURES" && -x "$FIXTURES" ]] || die', 'true || die']];
+const M_NEWLINE = [['[[ "$FIXTURES" != *$\'\\n\'* ]] || die "--fixtures: a newline', 'true || die "--fixtures: a newline']];
+const M_K2 = [['"$GOTOPT" == "  --fixtures " )', '"$GOTOPT" == *"--fixtures"* )']];   // a substring GOTOPT match
+const M_NO_X = [['-r "$FIXTURES" && -x "$FIXTURES" ]]', '-r "$FIXTURES" ]]']];
+const SELF_OK = (r) => { assert.equal(r.status, 0, r.out); assert.match(r.out, /^self-test: \d+ check\(s\) ok$/m); };
+const FX_FAILS = (r) => { assert.equal(r.status, 1, r.out); assert.match(r.out, /^FAIL fixture deopt\.txt: missing or not a readable file$/m); };
+const FX_ROWS = [
+    // [label, args, line(r), setup, teeth name, teeth edits, flip(r): the designed field the mutant flips, skip]
+    ['--fixtures FIX in driver mode (--node FAKE --fn add D1 D2)', ['--fixtures', 'FIX', '--node', 'FAKE', '--fn', 'add', 'D1', 'D2'], GOES, null,
+        'R-goes-with', M_GOES, (r) => assert.equal(r.fake, 7, r.out)],
+    ['--fixtures FIX alone', ['--fixtures', 'FIX'], GOES, null,
+        'R-goes-with', M_GOES, (r) => assert.ok(r.lines.includes('deopt-diff: need --fn LIST (see --help)'), r.out)],
+    ['--self-test --fn add', ['--self-test', '--fn', 'add'], ONLY, null, 'R-only-gotopt', M_ONLY_GOTOPT, SELF_OK],
+    ['--self-test D1', ['--self-test', 'D1'], ONLY, null, 'R-only-pos', M_ONLY_POS, SELF_OK],
+    ['--self-test --fixtures <a missing dir>', ['--self-test', '--fixtures', 'DIR'], NOTDIR, (d) => ({ DIR: join(d, 'no-such') }),
+        'R-dir', M_DIR, FX_FAILS],
+    ['--self-test --fixtures <a regular file>', ['--self-test', '--fixtures', 'DIR'], NOTDIR,
+        (d) => { writeFileSync(join(d, 'afile'), 'x'); return { DIR: join(d, 'afile') }; }, 'R-dir', M_DIR, FX_FAILS],
+    ['--self-test --fixtures <a DIR with a newline>', ['--self-test', '--fixtures', 'DIR'], () => '--fixtures: a newline is not allowed',
+        (d) => ({ DIR: join(d, 'a\nb') }), 'R-newline', M_NEWLINE,
+        (r) => assert.ok(r.out.includes('deopt-diff: --fixtures: not a readable directory: '), r.out)],
+    // reviewer rows: --fixtures plus another option (kills K2, a substring GOTOPT match), and a mode-0644 dir (r, no x)
+    ['--self-test --fixtures FIX --fn add', ['--self-test', '--fixtures', 'FIX', '--fn', 'add'], ONLY, null, 'K2-gotopt-substring', M_K2, SELF_OK],
+    ['--self-test --fixtures <a mode-0644 copy of FIX>', ['--self-test', '--fixtures', 'DIR'], NOTDIR, (d) => {
+        const c = join(d, 'fx0644');
+        mkdirSync(c);
+        for (const n of readdirSync(FIX)) copyFileSync(join(FIX, n), join(c, n));
+        chmodSync(c, 0o644);
+        return { DIR: c, undo: () => chmodSync(c, 0o755) };
+    }, 'R-no-x', M_NO_X, (r) => { assert.equal(r.status, 1, r.out); assert.match(r.out, /^FAIL fixture [a-z-]+\.txt: missing or not a readable file$/m); },
+        euid0 ? 'euid 0: root reads and searches a mode-0644 directory, the row cannot refuse' : false],
+];
+for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
+    const o = { skip: skip || rskip || false };
+    test(`D9: ${label} -> exit 2, 0 spawns, '${line({ DIR: '<DIR>' })}'`, o, () => {
+        const r = fxRow(SCRIPT, args, setup);
+        assertFx(r, line(r));
+    });
+    // kill = the designed field flipped AND the row's assertion red
+    const kill = (r) => { flip(r); assert.throws(() => assertFx(r, line(r)), assert.AssertionError); };
+    test(`D9 teeth: ${label} row is red on mutant ${tname}`, o, () => {
+        const dir = tmp('dd-fxm-');
+        try { const p = variant(dir, 'm', teeth); kill(fxRow(p, args, setup)); } finally { rmAll(dir); }
+    });
+    test(`D9 teeth ${tname} (${label}): revert check (the unmutated run fails both halves of the kill assertion)`, o, () => {
+        const r = fxRow(SCRIPT, args, setup);
+        assert.throws(() => kill(r), assert.AssertionError);
+        assert.throws(() => flip(r), assert.AssertionError, 'the designed field is flipped with no mutation');
+        assert.throws(() => assert.throws(() => assertFx(r, line(r)), assert.AssertionError), assert.AssertionError, 'the row is red with no mutation');
+    });
+}
+
 // =====================================================================================================================
 // A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show cb9fa65:<file>` (sha256/8 pinned)
 // =====================================================================================================================
