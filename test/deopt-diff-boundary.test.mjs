@@ -196,7 +196,8 @@ function selfTestRun(script, { term = false } = {}) {
         const c = spawn('bash', [script, '--self-test'], { cwd, env: { ...ENV, TMPDIR: td, ...sh.env } });
         let out = '';
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
-        const kill = setTimeout(() => c.kill('SIGKILL'), 120000);
+        // cap 240000 (was 120000): CI run 42056284029, job 127345428628 (macOS node 22): a row of this runner took 67.8 s
+        const kill = setTimeout(() => c.kill('SIGKILL'), 240000);
         let poll = null;
         if (term) {
             // SIGTERM once the shim logged the self-test's dir and the self-test printed >= 5 check lines (so it is
@@ -501,7 +502,8 @@ function fxRow(script, args, setup) {
         const env = { ...ENV, PATH: pb + ':' + process.env.PATH };
         delete env.NODE;
         writeFileSync(join(g.node, '..', 'log'), '');
-        const r = spawnSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', timeout: 120000, cwd: g.cwd, env });
+        // cap 240000 (was 120000): CI run 42056284029, job 127345428176 (macOS node 26.8.2): row R-only-pos took 73.1 s
+        const r = spawnSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', timeout: 240000, cwd: g.cwd, env });
         const out = r.stdout + r.stderr;
         const fake = readFileSync(join(g.node, '..', 'log'), 'utf8').split('\n').filter(Boolean).length;
         const pnode = readFileSync(plog, 'utf8').split('\n').filter(Boolean).length;

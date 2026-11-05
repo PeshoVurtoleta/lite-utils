@@ -40,10 +40,20 @@ const NULSHIM = skip ? null : buildNulCutAwk(NULDIR, ENV);
 const NULENV = skip ? null : { ...ENV, PATH: NULSHIM.dir + ':' + ENV.PATH };
 const envFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULENV : ENV);
 
-function selfTest(path, extra = []) {
-    return spawnSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', timeout: 120000, env: ENV });
+// cap 360000 (was 120000; 3x the max, rounded up to 60000): CI run 42056284029, the plain self-test took 107.8 s (macOS node 26.8.2) / 102.1 s (macOS node 22)
+const SELF_CAP = 360000;
+function selfTest(path, extra = [], cap = SELF_CAP) {
+    const t0 = Date.now();
+    const r = spawnSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', timeout: cap, env: ENV });
+    r.timedOut = !!(r.error && r.error.code === 'ETIMEDOUT'); r.cap = cap; r.ms = Date.now() - t0;   // ms: elapsed wall ms
+    return r;
 }
 function okCount(out) { return (out.match(/^ok /gm) || []).length; }
+// a run its cap killed (selfTest / runOne) fails as "timed out after <cap> ms", never as a bare `null !== 0`
+function timeoutMsg(r) {
+    return r.timedOut ? `self-test timed out after ${r.cap} ms (killed by ${r.signal || 'SIGTERM'}, ${okCount(r.stdout || '')} ok row(s) printed)` : '';
+}
+function noTimeout(r) { assert.ok(!r.timedOut, `${timeoutMsg(r)}\n${String(r.stdout || '').split('\n').slice(-8).join('\n')}${r.stderr || ''}`); }
 
 // A copy of the script in a temp dir, with exact-once edits (each must match exactly once, else the row is invalid).
 function variant(dir, name, edits) {
@@ -61,6 +71,7 @@ function variant(dir, name, edits) {
 
 test('deopt-diff --self-test: every check passes', { skip }, () => {
     const r = selfTest(SCRIPT);
+    noTimeout(r);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, new RegExp(`^self-test: ${CHECKS} check\\(s\\) ok$`, 'm'));
     assert.doesNotMatch(r.stdout, /^FAIL /m);
@@ -79,6 +90,7 @@ function base() {
 
 test('deopt-diff --self-test: an unmodified copy outside the repo passes (baseline for the mutants)', { skip }, () => {
     const r = base();
+    noTimeout(r);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal(okCount(r.stdout), CHECKS);
 });
@@ -258,6 +270,7 @@ const CONTROLS = [
 // red = exit 1 and the summary line; every designed row is among the FAIL lines (by label prefix). exact: the FAIL
 // lines are the designed rows and nothing else ("<rows> check(s) FAILED")
 function assertKilled(name, r, rows, exact = false) {
+    noTimeout(r);
     assert.equal(r.status, 1, `mutant ${name} survived: ${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
     const fl = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
@@ -280,28 +293,30 @@ let active = 0;
 const waiting = [];
 function gate() { return new Promise((res) => { const go = () => { active++; res(); }; if (active < 6) go(); else waiting.push(go); }); }
 function release() { active--; const w = waiting.shift(); if (w) w(); }
-function runOne(path, extra = [], env = ENV) {
+const RUN_CAP = 180000;   // the per-run cap of the mutant runs (unchanged); a run gets its own cap via runOne / launch
+function runOne(path, extra = [], env = ENV, cap = RUN_CAP) {
     return new Promise((res) => {
         const c = spawn('bash', [path, '--self-test', ...extra], { env });
-        let out = ''; let err = '';
+        let out = ''; let err = ''; let timedOut = false; const t0 = Date.now();
         // SIGTERM, not SIGKILL: the script's EXIT trap then removes its own mktemp dir
-        const t = setTimeout(() => c.kill('SIGTERM'), 180000);
+        const t = setTimeout(() => { timedOut = true; c.kill('SIGTERM'); }, cap);
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        c.on('close', (status) => { clearTimeout(t); res({ status, stdout: out, stderr: err }); });
+        c.on('close', (status, signal) => { clearTimeout(t); res({ status, signal, stdout: out, stderr: err, timedOut, cap, ms: Date.now() - t0 }); });
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most 6 dirs, never one per mutant
-function launch(name, edits, extra = [], env = ENV) {
+function launch(name, edits, extra = [], env = ENV, cap = RUN_CAP) {
     return (async () => {
         await gate();
         const dir = mkdtempSync(join(tmpdir(), `dd-${name.slice(0, 3)}-`));
-        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits), extra, env); }
+        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits), extra, env, cap); }
         finally { rmSync(dir, { recursive: true, force: true }); release(); }
     })();
 }
 const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits, [], envFor(name)); p.catch(() => {}); return p; });
 // the unmutated copy under the NUL shim: the control row, and the revert baseline of NUL_MUTANTS on a NUL-clean host
-const NBASE = skip ? null : launch('baseline-nul', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], [], NULENV);
+// cap 900000 (was 180000; the 22-23 unreached rows are the heavier S / R rows): CI run 42056284029, SIGTERMed at 180 s after 69-70 of 92 ok rows on both macOS legs (node 26.8.2, node 22)
+const NBASE = skip ? null : launch('baseline-nul', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], [], NULENV, 900000);
 if (NBASE) NBASE.catch(() => {});
 const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const OKILLS = skip ? null : OUT_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
@@ -315,6 +330,7 @@ function killRows(table, kills, exact = false) { table.forEach(([name, , rows], 
     test(`deopt-diff mutant ${name}: revert check (the unmutated run fails the same assertion)`, { skip }, async () => {
         // a NUL mutant run under the shim is reverted against the unmutated run under the same shim
         const b = envFor(name) === ENV ? base() : await NBASE;
+        noTimeout(b);   // outside the throws: a timed-out baseline must not pass the revert check
         // each designed prefix names exactly ONE ok line of the baseline (a widened prefix such as 'e2e' would match many)
         const oks = b.stdout.split('\n').filter((l) => l.startsWith('ok '));
         for (const row of rows) {
@@ -330,6 +346,7 @@ killRows(V8FL_MUTANTS, VKILLS);
 CONTROLS.forEach(([name], i) => {
     test(`deopt-diff --self-test control ${name} must SURVIVE`, { skip }, async () => {
         const r = await SURV[i];
+        noTimeout(r);
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.equal(okCount(r.stdout), CHECKS);
     });
@@ -409,12 +426,36 @@ test('nul-awk shim on an EMULATED NUL-clean awk (the Linux case on any host): th
         assert.equal(awkRun(cut.awk, ['{ print }'], 'a\0b\nc\n').out, 'a\nc\n');
     } finally { rmSync(dd, { recursive: true, force: true }); }
 });
-test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy passes all ${CHECKS} checks, the NUL rows included`, { skip }, async () => {
+test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy passes all ${CHECKS} checks, the NUL rows included`, { skip }, async (t) => {
     const r = await NBASE;
-    assert.equal(r.status, 0, r.stdout + r.stderr);
+    t.diagnostic(`NUL control ran ${r.ms} ms of its ${r.cap} ms cap`);   // the CI log then measures NBASE
+    noTimeout(r);
+    assert.equal(r.status, 0, `NUL control ran ${r.ms} ms of its ${r.cap} ms cap\n` + r.stdout + r.stderr);
     assert.equal(okCount(r.stdout), CHECKS);
     const oks = r.stdout.split('\n').filter((l) => l.startsWith('ok '));
     for (const row of [R.nul, R.nul0]) assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, row);
+});
+// b38 CI-TIMEOUT: a run its cap kills says so. ORACLE: a fake self-test that sleeps 5 s (its sleep detached from the
+// pipes, so the kill closes them at once) and the caps given here, never the script. Both runners: runOne (async) and
+// selfTest (spawnSync). Cap 300 ms -> timedOut, status null, "timed out after 300 ms"; cap 60000 ms -> exit 0, no timeout.
+test('runOne / selfTest cap: a 5 s fake self-test under a 300 ms cap -> timedOut, status null, "timed out after 300 ms"; under 60000 ms -> exit 0', { skip }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dd-cap-'));
+    try {
+        const p = join(dir, 'slow.sh');
+        writeFileSync(p, '#!/usr/bin/env bash\nsleep 5 </dev/null >/dev/null 2>&1\necho "ok fake slow self-test"\n');
+        chmodSync(p, 0o755);
+        for (const [how, go] of [['runOne', (cap) => runOne(p, [], ENV, cap)], ['selfTest', async (cap) => selfTest(p, [], cap)]]) {
+            const r = await go(300);
+            assert.equal(r.timedOut, true, `${how}: cap 300 ms on a 5 s run must time out (status ${r.status})`);
+            assert.equal(r.status, null, how);
+            assert.ok(timeoutMsg(r).includes('timed out after 300 ms'), `${how}: "${timeoutMsg(r)}"`);
+            assert.throws(() => noTimeout(r), /timed out after 300 ms/, how);
+            const c = await go(60000);   // the inverse control: a cap above the sleep
+            assert.deepEqual([c.timedOut, c.status, c.stdout], [false, 0, 'ok fake slow self-test\n'], `${how}: ${c.stderr}`);
+            assert.equal(timeoutMsg(c), '', how);
+            noTimeout(c);
+        }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 // =====================================================================================================================
@@ -425,6 +466,7 @@ test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy pa
 const FIXN = CHECKS + FIXTURE_ROWS;
 const FX = (n) => `fixture F${n} `;   // ends in a space: `fixture F1 ` never names F10-F17
 function assertFixturesOk(r) {
+    noTimeout(r);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.doesNotMatch(r.stdout, /^FAIL /m);
     assert.equal(okCount(r.stdout), FIXN, `want ${CHECKS} + ${FIXTURE_ROWS} ok rows`);
@@ -437,6 +479,7 @@ function assertFixturesOk(r) {
 // a copy of FIX without deopt.txt: exit 1, the summary FAILED line, exactly one missing-file line and it names deopt.txt
 const MISSING = (x) => `FAIL fixture ${x}.txt: missing or not a readable file`;
 function assertMissingDeopt(r) {
+    noTimeout(r);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
     const lines = r.stdout.split('\n');
@@ -445,6 +488,7 @@ function assertMissingDeopt(r) {
 }
 // ifalse: the fixture block never runs, so the run is green with C rows and no fixture row -- red on the C + F count only
 function assertCountKill(r) {
+    noTimeout(r);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal(okCount(r.stdout), CHECKS);
     assert.doesNotMatch(r.stdout, /^ok fixture /m);
@@ -480,6 +524,7 @@ test('deopt-diff --self-test --fixtures COPY (FIX without deopt.txt) -> exit 1 a
 });
 test('deopt-diff --fixtures missing-file row: revert check (the full FIX run fails the same assertion)', { skip }, async () => {
     const b = await FBASE;
+    noTimeout(b);
     assert.throws(() => assertMissingDeopt(b), assert.AssertionError);
 });
 test(`deopt-diff --self-test --fixtures MUST FAIL the C + F count on mutant ifalse (the fixture block never runs)`, { skip }, async () => {
@@ -487,6 +532,7 @@ test(`deopt-diff --self-test --fixtures MUST FAIL the C + F count on mutant ifal
 });
 test('deopt-diff mutant ifalse: revert check (the unmutated --fixtures run fails the same assertion)', { skip }, async () => {
     const b = await FBASE;
+    noTimeout(b);
     assert.throws(() => assertCountKill(b), assert.AssertionError);
 });
 FIX_MUTANTS.forEach(([name, , rows], i) => {
@@ -495,6 +541,7 @@ FIX_MUTANTS.forEach(([name, , rows], i) => {
     });
     test(`deopt-diff mutant ${name} --fixtures: revert check (the unmutated run fails the same assertion)`, { skip }, async () => {
         const b = await FBASE;
+        noTimeout(b);
         const oks = b.stdout.split('\n').filter((l) => l.startsWith('ok '));
         for (const row of rows) assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, `prefix "${row}" must match exactly one self-test row`);
         assert.throws(() => assertKilled(name, b, rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);

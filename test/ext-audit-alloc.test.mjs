@@ -214,7 +214,8 @@ row('B2 CDPATH=. bash sub/allocation-diff.sh --self-test exits 0', () => {
     const S = realpathSync(mkdtempSync(join(tmpdir(), 'ea-alloc-st-')));
     try {
         mkdirSync(join(S, 'sub')); copyFileSync(SCRIPT, join(S, 'sub', 'allocation-diff.sh'));
-        const r = spawnSync(BASH, ['sub/allocation-diff.sh', '--self-test'], { encoding: 'utf8', timeout: 300000, cwd: S, env: { ...ENV, CDPATH: '.', TMPDIR: S } });
+        // cap 480000 (was 300000): CI run 42056284029, this one spawn took 153.8 s (macOS node 26.8.2) / 131.5 s (macOS node 22)
+        const r = spawnSync(BASH, ['sub/allocation-diff.sh', '--self-test'], { encoding: 'utf8', timeout: 480000, cwd: S, env: { ...ENV, CDPATH: '.', TMPDIR: S } });
         const out = (r.stdout || '') + (r.stderr || '');
         assert.equal(r.status, 0, out.split('\n').slice(-25).join('\n'));
     } finally { rmSync(S, { recursive: true, force: true }); }

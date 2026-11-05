@@ -141,7 +141,8 @@ function rig(content, rc = 0) { // a fresh log + canned --v8-options output for 
 function run(shell, frag, node, mode, args = [], o = {}) {
     const env = { ...ENV, ...(o.env || {}) };
     if (o.rig) Object.assign(env, { FAKE_LOG: o.rig.log, FAKE_OUT: o.rig.out, FAKE_RC: String(o.rig.rc) });
-    return spawnSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', timeout: 120000, env, cwd: o.cwd, input: o.input });
+    // cap 420000 (was 120000): CI run 42056284029, row A5 M4 (2 sweep spawns) took 127.1 s on macOS node 26.8.2 (A5 M3 115.2 s; node 22 max 104.7 s)
+    return spawnSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', timeout: 420000, env, cwd: o.cwd, input: o.input });
 }
 function bits(r) { assert.equal(r.status, 0, `driver status ${r.status}: ${r.stderr}`); assert.equal(r.stderr, ''); return r.stdout.split('\n').filter(Boolean).map((x) => x === '1'); }
 function probe(shell, frag, tokens, node = FAKE, rg = rig(FIX_TEXT)) { return bits(run(shell, frag, node, 'tokens', [], { rig: rg, input: tokens.join('\n') + '\n' })); }
