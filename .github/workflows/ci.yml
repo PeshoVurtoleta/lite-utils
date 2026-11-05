@@ -1,9 +1,9 @@
 # ci.yml -- lite-utils per-push / per-PR gate (.handoff/PLAN-ci.md, burst 35; rulings Q-CI-1 / Q-CI-3).
 # DETERMINISTIC gates only (ROADMAP "Statistical host: none, REPORTED only"): npm test, every root tool's
 # --self-test, and the --fixtures self-tests of bytecode-budget and deopt-diff. No quiet lock, no timed gate.
-# Matrix: node 22 / 24 / 26 x ubuntu-latest (bash 5, case-sensitive FS, GNU userland) and macos-latest
-# (/bin/bash 3.2, case-insensitive APFS, BSD userland), plus one node 26.8.2 leg per OS: 8 legs. No Windows: the
-# tools are bash only.
+# Matrix: node 22 / 24 / 26 x ubuntu-latest (bash 5, case-sensitive FS; uutils coreutils and a NUL-clean awk as
+# of 2026-11) and macos-latest (/bin/bash 3.2, case-insensitive APFS, BSD userland), plus one node 26.8.2 leg per
+# OS: 8 legs. No Windows: the tools are bash only. The provenance step prints the awk / tr / mktemp flavour.
 # fetch-depth 0: the parity / teeth rows read `git show <commit>:<file>`. The pins live in the test files only:
 # GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of
 # test/bytecode-budget*.test.mjs, the deopt-diff-boundary A4 git row, and the 221ff2ec base rows of
@@ -34,7 +34,8 @@ jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # 120: npm test alone took 57.7 min on macOS node 22 at 2016586 (run 41987982156); 60 cancelled two legs
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +66,11 @@ jobs:
           uname -a
           echo "bash on PATH: $(command -v bash)"
           echo "awk on PATH: $(command -v awk)"
+          # which userland the oracles meet: awk flavour + NUL handling (BSD awk truncates a record at NUL), coreutils flavour
+          { awk --version 2>/dev/null || awk -W version 2>/dev/null || awk -V 2>/dev/null || echo "awk: no version flag"; } | head -1 || true
+          printf "a\\0b\\n" | awk "{ print \"awk NUL probe: record length \" length(\$0) \" (3 = NUL-clean, 1 = truncating)\" }" || true
+          { tr --version 2>&1 || true; } | head -1 || true
+          { mktemp --version 2>&1 || true; } | head -1 || true
       - name: macOS bash on PATH is /bin/bash
         if: runner.os == 'macOS'
         run: test "$(command -v bash)" = /bin/bash

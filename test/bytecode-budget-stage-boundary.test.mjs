@@ -266,10 +266,29 @@ mutant('M-no-replace', 'cat-file blob gets --no-replace-objects (the deferred fi
 // 4. a path value with a leading '-' (deferred refusal): dirname / basename / stat read it as an option; set -e exits 1
 // and ONLY the EXIT trap turns that into exit 2 "unexpected error (exit 1)". 0 spawns, OUT not created.
 // =====================================================================================================
+// The option-error oracle: BSD ("dirname: illegal option -- b"), GNU ("dirname: invalid option -- 'b'") or uutils
+// ("error: unexpected argument '-b' found" ... "Usage: dirname [OPTION] NAME..."), tied to dirname / basename / stat.
+const DASH_BSD_GNU = /^(dirname|basename|stat)(: illegal option| ?: (invalid|unrecognized) option)/m;
+const DASH_UUTILS = /^error: unexpected argument '-[^']*' found$(?:\n(?!error: ).*)*\n^Usage: (dirname|basename|stat) /m;
+const dashToolErr = (s) => DASH_BSD_GNU.test(s) || DASH_UUTILS.test(s);
+test('stage boundary: 4 the leading-dash option-error oracle accepts BSD / GNU / uutils wording and rejects unrelated errors (pure JS)', () => {
+    const uu = (usage) => `error: unexpected argument '-b' found\n\n  tip: to pass '-b' as a value, use '-- -b'\n\nUsage: ${usage}\n\nFor more information, try '--help'.\n`;
+    assert.ok(dashToolErr('dirname: illegal option -- b\nusage: dirname string [...]\n'));
+    assert.ok(dashToolErr("dirname: invalid option -- 'b'\nTry 'dirname --help' for more information.\n"));
+    assert.ok(dashToolErr(uu('dirname [OPTION] NAME...')));
+    assert.ok(dashToolErr(uu('basename [-z] NAME [SUFFIX]')));
+    assert.ok(dashToolErr(uu('stat [OPTION]... FILE...')));
+    assert.ok(!dashToolErr(uu('cp [OPTION]... SOURCE DEST')), 'Usage line names another tool');
+    assert.ok(!dashToolErr("error: unexpected argument '-b' found\n\n  tip: to pass '-b' as a value, use '-- -b'\n"), 'no Usage line');
+    assert.ok(!dashToolErr(uu('cp [OPTION]... SOURCE DEST') + "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: dirname [OPTION] NAME...\n"), 'cp error block, then a dirname missing-operand block');
+    assert.ok(!dashToolErr('Usage: dirname [OPTION] NAME...\nerror: something else\n'), 'Usage without the unexpected-argument line');
+    assert.ok(!dashToolErr('cp: illegal option -- b\n'), 'BSD wording for another tool');
+    assert.ok(!dashToolErr(''));
+});
 const dashCheck = (c, r) => {
     assert.equal(r.status, 2, msg(r));
     assert.match(r.stderr, /^bytecode-budget: unexpected error \(exit 1\)\nVERDICT NO-VERDICT$/m, msg(r));
-    assert.match(r.stderr, /^(dirname|basename|stat)(: illegal option| ?: (invalid|unrecognized) option)/m, msg(r));
+    assert.ok(dashToolErr(r.stderr), msg(r));
     assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
     assert.ok(!existsSync(c.out), 'OUT was created');
 };

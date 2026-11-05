@@ -9,10 +9,10 @@ import { spawnSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
     mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync, statSync,
-    copyFileSync,
+    copyFileSync, realpathSync, rmdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -157,14 +157,30 @@ test('A5 teeth: mutant tee-default-to-cwd turns the cycle row red (cwd holds run
     } finally { rmAll(dir); }
 });
 // teeth 2: a bare `mktemp -d` in driver mode that is never removed; the shim sees it (macOS: the TMPDIR does not)
-test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim log, not the TMPDIR', { skip }, () => {
+test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim log (and, where mktemp honours TMPDIR, the TMPDIR)', { skip }, () => {
     const dir = tmp('dd-a5m-');
     try {
         const c = cycles(variant(dir, 'mktemp_leak', [['RUN_RC=0; RUN_TX=""\n', 'mktemp -d >/dev/null\nRUN_RC=0; RUN_TX=""\n']]));
-        assert.throws(() => assertCycles(c), /driver mode called mktemp/);
+        // probe: does the resolved real mktemp honour TMPDIR for a bare `mktemp -d`? (GNU / uutils yes, BSD no)
+        const pd = tmp('dd-a5-probe-');
+        let honours, got = '';
+        try {
+            const pr = spawnSync(c.real, ['-d'], { encoding: 'utf8', env: { ...ENV, TMPDIR: pd }, timeout: 30000 });
+            got = pr.status === 0 ? pr.stdout.trim() : '';
+            honours = got !== '' && (got.startsWith(pd + '/') || got.startsWith(realpathSync(pd) + '/'));
+        } finally { rmAll(pd); if (got && !honours) rmdirSync(got); }   // a TMPDIR-ignoring mktemp (BSD) made its dir elsewhere
+        if (honours) {
+            // the TMPDIR check in assertCycles fires first: exactly the 9 leaked dirs, named as the shim logged them
+            assert.throws(() => assertCycles(c), /the private TMPDIR holds entries/);
+            assert.equal(c.tmpdir.length, 9);
+            assert.deepEqual(c.tmpdir.slice().sort(), c.shim.map((p) => basename(p)).sort(), 'the TMPDIR entries are the leaked dirs');
+            assert.throws(() => assertCycles({ ...c, tmpdir: [] }), /driver mode called mktemp/, 'the shim leg is red on its own');
+        } else {
+            assert.throws(() => assertCycles(c), /driver mode called mktemp/);
+            assert.deepEqual(c.tmpdir, [], 'a mktemp that ignores TMPDIR (macOS BSD) leaves the TMPDIR empty');
+        }
         assert.equal(c.shim.length, 9);
         assert.equal(c.live.length, 9, 'every leaked dir was still on disk when the row read it');
-        if (process.platform === 'darwin' && c.real === '/usr/bin/mktemp') assert.deepEqual(c.tmpdir, [], 'macOS bare mktemp ignores TMPDIR');
     } finally { rmAll(dir); }
 });
 

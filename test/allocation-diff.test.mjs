@@ -18,6 +18,7 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probeAwk, buildNulCutAwk } from './nul-awk.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
 const C = 78;   // self-test ok lines at b36 G5 B3 (src eb9de455 / root cd94100c, sha256; 76 at B2a 00ab0dac / 8e795263,
@@ -32,6 +33,16 @@ const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'TMPDIR',
     'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT']) delete ENV[k];
 for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
+// b37 ruling "NUL mutants": gawk / mawk (Linux) keep a NUL inside a record, so the tr '\000' '?' defense is unobservable
+// there and M10 survives. NUL_MUTANTS (and their revert checks) run with the BSD-NUL shim first on PATH when the probe
+// says the host awk is NUL-clean; on a truncating host (macOS) they run as before. The shim is built on every host: the
+// control row runs the UNMUTATED self-test under it (test/nul-awk.mjs; its full pin rows are in deopt-diff.test.mjs).
+const NUL_MUTANTS = new Set(['M10']);
+const NUL = skip ? null : probeAwk(ENV);
+const NULDIR = skip ? null : mkdtempSync(join(tmpdir(), 'ad-nul-'));
+if (NULDIR) process.on('exit', () => rmSync(NULDIR, { recursive: true, force: true }));
+const NULSHIM = skip ? null : buildNulCutAwk(NULDIR, ENV);
+const nulFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULSHIM.dir : null);
 const SRC = readFileSync(SCRIPT, 'utf8');
 function count(src, from) { return src.split(from).length - 1; }
 // the MD-33 guard (B2h; root 8e795263 :845 / src 00ab0dac :775), one whole line: the B2h mutant deletes exactly it
@@ -165,21 +176,21 @@ function realMktemp() {
     assert.ok(real.startsWith('/') && !real.includes("'"), `mktemp not found: "${real}"`);
     return real;
 }
-function launch(name, edits, shim = false) {
+function launch(name, edits, shim = false, nulDir = null) {
     return (async () => {
         await gate();
         const dir = mkdtempSync(join(tmpdir(), 'ad-m-'));
         try {
             const tmp = join(dir, 'tmp'); mkdirSync(tmp);
             const p = edits ? variant(dir, name, edits) : SCRIPT;
-            let extra = {}; let pl = null;
+            let extra = nulDir ? { PATH: nulDir + ':' + ENV.PATH } : {}; let pl = null;
             if (shim) {
                 assert.ok(!dir.includes("'"), dir);
                 const sd = join(dir, 'shim'); mkdirSync(sd); pl = join(dir, 'mk.paths'); writeFileSync(pl, '');
                 writeFileSync(join(sd, 'mktemp'), ['#!/bin/bash', `o=$('${realMktemp()}' "$@") || exit $?`,
                     `printf '%s\\n' "$o" >>'${pl}'`, `printf '%s\\n' "$o"`, ''].join('\n'));
                 chmodSync(join(sd, 'mktemp'), 0o755);
-                extra = { PATH: sd + ':' + ENV.PATH };
+                extra = { PATH: sd + ':' + (extra.PATH || ENV.PATH) };
             }
             const r = await runSelfTest(p, tmp, extra);
             r.dir = dir;
@@ -197,6 +208,8 @@ function lazy(f) { let p = null; return () => { if (!p) { p = f(); p.catch(() =>
 // --- row 1: the in-repo script; row 2: an unmodified copy outside the repo (os.tmpdir), the mutants' baseline ---
 const root = lazy(() => launch('root', null));
 const base = lazy(() => launch('baseline', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']]));
+// the unmutated copy under the NUL shim: the control row, and the revert baseline of NUL_MUTANTS on a NUL-clean host
+const nbase = lazy(() => launch('baseline-nul', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], false, NULSHIM.dir));
 function assertGreen(r) {
     assert.equal(r.status, 0, r.stdout + r.stderr);
     const m = /^self-test: (\d+) check\(s\) ok$/m.exec(r.stdout);
@@ -546,10 +559,10 @@ function assertWired(r) {
 let KILLS = null; let WIRES = null; let Y7R = null;
 function kills() {
     if (KILLS) return KILLS;
-    const others = [root(), base()];
+    const others = [root(), base(), nbase()];   // nbase too: R8 still runs alone after every other self-test
     KILLS = MUTANTS.map(([name, , , edits]) => {
         if (EXCL.has(name)) return null;
-        const p = launch(name, edits); p.catch(() => {}); others.push(p); return p;
+        const p = launch(name, edits, false, nulFor(name)); p.catch(() => {}); others.push(p); return p;
     });
     WIRES = EW.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); others.push(p); return p; });
     Y7R = launch(Y7[0], Y7[1]); Y7R.catch(() => {}); others.push(Y7R);
@@ -589,7 +602,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
         assertKilled(name, r, rows);
     });
     test(`allocation-diff mutant ${name}: revert check (the unmutated copy fails the same kill assertion)`, { skip }, async () => {
-        const r = await base();
+        const r = await (nulFor(name) ? nbase() : base());   // a NUL mutant under the shim reverts against the shimmed copy
         assert.throws(() => assertKilled(name, r, rows), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
 });
@@ -620,6 +633,25 @@ test('allocation-diff --self-test temp dir (Y7): revert check (the trap rm dropp
     assert.throws(() => assertClean(r), assert.AssertionError);
     assert.equal(r.left.length, 1, r.left.join(' '));
     assert.match(r.left[0], /^allocation-diff-st\.[A-Za-z0-9]{6}$/);
+});
+
+// --- b37 "NUL mutants": probe + shim (their own rows; the full shim pin is in deopt-diff.test.mjs)
+test('nul-awk probe: the host awk reads a<NUL>b as length 3 (NUL-clean) or 1 (truncating); M10 takes the shim iff NUL-clean', { skip }, (t) => {
+    t.diagnostic(`host awk ${NUL.awk}: length(a<NUL>b) = ${NUL.len} -> ${NUL.nulClean ? 'NUL-clean: M10 runs under the shim' : 'truncating: M10 runs as is'}`);
+    assert.ok(NUL.len === 1 || NUL.len === 3, String(NUL.len));
+    assert.equal(NUL.nulClean, NUL.len === 3);
+    for (const [name] of MUTANTS) assert.equal(nulFor(name), NUL.nulClean && NUL_MUTANTS.has(name) ? NULSHIM.dir : null, name);
+    assert.ok(MUTANTS.some(([m]) => m === 'M10'));
+    // the shim: first on its PATH, a truncating awk whatever the host awk is, never itself
+    assert.deepEqual(probeAwk({ ...ENV, PATH: NULSHIM.dir + ':' + ENV.PATH }), { awk: NULSHIM.awk, len: 1, nulClean: false });
+    assert.ok(NULSHIM.real.startsWith('/') && NULSHIM.real !== NULSHIM.awk && !NULSHIM.real.startsWith(NULSHIM.dir + '/'), NULSHIM.real);
+    const r = spawnSync(NULSHIM.awk, ['{ print NR ":" $0 }'], { input: Buffer.from('a\0b\nc\n', 'latin1'), env: ENV });
+    assert.deepEqual([r.status, r.stdout.toString('latin1')], [0, '1:a\n2:c\n']);
+});
+test(`allocation-diff --self-test under the NUL shim (control): the UNMUTATED copy passes all ${C} checks, row 25 (A3 M10) included`, { skip }, async () => {
+    const r = await nbase();
+    assertGreen(r);
+    assert.equal(okLines(r.stdout).filter((l) => l.startsWith('ok ' + ROW[25])).length, 1);
 });
 
 // --- the refusal rig: this file's OWN logging fake node and mktemp shim. The fake node logs its argv per spawn and

@@ -28,7 +28,8 @@ jobs:
   test:
     name: nightly (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # 120: npm test alone took 57.7 min on macOS node 22 at 2016586 (run 41987982156); 60 cancelled two legs
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +56,11 @@ jobs:
           uname -a
           echo "bash on PATH: $(command -v bash)"
           echo "awk on PATH: $(command -v awk)"
+          # which userland the oracles meet: awk flavour + NUL handling (BSD awk truncates a record at NUL), coreutils flavour
+          { awk --version 2>/dev/null || awk -W version 2>/dev/null || awk -V 2>/dev/null || echo "awk: no version flag"; } | head -1 || true
+          printf "a\\0b\\n" | awk "{ print \"awk NUL probe: record length \" length(\$0) \" (3 = NUL-clean, 1 = truncating)\" }" || true
+          { tr --version 2>&1 || true; } | head -1 || true
+          { mktemp --version 2>&1 || true; } | head -1 || true
       - name: macOS bash on PATH is /bin/bash
         if: runner.os == 'macOS'
         run: test "$(command -v bash)" = /bin/bash

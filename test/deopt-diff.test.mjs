@@ -9,10 +9,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probeAwk, buildNulCutAwk, buildNulCleanAwk } from './nul-awk.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
 const CHECKS = 92;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
@@ -27,6 +28,17 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 // the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
 const ENV = { ...process.env };
 for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+// b37 ruling "NUL mutants": gawk / mawk (Linux) keep a NUL inside a record, so the tr '\000' '?' defense is unobservable
+// there and T1 / Rf survive. NUL_MUTANTS (and their revert checks) run with the BSD-NUL shim first on PATH when the probe
+// says the host awk is NUL-clean; on a truncating host (macOS) they run as before. The shim is built on every host: the
+// control row runs the UNMUTATED self-test under it, and the pin rows below test it (test/nul-awk.mjs).
+const NUL_MUTANTS = new Set(['T1-tr-replaced-by-cat', 'Rf-tr-after-awk']);
+const NUL = skip ? null : probeAwk(ENV);
+const NULDIR = skip ? null : mkdtempSync(join(tmpdir(), 'dd-nul-'));
+if (NULDIR) process.on('exit', () => rmSync(NULDIR, { recursive: true, force: true }));
+const NULSHIM = skip ? null : buildNulCutAwk(NULDIR, ENV);
+const NULENV = skip ? null : { ...ENV, PATH: NULSHIM.dir + ':' + ENV.PATH };
+const envFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULENV : ENV);
 
 function selfTest(path, extra = []) {
     return spawnSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', timeout: 120000, env: ENV });
@@ -268,9 +280,9 @@ let active = 0;
 const waiting = [];
 function gate() { return new Promise((res) => { const go = () => { active++; res(); }; if (active < 6) go(); else waiting.push(go); }); }
 function release() { active--; const w = waiting.shift(); if (w) w(); }
-function runOne(path, extra = []) {
+function runOne(path, extra = [], env = ENV) {
     return new Promise((res) => {
-        const c = spawn('bash', [path, '--self-test', ...extra], { env: ENV });
+        const c = spawn('bash', [path, '--self-test', ...extra], { env });
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the script's EXIT trap then removes its own mktemp dir
         const t = setTimeout(() => c.kill('SIGTERM'), 180000);
@@ -279,15 +291,18 @@ function runOne(path, extra = []) {
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most 6 dirs, never one per mutant
-function launch(name, edits, extra = []) {
+function launch(name, edits, extra = [], env = ENV) {
     return (async () => {
         await gate();
         const dir = mkdtempSync(join(tmpdir(), `dd-${name.slice(0, 3)}-`));
-        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits), extra); }
+        try { return await runOne(variant(dir, name.replace(/[^A-Za-z0-9]/g, '_'), edits), extra, env); }
         finally { rmSync(dir, { recursive: true, force: true }); release(); }
     })();
 }
-const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
+const KILLS = skip ? null : MUTANTS.map(([name, edits]) => { const p = launch(name, edits, [], envFor(name)); p.catch(() => {}); return p; });
+// the unmutated copy under the NUL shim: the control row, and the revert baseline of NUL_MUTANTS on a NUL-clean host
+const NBASE = skip ? null : launch('baseline-nul', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']], [], NULENV);
+if (NBASE) NBASE.catch(() => {});
 const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const OKILLS = skip ? null : OUT_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const VKILLS = skip ? null : V8FL_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
@@ -297,13 +312,15 @@ function killRows(table, kills, exact = false) { table.forEach(([name, , rows], 
         assertKilled(name, await kills[i], rows, exact);
     });
     // revert check: the unmutated script must NOT satisfy the same assertion (one shared baseline run)
-    test(`deopt-diff mutant ${name}: revert check (the unmutated run fails the same assertion)`, { skip }, () => {
+    test(`deopt-diff mutant ${name}: revert check (the unmutated run fails the same assertion)`, { skip }, async () => {
+        // a NUL mutant run under the shim is reverted against the unmutated run under the same shim
+        const b = envFor(name) === ENV ? base() : await NBASE;
         // each designed prefix names exactly ONE ok line of the baseline (a widened prefix such as 'e2e' would match many)
-        const oks = base().stdout.split('\n').filter((l) => l.startsWith('ok '));
+        const oks = b.stdout.split('\n').filter((l) => l.startsWith('ok '));
         for (const row of rows) {
             assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, `prefix "${row}" must match exactly one self-test row`);
         }
-        assert.throws(() => assertKilled(name, base(), rows, exact), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
+        assert.throws(() => assertKilled(name, b, rows, exact), assert.AssertionError, `mutant ${name}: the kill assertion passes with no mutation`);
     });
 }); }
 killRows(MUTANTS, KILLS);
@@ -316,6 +333,88 @@ CONTROLS.forEach(([name], i) => {
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.equal(okCount(r.stdout), CHECKS);
     });
+});
+
+// --- b37 "NUL mutants": the probe + shim pinned (their own rows). ORACLE: the ruling's BSD record semantics (a record
+// is cut at its first NUL) and the real awk run directly on the same input, never the shim's own output.
+function awkRun(bin, args, input, env = ENV) {
+    const r = spawnSync(bin, args, { input: input === undefined ? undefined : Buffer.from(input, 'latin1'), env, timeout: 30000 });
+    return { status: r.status, out: r.stdout ? r.stdout.toString('latin1') : '', err: r.stderr ? r.stderr.toString('latin1') : '' };
+}
+test('nul-awk probe: the host awk reads a<NUL>b as length 3 (NUL-clean) or 1 (truncating); the NUL mutants take the shim iff NUL-clean', { skip }, (t) => {
+    t.diagnostic(`host awk ${NUL.awk}: length(a<NUL>b) = ${NUL.len} -> ${NUL.nulClean ? 'NUL-clean: T1 / Rf run under the shim' : 'truncating: T1 / Rf run as is'}`);
+    assert.ok(NUL.len === 1 || NUL.len === 3, String(NUL.len));
+    assert.equal(NUL.nulClean, NUL.len === 3);
+    for (const n of NUL_MUTANTS) assert.ok(MUTANTS.some(([m]) => m === n), `${n} is in MUTANTS`);
+    for (const [name] of [...MUTANTS, ...TIER_MUTANTS, ...OUT_MUTANTS, ...V8FL_MUTANTS]) {
+        assert.equal(envFor(name), NUL.nulClean && NUL_MUTANTS.has(name) ? NULENV : ENV, name);
+    }
+});
+test('nul-awk shim: first on PATH, execs the real awk (never itself), cuts a<NUL>b to a, NUL-free input and argv byte-identical, exit status kept', { skip }, () => {
+    const { awk, real, dir } = NULSHIM;
+    assert.ok(real.startsWith('/') && !realpathSync(real).startsWith(dir + '/') && realpathSync(real) !== awk, real);
+    assert.equal(readFileSync(awk, 'utf8').split(`my $real = '${real}';`).length - 1, 1, 'the real awk path is baked in, once');
+    assert.equal(probeAwk(NULENV).awk, awk, 'the shim is the first awk on the NUL PATH');
+    assert.deepEqual(probeAwk(NULENV), { awk, len: 1, nulClean: false });
+    assert.equal(awkRun(awk, ['{ print }'], 'a\0b\n').out, 'a\n');
+    assert.equal(awkRun(awk, ['{ print NR ":" $0 }'], 'x\0y\nab\n\0zz\nq').out, '1:x\n2:ab\n3:\n4:q\n');
+    // a final NUL-led record with no trailing newline stays a record (empty), as on BSD awk (the oracle, when present)
+    const LASTNUL = [['{ print NR ":" $0 } END { print NR }'], 'x\n\0y'];
+    assert.equal(awkRun(awk, ...LASTNUL).out, '1:x\n2:\n2\n');
+    if (process.platform === 'darwin') assert.equal(awkRun('/usr/bin/awk', ...LASTNUL).out, '1:x\n2:\n2\n', 'BSD awk oracle');
+    // a NUL line longer than one 65536-byte read: the cut carries across the shim's sysread chunks
+    assert.equal(awkRun(awk, ['{ print NR ":" length($0) ":" substr($0, 1, 3) }'], 'a\0' + 'z'.repeat(70000) + '\nb\n').out, '1:1:a\n2:1:b\n');
+    const dd = mkdtempSync(join(tmpdir(), 'dd-nulpin-'));
+    try {
+        writeFileSync(join(dd, 'f1'), 'u:v\nw:z\n');
+        const cases = [
+            [['-F', ':', '-v', 'k=K', '{ print k, NF, $2, (FILENAME == ARGV[1]) }', join(dd, 'f1')], '', 0, 'K 2 v 1\nK 2 z 1\n'],
+            [['{ print length($0) ":" $0 }'], 'p q\tr\n\nlast \x7f~', 0, '5:p q\tr\n0:\n7:last \x7f~\n'],
+            [['BEGIN { exit 3 }'], 'x\n', 3, ''],
+            [['{ exit 4 }'], 'x\n', 4, ''],
+            [['{'], 'x\n', -1, ''],
+        ];
+        for (const [args, input, rc, text] of cases) {
+            const want = awkRun(real, args, input); const got = awkRun(awk, args, input);
+            // the oracle: the real awk itself gives the status / text this case was written for (-1: any non-zero)
+            assert.deepEqual([rc < 0 ? want.status !== 0 : want.status === rc, want.out], [true, text], `real awk: ${args.join(' ')}`);
+            assert.deepEqual({ status: got.status, out: got.out }, { status: want.status, out: want.out }, args.join(' '));
+        }
+        assert.deepEqual([awkRun(awk, ['BEGIN { exit 3 }'], '').status, awkRun(awk, ['{ exit 4 }'], 'x\n').status], [3, 4]);
+        assert.notEqual(awkRun(awk, ['{'], 'x\n').status, 0, 'a syntax error stays non-zero');
+        // never itself: a second shim written into a dir that already holds one, that dir first on PATH, still execs the real awk
+        const sd = join(dd, 'again'); mkdirSync(sd);
+        const s1 = buildNulCutAwk(sd, ENV);
+        const s2 = buildNulCutAwk(sd, { ...ENV, PATH: s1.dir + ':' + ENV.PATH });
+        assert.deepEqual([s2.awk, realpathSync(s2.real)], [s1.awk, realpathSync(real)]);
+        assert.equal(awkRun(s2.awk, ['{ print }'], 'q\0r\n').out, 'q\n');
+        // stdin that never reaches EOF (a FIFO held open read-write): an awk that never reads stdin still exits
+        const r = spawnSync('bash', ['-c', 'mkfifo "$1/ff" && exec 3<>"$1/ff" && exec "$2" "BEGIN { print 7 }" <&3', 'pin', dd, awk],
+            { encoding: 'utf8', env: ENV, timeout: 20000 });
+        assert.deepEqual([r.status, r.stdout], [0, '7\n'], r.stderr);
+    } finally { rmSync(dd, { recursive: true, force: true }); }
+});
+test('nul-awk shim on an EMULATED NUL-clean awk (the Linux case on any host): the probe reads 3 under it, 1 with the shim first', { skip }, () => {
+    const dd = mkdtempSync(join(tmpdir(), 'dd-nulemu-'));
+    try {
+        mkdirSync(join(dd, 'emu')); mkdirSync(join(dd, 'cut'));
+        const emu = buildNulCleanAwk(join(dd, 'emu'), ENV);
+        const envE = { ...ENV, LC_ALL: 'C', PATH: emu.dir + ':' + ENV.PATH };   // C locale: 0xFF is one byte = one char
+        assert.deepEqual(probeAwk(envE), { awk: emu.awk, len: 3, nulClean: true });
+        assert.equal(awkRun(emu.awk, ['{ print }'], 'a\0b\n').out, 'a\0b\n', 'the emulator keeps the NUL in and out');
+        const cut = buildNulCutAwk(join(dd, 'cut'), envE);
+        assert.equal(cut.real, emu.awk, 'the shim execs the next awk on PATH (the emulator), not itself');
+        const envC = { ...envE, PATH: cut.dir + ':' + envE.PATH };
+        assert.deepEqual(probeAwk(envC), { awk: cut.awk, len: 1, nulClean: false });
+        assert.equal(awkRun(cut.awk, ['{ print }'], 'a\0b\nc\n').out, 'a\nc\n');
+    } finally { rmSync(dd, { recursive: true, force: true }); }
+});
+test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy passes all ${CHECKS} checks, the NUL rows included`, { skip }, async () => {
+    const r = await NBASE;
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(okCount(r.stdout), CHECKS);
+    const oks = r.stdout.split('\n').filter((l) => l.startsWith('ok '));
+    for (const row of [R.nul, R.nul0]) assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, row);
 });
 
 // =====================================================================================================================
