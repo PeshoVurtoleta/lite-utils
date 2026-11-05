@@ -439,29 +439,58 @@ test('stage boundary MUTANT M-tag-gpgsign-off (tg gains -c tag.gpgSign=false): t
 // =====================================================================================================
 // 9. PRE-EXISTING (not group 2b; addendum A4 deferred nit): --self-test has no INT/TERM trap, so a Ctrl-C (SIGINT to
 // the process group) leaves its mktemp -d dir behind. macOS mktemp ignores TMPDIR, so a PATH shim logs the dir.
-// =====================================================================================================
+// The SIGINT must land while the self-test is PROVABLY running (b38: sending it on the first ok line raced the
+// self-test's exit on CI, code=0). An awk PATH shim passes every call through EXCEPT the self-test's own second
+// check: its "names" fixture is written only after the first ok line is echoed, so an awk call on <mktemp dir>/names
+// (with <dir>/add beside it) proves "one ok line out, self-test still running". That call writes `ready` and blocks
+// (exec sleep); the test waits for `ready` AND the ok line, THEN signals the group. A SIGKILL timer bounds a hang.
 function sigintRun(script) {
     return new Promise((resolve) => {
         const d = mkdtempSync(join(ROOT, 'sig-'));
-        const real = spawnSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8' }).stdout.trim();
-        const log = join(d, 'mktemp.log');
+        const which = (c) => spawnSync('sh', ['-c', `command -v ${c}`], { encoding: 'utf8' }).stdout.trim();
+        const real = which('mktemp'), realAwk = which('awk');
+        const log = join(d, 'mktemp.log'), ready = join(d, 'ready');
         mkdirSync(join(d, 'bin'));
         writeFileSync(join(d, 'bin', 'mktemp'), `#!/bin/sh\nx=$(${JSON.stringify(real)} "$@") || exit $?\necho "$x" >> ${JSON.stringify(log)}\necho "$x"\n`);
         chmodSync(join(d, 'bin', 'mktemp'), 0o755);
+        writeFileSync(join(d, 'bin', 'awk'), `#!/bin/sh
+for a in "$@"; do
+  case "$a" in */names)
+    if [ ! -e ${JSON.stringify(ready)} ] && [ -f "\${a%/names}/add" ] && grep -q -x -F -e "\${a%/names}" ${JSON.stringify(log)} 2>/dev/null; then
+      : > ${JSON.stringify(ready)}; exec sleep 300
+    fi ;;
+  esac
+done
+exec ${JSON.stringify(realAwk)} "$@"
+`);
+        chmodSync(join(d, 'bin', 'awk'), 0o755);
         const ch = spawn('bash', [script, '--self-test'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), PATH: `${join(d, 'bin')}:${process.env.PATH}` } });
-        let out = '', killed = false;
-        ch.stdout.on('data', (b) => { out += b; if (!killed && /^ok {3}/m.test(out)) { killed = true; process.kill(-ch.pid, 'SIGINT'); } });
+        let out = '', killed = false, exited = false, ok = false, wasReady = false;
+        const group = (sig) => { try { process.kill(-ch.pid, sig); } catch { /* group gone */ } };
+        ch.stdout.on('data', (b) => { out += b; ok = ok || /^ok {3}/m.test(out); });
         ch.stderr.on('data', () => {});
+        ch.on('exit', () => { exited = true; });
+        let hard = null;
+        (async () => {
+            for (let i = 0; i < 3000 && !exited && !(ok && existsSync(ready)); i++) await new Promise((r) => setTimeout(r, 20));
+            wasReady = existsSync(ready);
+            if (!exited && ok && wasReady) { killed = true; group('SIGINT'); hard = setTimeout(() => group('SIGKILL'), 30000); }
+            else group('SIGKILL');   // never ready (or exited first): no SIGINT, no 300 s sleep left behind
+        })();
         ch.on('close', (code, signal) => {
+            if (hard) clearTimeout(hard);
+            wasReady = wasReady || existsSync(ready);   // the waiter may not have run since the exit
+            group('SIGKILL');
             const dirs = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
             const left = dirs.filter((x) => existsSync(x));
             const hasAdd = left.some((x) => existsSync(join(x, 'add')));
             for (const x of left) rmSync(x, { recursive: true, force: true });   // the test cleans what the script left
-            resolve({ code, signal, killed, dirs, left, hasAdd, out });
+            resolve({ code, signal, killed, wasReady, dirs, left, hasAdd, out });
         });
     });
 }
 const sigCheck = (s) => {
+    assert.ok(s.wasReady, 'the self-test never reached the awk call on its "names" fixture (after the first ok line)');
     assert.ok(s.killed, 'no ok line before exit');
     assert.ok(s.signal === 'SIGINT' || s.code === 130, `not terminated by SIGINT: code=${s.code} sig=${s.signal}`);
     assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
