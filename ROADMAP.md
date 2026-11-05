@@ -259,3 +259,9 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   AUDIT-READY only after the ext-audit B-four batch (MD-36..38, MD-40, MD-42/43, MD-44/45), B-stage (the
   lib/stage.sh STAGE_DRIVER decoy, a recorded FAIL-OPEN; it also gates deopt-diff) and a group for the
   MD-46 --v8-flags denylist LEAD are all APPROVED and committed. Any open LEAD for a script blocks it.
+  MD-46 DONE 2026-11-05 (commit 2016586, with b403d05): the --v8-flags runtime allowlist is in all four tools.
+  Known limit (maintainer ruling, burst 37, "Record as known"): the allowlist checks a numeric value's FORM only
+  (MD-58), so `--max-inlined-bytecode-size=NaN` passes and real node exits 9 on every run; the tool fails closed
+  later as NO-VERDICT. Burst 37 also settled Q-H1 (the -h refusal sentence now says "at the latest after one
+  --v8-options read") and CI-LINUX (the 6 ubuntu CI rows were BSD-userland oracle assumptions; fixed in the
+  working tree, awaiting a green CI run).

@@ -396,6 +396,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   copy that must turn the self-test red at its designed rows, with a revert check on the unmutated
   copy), the exit wiring, `-h` / `--help` exit 2, and refusal rows on the file's own fake node and
   mktemp shim. 200 tests. DETERMINISTIC; no real V8 run.
+- `deopt-diff.sh` / `bytecode-budget.sh` / `ic-diff.sh` / `allocation-diff.sh`: `--v8-flags` is a runtime allowlist
+  (`lib/v8flags.sh`, MD-46 G1-G5, MD-50..58; one shared entry, per-tool deltas below). Right after its `--version`
+  probe each tool makes one `node --v8-options` read (even with no `--v8-flags`), then every token must be a V8
+  tuning flag that this node lists. Accepted: a bool as `--flag` / `--no-flag`, a numeric flag as `--flag=N` (N
+  non-empty). Refused (exit 2, `VERDICT NO-VERDICT`, 0 runs): node options (`--experimental-require-module`,
+  `--openssl-config`), `--snapshot-blob` / `--build-snapshot`, string-valued V8 flags, the log / trace / print /
+  prof / perf / dump / snapshot / file families, the tool's own flags, a bool with `=value`, a numeric flag without
+  `=value`, and `--no-` on a non-bool. A failing or empty `--v8-options` read also refuses (fail closed). Every
+  refusal that spawned nothing before still spawns nothing (MD-55). `deopt-diff`: the read is before the `--out`
+  mkdir; 2 + 2R spawns (8 at R=3); self-test 92 checks (+17 with `--fixtures`). `bytecode-budget`: the read sits
+  after its `--out` / stage writes (MD-57), so a refusal leaves `OUT/raw` empty and `report.txt` 0 bytes; +1 spawn
+  per run; self-test 57 (81 with `--fixtures`). `ic-diff`: 3 + 2R spawns (9 at R=3); a refusal comes before any disk
+  write or trace run; self-test 75. `allocation-diff`: a refusal is before the trap / mktemp; 8 spawns at `--runs 3`
+  (5 with `--zero`); self-test 78. Hot bodies are byte-identical. DETERMINISTIC (`test/v8flags.test.mjs`, every
+  tool's test file, `test/ext-audit*.test.mjs`, `test/build.test.mjs` include roster); the `-h` of each tool carries
+  the shared text.
+- Known limit of the allowlist (maintainer ruling, burst 37, "Record as known"): a numeric value is checked for its
+  FORM only (MD-58: non-empty after `=`). `--max-inlined-bytecode-size=NaN` (or `=/etc/passwd`, `=*`, `=2^53+1`)
+  passes the allowlist; real node then exits 9 on every run and the tool fails closed later as NO-VERDICT.
+- `.github/workflows/ci.yml` + `nightly.yml` (commit b692aa0): GitHub Actions push CI (node 22 / 24 / 26 x
+  ubuntu-latest / macos-latest, plus node 26.8.2 on both = 8 legs; fail-fast off, full clone) running `npm test`,
+  every tool's `--self-test`, and `--self-test --fixtures` for bytecode-budget and deopt-diff; nightly (daily cron +
+  manual) on node latest + 22 x both OSes. Deterministic gates only. The history-pinned test rows were re-pinned to
+  reachable commits and, under `CI=true`, now fail instead of skipping. Neither workflow had run on GitHub when it
+  was committed.
+- CI on Linux (burst 37): CI runs 41975539068 and 41987982156 failed the same 6 test rows on every ubuntu-latest
+  leg; the tools are correct on Linux, the rows assumed BSD userland; ubuntu-latest ships uutils coreutils and a
+  NUL-clean awk. `bytecode-budget-stage-boundary` rows 4 accept the uutils `dirname` / `basename` / `stat` option
+  error; `deopt-diff-boundary` A5 probes whether `mktemp` honours `TMPDIR`; the NUL-defense mutants (deopt-diff
+  T1-tr-replaced-by-cat, Rf-tr-after-awk; allocation-diff M10) probe the host awk and, when it is NUL-clean, run
+  under `test/nul-awk.mjs`, a PATH shim awk that cuts each record at its first NUL as BSD awk does (maintainer
+  ruling Q-CI-5), with new rows pinning the probe and the shim. Workflow `timeout-minutes` 60 -> 120 and the
+  provenance step prints the awk version, a NUL probe and the tr / mktemp flavour. Linux was emulated on macOS (PATH
+  shims); not yet confirmed on a real Linux runner when written. npm test (macOS, untimed): 1572 tests, 1570 pass, 0
+  fail, 2 skip.
+- Q-H1 (burst 37): the shared `--v8-flags` `-h` sentence of the four tools (and `lib/v8flags.sh`'s header text) now
+  reads "Refused, exit 2 at the latest after one --v8-options read": in deopt-diff, bytecode-budget and
+  allocation-diff a node option is refused after the --version probe and that read (2 spawns); ic-diff refuses
+  `--cpu-prof` and `--snapshot-blob` by its own checks at 0 spawns, its other node options after 2.
 
 ### Changed
 
@@ -416,11 +455,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `FILE DIED <file> exitCode=<x> signal=<y> after=<ms>ms`; a file that dies after a failed subtest (node then hides
   its exit status) prints `exitCode=unknown signal=unknown` on node >= 24 only (node 22 stamps no data.entryFile:
   there such a death prints no FILE DIED line, the run still fails, and the gate's hidden-status row skips with that
-  reason). Ordinary passing or failing tests print nothing. The
-  await-free spawnSync files (`ext-audit`, `build`, `bytecode-budget`, `bytecode-budget-stage`,
-  `bytecode-budget-diff-boundary`, `inlining-budget-diff`) yield in a `beforeEach` so a death names the last test
-  that passed; their test counts are unchanged. Gated in `npm test` by `test/death-signature.test.mjs` (7 tests,
-  DETERMINISTIC).
+  reason). Ordinary passing or failing tests print nothing. The await-free spawnSync files (`ext-audit`, `build`,
+  `bytecode-budget`, `bytecode-budget-stage`, `bytecode-budget-diff-boundary`, `inlining-budget-diff`) yield in a
+  `beforeEach` so a death names the last test that passed; their test counts are unchanged. Gated in `npm test` by
+  `test/death-signature.test.mjs` (7 tests, DETERMINISTIC).
 
 ### Fixed
 
