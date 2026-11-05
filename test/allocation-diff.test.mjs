@@ -509,7 +509,10 @@ const NEW = [
     // removed, moved above the --version probe, moved after the first disk write (gcn.cjs into the temp dir)
     ['V1', [16, 71, 77, 78], 'v8fl_check call removed (no --v8-options read, no allowlist)',
         [[V8CALL, '']]],
-    ['V2', [36, 78], 'v8fl_check (the --v8-options read) moved above the --version probe',
+    // V2 rows (b40 ADV2, re-derived on a mutant self-test): 36 a failing --version now comes after a --v8-options spawn
+    // (2 spawns, want 1); 71 / 77 an allowlist refusal (and 77's failing --v8-options) now precedes the --version spawn
+    // (1 spawn, want 2; 77 also pins the spawn log (--v8-options alone)); 78 the spawn log opens --v8-options --version
+    ['V2', [36, 71, 77, 78], 'v8fl_check (the --v8-options read) moved above the --version probe',
         [[VERLINE + V8CALL, V8CALL + VERLINE]]],
     ['V3', [77], 'v8fl_check (the --v8-options read) moved after the gcn.cjs write into the temp dir',
         [[VERLINE + V8CALL, VERLINE],
