@@ -489,11 +489,15 @@ exec ${JSON.stringify(realAwk)} "$@"
         });
     });
 }
+// sigintRun sends the SIGINT only once `ready` exists (killed implies wasReady), so the killed assert runs FIRST and names
+// the most specific of the three no-SIGINT paths; the wasReady assert after it only guards that runner invariant.
 const sigCheck = (s) => {
-    assert.ok(s.wasReady, 'the self-test never reached the awk call on its "names" fixture (after the first ok line)');
     assert.ok(s.killed, s.waitedOut
-        ? `the 60 s wait ran out (ok line seen: ${s.ok}, awk "names" call reached: ${s.wasReady}); the group was SIGKILLed, no SIGINT sent`
-        : `the self-test exited before the SIGINT was sent (${s.ok ? 'ok line seen, then exit' : 'no ok line before exit'})`);
+        ? `the wait (3000 polls x 20 ms, ~60 s) ran out (ok line seen: ${s.ok}, awk shim blocked on "names" (ready file): ${s.wasReady}); the group was SIGKILLed, no SIGINT sent`
+        : s.wasReady
+            ? `the self-test exited (code=${s.code} sig=${s.signal}) AFTER its awk call on the "names" fixture blocked, and no SIGINT was sent (ok line seen: ${s.ok}): the blocking sleep or the bash ended early (an outside signal, or the sleep failed)`
+            : `the self-test exited (code=${s.code} sig=${s.signal}) without the awk shim blocking on its "names" call (no ready file: the self-test ended before that call, or the shim guard did not match it; ok line seen: ${s.ok}); no SIGINT sent`);
+    assert.ok(s.wasReady, 'runner invariant broken: the SIGINT was sent but the awk "names" ready file was never seen');
     assert.ok(s.signal === 'SIGINT' || s.code === 130, `not terminated by SIGINT: code=${s.code} sig=${s.signal}`);
     assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
     assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);

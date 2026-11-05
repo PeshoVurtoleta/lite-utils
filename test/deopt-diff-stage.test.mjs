@@ -200,10 +200,10 @@ row('A1 file frozen r1 | live r2 -> exit 1 DIFF, mode "diff (file)"; OUT holds e
     } });
 const F_LIVE = {
     args: (c) => fileO(c, { '--after': c.live }),
-    prep: (c) => { writeFileSync(c.live, T_R1); },                           // frozen r1 | live r1 (byte-identical), live rewritten to r2 at node call 3
+    prep: (c) => { writeFileSync(c.live, T_R1); },                           // frozen r1 | live r1 (byte-identical), live rewritten to r2 at driver call 3 (node spawn 5: before run 2, after the --version + --v8-options probes and runs 1 before / after)
     env: (c) => ({ FAKE_LIVE: c.live, FAKE_LIVE_SRC: c.r2, FAKE_AT: '3' }),
     check: (c, r) => {
-        assert.equal(readFileSync(c.live, 'utf8'), T_R2, 'the fake did not rewrite the live --after at call 3');
+        assert.equal(readFileSync(c.live, 'utf8'), T_R2, 'the fake did not rewrite the live --after at driver call 3');
         assert.equal(r.status, 0, msg(r));                                   // red on M-cp-ln (cp -> ln -s): after runs 2-3 read r2 -> null control, exit 2
         assert.equal(has(r, 'VERDICT SAME'), 1, msg(r));
         assert.equal(readFileSync(join(c.out, 'stage', 'after', 'trace.txt'), 'utf8'), T_R1);
@@ -212,7 +212,7 @@ const F_LIVE = {
         assert.equal(readFileSync(join(c.dir, 'calls'), 'utf8'), '6\n', 'fake node driver-call counter != 2R (6)');
     },
 };
-row('A1 file: the live --after rewritten at node call 3 -> exit 0 (the staged copy protects it)', F_LIVE);
+row('A1 file: the live --after rewritten at driver call 3 -> exit 0 (the staged copy protects it)', F_LIVE);
 const MD16 = { args: (c) => refO(c, { '--after-ref': 'r1' }), env: (c) => ({ FAKE_AFTER_EXTRA: c.extra }), check: (c, r) => {
     assert.equal(r.status, 2, msg(r));                                       // red on M-noise-off (exit 1)
     assert.equal(c.spawns().length, 8);
