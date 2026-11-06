@@ -13,8 +13,9 @@ import { createHash } from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, '..');
@@ -128,7 +129,8 @@ function withCase(script, cs, body) {
         c = mkCase();
         if (cs.prep) cs.prep(c);
         const env = { ...cleanEnv(), TMPDIR: c.tmp, ...(cs.env ? cs.env(c) : {}) };
-        const r = spawnSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', timeout: 120000, cwd: c.cwd, env });
+        // capSync: a run the cap killed fails by name here, before any row / teeth / mutant check reads r
+        const r = capSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', cwd: c.cwd, env }, 120000, basename(script));
         return body(c, r);
     } finally { if (c) rmSync(c.dir, { recursive: true, force: true }); }
 }
@@ -332,7 +334,7 @@ test('deopt-diff stage A5 retention: 20 ref runs give exactly 160 spawns and 11 
         assert.equal(before.status, '');
         for (let i = 0; i < 20; i++) {
             const out = join(c.dir, 'outs', `o${i}`);
-            const r = spawnSync('bash', [SCRIPT, ...refO({ ...c, out })], { encoding: 'utf8', timeout: 120000, cwd: c.cwd, env: { ...cleanEnv(), TMPDIR: c.tmp, PATH: `${shim}:${process.env.PATH}` } });
+            const r = capSync('bash', [SCRIPT, ...refO({ ...c, out })], { encoding: 'utf8', cwd: c.cwd, env: { ...cleanEnv(), TMPDIR: c.tmp, PATH: `${shim}:${process.env.PATH}` } }, 120000, `A5 run ${i}`);
             assert.equal(r.status, 1, `run ${i}: ${msg(r)}`);
             const files = walk(out).map((f) => f.slice(out.length + 1)).sort();
             assert.equal(files.length, 11, `run ${i}: ${files.join(' ')}`);   // report.txt + raw 3 + 3 + stage 2 + 2
@@ -377,9 +379,14 @@ function selfRun(script, env) {
         const c = spawn('bash', [script, '--self-test'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '', err = '';
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        const kill = setTimeout(() => c.kill('SIGTERM'), 240000);
-        c.on('error', (e) => { clearTimeout(kill); rej(e); });
-        c.on('close', (status) => { clearTimeout(kill); res({ status, out, err }); });
+        const h = armCap(c, 240000, 'SIGTERM');
+        c.on('error', (e) => { h.clear(); rej(e); });
+        c.on('close', (status, signal) => {
+            h.clear();
+            // a run the cap killed rejects by name before any row reads its status
+            try { noTimeout({ status, signal, stdout: out, stderr: err, timedOut: h.timedOut, cap: h.cap }, `${basename(script)} --self-test`); } catch (e) { rej(e); return; }
+            res({ status, out, err });
+        });
     }));
 }
 const ST = {};
