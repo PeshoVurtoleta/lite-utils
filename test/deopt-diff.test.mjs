@@ -17,10 +17,11 @@ import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk
 import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 97;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
+const CHECKS = 99;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
                      // + 5 B-four dd refusal rows (checks 88-92: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
                      // allowlist rows (checks 93-95: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
-                     // PLAN-md46 G2 TASK 3) + 2 G-ENV rows (checks 96-97: Q-ENV e2e, T14 D5; PLAN-b42-genv TASK 3);
+                     // PLAN-md46 G2 TASK 3) + 2 G-ENV rows (checks 96-97: Q-ENV e2e, T14 D5; PLAN-b42-genv TASK 3) + 2 G-TRACKED
+                     // staged rows (checks 98-99: GT1, GT2, after R17, need git; PLAN-b42-gtracked TASK 4);
                      // a new check moves this literal.
                      // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
 // P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows

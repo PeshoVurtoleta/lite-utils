@@ -372,11 +372,11 @@ row('A5 G2 refusal: OUT/stage a symlink to $TMPDIR/stage (the control above, on 
 mutant('M-stage-link-off', 'the G2 `! -L` line removed', [[G2_LINE, '']], CS_A5G2, (c, r) => { assert.equal(r.status, 1, msg(r)); assert.ok(walk(c.tmp).length >= 4, msg(r)); });
 
 // =====================================================================================================
-// A3 / A4 self-test rows: the 21 staged checks present exactly once, in every env the hook / agent harness can leak
-// (counts are RELATIVE: the pre-G2 build's ok count + the 21 listed names; no count is copied from another file).
+// A3 / A4 self-test rows: the 23 staged checks present exactly once, in every env the hook / agent harness can leak
+// (counts are RELATIVE: the pre-G2 build's ok count + the 23 listed names; no count is copied from another file).
 // Runs go through a pool of 3 started at load (a self-test takes ~9 s alone).
 // =====================================================================================================
-const ST_NAMES = ['S1 ', 'S2 ', 'S3 ', 'S4 ', ...Array.from({ length: 17 }, (_, i) => `staged refusal R${i + 1}: `)];
+const ST_NAMES = ['S1 ', 'S2 ', 'S3 ', 'S4 ', ...Array.from({ length: 17 }, (_, i) => `staged refusal R${i + 1}: `), 'GT1 ', 'GT2 '];
 const okLines = (o) => o.split('\n').filter((l) => l.startsWith('ok '));
 const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok ' + name)).length;
@@ -421,22 +421,22 @@ if (!skip) {
     ST.notag = guard(selfRun(variant('ST-M-tag', [['-c tag.gpgSign=false', '']]), { ...cleanEnv(), GIT_CONFIG_PARAMETERS: "'tag.gpgsign'='true'" }));
     if (BASE) ST.pre = guard(selfRun(BASE, cleanEnv()));
 }
-test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of the 21 staged checks exactly once', { skip }, async () => {
+test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of the 23 staged checks exactly once', { skip }, async () => {
     const r = await ST.base;
     assert.equal(r.status, 0, r.out + r.err);
     assert.deepEqual(failLines(r.out), []);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 1, `check "${n}"`);
-    assert.equal(ST_NAMES.length, 21);
+    assert.equal(ST_NAMES.length, 23);
 });
-test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 21 staged checks; host-env ok count = pre-G2 count + 44 (21 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2 + 2 G-ENV Q-ENV / T14)', { skip: baseSkip }, async () => {
+test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 23 staged checks; host-env ok count = pre-G2 count + 46 (23 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2 + 2 G-ENV Q-ENV / T14)', { skip: baseSkip }, async () => {
     histGate(haveBase);
     const r = await ST.pre;
     assert.equal(r.status, 0, r.out + r.err);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 0, n);
-    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3 + 2); // 97 = 53 + 44 = 53 + 21 + 13 + 5 + 3 + 2 (spec: CHECKS 95 -> 97)
+    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3 + 2); // 99 = 53 + 46 = 53 + 23 + 13 + 5 + 3 + 2 (spec: CHECKS 97 -> 99)
 });
 for (const [label, key] of [['GIT_EDITOR / EDITOR / VISUAL = true', 'editor'], ['the six GIT_* vars set to missing paths', 'missing'], ["GIT_CONFIG_PARAMETERS=\"'tag.gpgsign'='true'\"", 'params']]) {
-    test(`deopt-diff stage A4 env: --self-test with ${label} -> exit 0, same ok count as the host-env run, all 21 staged checks once`, { skip }, async () => {
+    test(`deopt-diff stage A4 env: --self-test with ${label} -> exit 0, same ok count as the host-env run, all 23 staged checks once`, { skip }, async () => {
         const r = await ST[key], b = await ST.base;
         assert.equal(r.status, 0, r.out + r.err);
         assert.deepEqual(failLines(r.out), []);
@@ -444,7 +444,7 @@ for (const [label, key] of [['GIT_EDITOR / EDITOR / VISUAL = true', 'editor'], [
         for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 1, n);
     });
 }
-test('deopt-diff stage A3: a PATH without git -> exit 1, exactly one FAIL (the git line), the 21 staged checks absent, ok count = base - 21', { skip }, async () => {
+test('deopt-diff stage A3: a PATH without git -> exit 1, exactly one FAIL (the git line), the 23 staged checks absent, ok count = base - 23', { skip }, async () => {
     const r = await ST.nogit, b = await ST.base;
     const f = failLines(r.out);
     assert.equal(r.status, 1, r.out + r.err);

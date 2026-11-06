@@ -587,7 +587,7 @@ const CS_LIT = row('13 tracked symlink :x.js -> other.js beside a regular x.js, 
     env: () => ({ FAKE_MOD: ':x.js' }),
     check: (c, r) => { refuses(() => LSTREE_RX(':x.js', 'r1', '120000'))(c, r); assert.equal(onceIn(r.stderr, 'is not a regular file in git'), 1, msg(r)); emptyDirs(c); },
 });
-mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C', 'git -C']], CS_LIT, (c, r) => {
+mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C "$REPO" ls-tree', 'git -C "$REPO" ls-tree']], CS_LIT, (c, r) => {
     assert.doesNotMatch(r.stderr, /not a regular file in git/, msg(r));
     assert.equal(readFileSync(join(c.out, 'stage', 'before', ':x.js'), 'utf8'), 'other.js');
 });
@@ -629,7 +629,7 @@ const emuCheck = (r) => {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.deepEqual(fails, [EMU_FAIL]);
     assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
-    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 54);   // 61 - the 7 staged rows (repo setup failed)
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 54);   // 63 - the 9 staged rows (repo setup failed)
 };
 test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 54 ok', { skip }, () => {
     emuCheck(stRun(SCRIPT, emuEnv()));

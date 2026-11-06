@@ -292,6 +292,26 @@ worst() { # NO-VERDICT > DIFF > SAME
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
 }
+is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
+  local d b out rc=0 l
+  command -v git >/dev/null 2>&1 || return 1
+  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd) || return 1
+  b=$(basename "$1")
+  out=$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1) || rc=$?
+  l=${out%%$'\n'*}
+  if [[ $rc -ne 0 ]]; then
+    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac
+  elif [[ "$out" == false ]]; then
+    return 1
+  elif [[ "$out" == true ]]; then
+    rc=0
+    out=$(LC_ALL=C git --literal-pathspecs -C "$d" ls-files --error-unmatch -- "$b" 2>&1) || rc=$?
+    l=${out%%$'\n'*}
+    [[ $rc -ne 0 ]] || return 0
+    if [[ $rc -eq 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
+  fi
+  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref"
+}
 # `node --v8-options` -> "name type" per flag. A name line is exactly `  --<name> (` (one space before the paren: the
 # synopsis lines and uppercase names drop out); the NEXT line must be its `type:` line, else the name is dropped.
 # shellcheck disable=SC2016

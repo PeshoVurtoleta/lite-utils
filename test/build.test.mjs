@@ -350,3 +350,63 @@ test('G1 / G4 T7 controls: ibd src with the marker appended, an ic src copy with
     m3.set(NAME, m3.get(NAME) + '\n' + V8FL_MARKER + ' \n');
     assert.equal(v8flRoster(m3).includes('inlining-budget-diff'), false);
 });
+
+// ---- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md A4): the roster of src files that include lib/tracked.sh ----
+// ORACLE: A4. The srcs that include lib/tracked.sh are exactly {dd, bb, ic, alloc}; ibd never. Each of those four roots
+// holds 2 `is_tracked()` definition lines (common.sh's, then the fragment's), ibd holds 1. The tracked.sh marker line comes
+// AFTER the common.sh marker line (bash keeps the last definition). Must-fail controls: ibd with the marker appended,
+// ic with it removed, bb with it moved above common.sh.
+const TRK_MARKER = '# @include lib/tracked.sh';
+const COM_MARKER = '# @include lib/common.sh';
+const TRK_ALLOWED = ['allocation-diff', 'bytecode-budget', 'deopt-diff', 'ic-diff'];
+const trkLines = (t) => t.split('\n');
+function trkRoster(m) { return [...m].filter(([, t]) => trkLines(t).includes(TRK_MARKER)).map(([f]) => f.replace(/\.sh$/, '')).sort(); }
+function trkOrderProblems(m) { // names whose tracked.sh marker is not strictly after exactly one common.sh marker
+    const bad = [];
+    for (const [f, t] of m) {
+        const L = trkLines(t);
+        if (!L.includes(TRK_MARKER)) continue;
+        const c = L.indexOf(COM_MARKER);
+        if (L.filter((l) => l === COM_MARKER).length !== 1 || L.filter((l) => l === TRK_MARKER).length !== 1 || !(L.indexOf(TRK_MARKER) > c) || c < 0) bad.push(f);
+    }
+    return bad;
+}
+function assertTrkRoster(m) {
+    assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
+    assert.deepEqual(trkRoster(m), TRK_ALLOWED, 'the lib/tracked.sh roster must equal {dd, bb, ic, alloc}');
+    assert.deepEqual(trkOrderProblems(m), [], 'the lib/tracked.sh marker must come after the lib/common.sh marker');
+}
+const defLines = (t) => t.split('\n').filter((l) => /^is_tracked\(\)/.test(l)).length;
+
+test('G-TRACKED A4 roster: src files including lib/tracked.sh are exactly {dd, bb, ic, alloc}; ibd never', { skip }, () => {
+    assertTrkRoster(liveSrc());
+});
+test('G-TRACKED A4 order: in each of the four srcs the lib/tracked.sh marker is after the lib/common.sh marker', { skip }, () => {
+    const m = liveSrc();
+    for (const f of ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh']) {
+        const L = trkLines(m.get(f));
+        assert.ok(L.indexOf(COM_MARKER) >= 0 && L.indexOf(TRK_MARKER) > L.indexOf(COM_MARKER), `${f}: tracked.sh marker (${L.indexOf(TRK_MARKER)}) must follow common.sh (${L.indexOf(COM_MARKER)})`);
+    }
+});
+test('G-TRACKED A4 roots: each of the four built roots has 2 is_tracked() lines, ibd 1', { skip }, () => {
+    for (const f of ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh']) assert.equal(defLines(readFileSync(join(ROOT, f), 'utf8')), 2, f);
+    assert.equal(defLines(readFileSync(join(ROOT, NAME), 'utf8')), 1, NAME);
+});
+test('G-TRACKED A4 controls: ibd with the marker appended, ic with it removed, bb with it moved above common.sh each fail (must-fail controls)', { skip }, () => {
+    const m = liveSrc();
+    m.set(NAME, m.get(NAME) + '\n' + TRK_MARKER + '\n');
+    assert.ok(trkRoster(m).includes('inlining-budget-diff'));
+    assert.throws(() => assertTrkRoster(m), assert.AssertionError);
+    const m2 = liveSrc();
+    assert.equal(trkLines(m2.get('ic-diff.sh')).filter((l) => l === TRK_MARKER).length, 1, 'ic src holds the marker exactly once');
+    m2.set('ic-diff.sh', trkLines(m2.get('ic-diff.sh')).filter((l) => l !== TRK_MARKER).join('\n'));
+    assert.equal(trkRoster(m2).includes('ic-diff'), false);
+    assert.throws(() => assertTrkRoster(m2), assert.AssertionError);
+    const m3 = liveSrc();
+    const L = trkLines(m3.get('bytecode-budget.sh')).filter((l) => l !== TRK_MARKER);
+    L.splice(L.indexOf(COM_MARKER), 0, TRK_MARKER);                 // tracked.sh marker directly above common.sh's
+    m3.set('bytecode-budget.sh', L.join('\n'));
+    assert.deepEqual(trkOrderProblems(m3), ['bytecode-budget.sh']);
+    assert.throws(() => assertTrkRoster(m3), assert.AssertionError);
+    assertTrkRoster(liveSrc());                                      // the live tree is not a blanket failure
+});

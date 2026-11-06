@@ -226,6 +226,7 @@ END {
 '
 
 # @include lib/common.sh
+# @include lib/tracked.sh
 # @include lib/v8flags.sh
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'

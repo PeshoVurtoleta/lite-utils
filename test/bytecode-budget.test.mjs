@@ -20,7 +20,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 61;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); with --fixtures C + 24 = 85)
+const C = 63;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); G-TRACKED b45: + 2 GT1 / GT2 rows (need git); with --fixtures C + 24 = 87)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 // G-ENV (PLAN-b42-genv TASK 1): the top line that unsets the 4 env vars a node reads at start, and its self-test row
 const TOPLINE = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';

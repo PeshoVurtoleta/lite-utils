@@ -548,7 +548,7 @@ mutant('M-lstree-off', 'the ls-tree mode test never refuses', [['[[ "$m" == ok ]
 const CS_LIT = row("13 A6 blocker 2: --module ':x.js' (a tracked symlink -> other.js beside a regular x.js) -> exit 2 'mode 120000' once, 0 spawns, TMPDIR empty, no OUT", {
     args: (c) => xrefO(c, { '--module': ':x.js', '--driver': XDRV.colon }), env: () => ({ FAKE_MOD: ':x.js' }), check: refusesT(notReg(':x.js')),
 });
-mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C', 'git -C']], CS_LIT, (c, r) => assert.equal(c.spawns(), 8, msg(r)));
+mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C "$REPO" ls-tree', 'git -C "$REPO" ls-tree']], CS_LIT, (c, r) => assert.equal(c.spawns(), 8, msg(r)));
 // G1: a dash-led --before / --after / --driver is a name, never an option (read as ./NAME)
 const G1_LINE = '  [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"\n';
 const CS_G1 = row('13 G1: --before -b.txt --after -trace.txt --driver -drv.js (cwd-relative, dash-led) -> exit 1 DIFF, 8 spawns, empty stderr, staged as -trace.txt + -drv.js', {

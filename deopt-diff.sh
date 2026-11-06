@@ -146,16 +146,20 @@
 #   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 #   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
 #   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
+#   A git error while checking whether --before is tracked (safe.directory "dubious ownership", a broken .git
+#   file, a bad config, a corrupt index) exits 2: "--before: git failed while checking whether FILE is tracked
+#   (<git's first line>)".
 # Not detected: a deopt of an inlined function counts only for the JSFunction named on the bailout line (its
 #   caller); a dependency invalidation of code that is not on the stack (`[marking dependent code ...]`, no
 #   bailout line) is not a deopt record; a driver that itself prints trace-like text (`[bailout` /
 #   `[completed compiling `) at line start is read as V8 trace output.
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
-#   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
-#   reads as untracked, so a tracked --before behind such an error is not refused. Known gap, as in
-#   bytecode-budget: refs/replace swaps the staged blob (a `git replace` of a ref's blob stages the replacement, and
-#   the head's sha256/8 is the replacement's).
+#   package self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
+#   <top>/Signal.js or <top>/<same name>; and a .git that git does not recognise as a
+#   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
+#   so a tracked --before inside it is not refused. Known gap, as in bytecode-budget: refs/replace
+#   swaps the staged blob (a `git replace` of a ref's blob stages the replacement, and the head's sha256/8 is the
+#   replacement's).
 # Refused (ref / file mode, lib/stage.sh; exit 2 before any spawn or write, as in bytecode-budget): a --module that
 #   is not a regular file in git at a ref (a TRACKED SYMLINK is mode 120000: "is not a regular file in git (mode
 #   120000)"); a module and --driver whose file names are equal up to ASCII case (one file on a case-insensitive
@@ -437,6 +441,26 @@ worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
+}
+is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
+  local d b out rc=0 l
+  command -v git >/dev/null 2>&1 || return 1
+  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd) || return 1
+  b=$(basename "$1")
+  out=$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1) || rc=$?
+  l=${out%%$'\n'*}
+  if [[ $rc -ne 0 ]]; then
+    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac
+  elif [[ "$out" == false ]]; then
+    return 1
+  elif [[ "$out" == true ]]; then
+    rc=0
+    out=$(LC_ALL=C git --literal-pathspecs -C "$d" ls-files --error-unmatch -- "$b" 2>&1) || rc=$?
+    l=${out%%$'\n'*}
+    [[ $rc -ne 0 ]] || return 0
+    if [[ $rc -eq 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
+  fi
+  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1093,7 +1117,7 @@ EOF
   # driver.js importing './trace.txt'); the fake node cats ./trace.txt from cwd = OUT/stage/<side>. tg isolates every
   # git call (no editor, no global / system config, no hooks, no signing, the six GIT_* vars stage_check refuses
   # unset) and sspawn runs this script with those six unset too, so the rows also run from inside a git hook. With no
-  # git on PATH, or a failed repo set-up, the 21 rows (S1-S4, R1-R17) are ONE FAIL line ---
+  # git on PATH, or a failed repo set-up, the 23 rows (S1-S4, R1-R17, GT1-GT2) are ONE FAIL line ---
   local g="$d/st" R="$d/st/R" frz="$d/st/frz/trace.txt" top="" sr=0
   local -a RR
   tg() { env -u GIT_EDITOR -u EDITOR -u VISUAL -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
@@ -1111,7 +1135,7 @@ EOF
       && ln "$R/m/trace.txt" "$g/hl/trace.txt" && top=$(tg -C "$R" rev-parse --show-toplevel); } >"$g/git.log" 2>&1 || sr=$?
   fi
   if ! command -v git >/dev/null 2>&1; then
-    check "ref / file modes: git on PATH (the 21 staged rows S1-S4, R1-R17 need git; no git fails closed)" "git not found on PATH" "git found"
+    check "ref / file modes: git on PATH (the 23 staged rows S1-S4, R1-R17, GT1-GT2 need git; no git fails closed)" "git not found on PATH" "git found"
   elif [[ $sr != 0 ]]; then
     check "ref / file modes: temp git repo set up (init, commits r1 r2, tags r1 r2)" "git exited $sr: $(tail -n 1 "$g/git.log")" "ok"
   else
@@ -1198,6 +1222,26 @@ EOF
     srf "R17: --after an NFC-named module with an NFD-named --driver (non-ASCII file names)" \
       "the module or --driver file name has a non-ASCII byte ($nfc / $nfd): rename it" \
       "$g/r17" - --out "$g/r17" --fn add --before "$frz" --after "$g/du/$nfc" --driver "$g/du/drv/$nfd"
+    # GT1 (G-TRACKED, lib/tracked.sh): a tracked --before in a copy of the repo that git cannot read (a garbage .git
+    # file, a gitfile to a missing dir, a bad config line, an index cut to 10 bytes) is a git error, never "untracked"
+    local gt=""
+    for x in gitfile gitmiss config index; do
+      cp -R "$R" "$g/gt-$x"
+      case $x in
+        gitfile) rm -rf "$g/gt-$x/.git"; printf 'garbage\n' >"$g/gt-$x/.git" ;;
+        gitmiss) rm -rf "$g/gt-$x/.git"; printf 'gitdir: %s\n' "$g/gt-none" >"$g/gt-$x/.git" ;;
+        config) printf '[core\n' >>"$g/gt-$x/.git/config" ;;
+        index) head -c 10 "$R/.git/index" >"$g/gt-$x/.git/index" ;;
+      esac
+      gt="$gt$(sspawn - --out "$g/gto-$x" --fn add --before "$g/gt-$x/m/trace.txt" --after "$frz" --driver "$R/driver.js")|$(grep -c -F -e "deopt-diff: --before: git failed while checking whether $g/gt-$x/m/trace.txt is tracked (" "$d/sp.out" || true)|$([[ -e "$g/gto-$x" ]] && echo OUT || echo no OUT) "
+    done
+    check "GT1 file mode refused before any spawn: a tracked --before in a repo copy git cannot read (a garbage .git file, a gitfile to a missing dir, a bad config line, an index cut to 10 bytes) -> each exit 2, 0 spawns, 'git failed while checking whether' once, no OUT" \
+      "$gt" "2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT "
+    # GT2: an untracked --before inside the repo (git answers "did not match") is a FROZEN copy: accepted
+    mkdir -p "$R/u"; cp "$frz" "$R/u/trace.txt"
+    check "GT2 file mode: an untracked --before inside the repo (r1, T_MONO) --after the live tracked m/trace.txt (r2, T_DEOPT) -> accepted: exit 1 DIFF, 8 spawns, the before=0 after=1 line" \
+      "$(sspawn - --out "$g/gt2" --fn add --before "$R/u/trace.txt" --after "$R/m/trace.txt" --driver "$R/driver.js")|$(has '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)')" \
+      "1|VERDICT DIFF|8|1"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four dd): --out DIR whose raw/ is a symlink, or whose report.txt has another hard link ---

@@ -157,10 +157,14 @@
 #   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 #   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
 #   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
+#   A git error while checking whether --before is tracked (safe.directory "dubious ownership", a broken .git
+#   file, a bad config, a corrupt index) exits 2: "--before: git failed while checking whether FILE is tracked
+#   (<git's first line>)".
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
-#   self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
-#   reads as untracked, so a tracked --before behind such an error is not refused.
+#   self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
+#   <top>/Signal.js or <top>/<same name>; and a .git that git does not recognise as a
+#   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
+#   so a tracked --before inside it is not refused.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
 #   one driver, the gate is pinned to that node version (--node-version) and any run-to-run change is
 #   NO-VERDICT, never OVER -- and --self-test (canned text; with --fixtures, the recorded node v26.8.2
@@ -198,6 +202,7 @@ END { bad = n - good; print n + 0, bad + 0, (out == "" ? "-" : out) }
 '
 
 # @include lib/common.sh
+# @include lib/tracked.sh
 
 # @include lib/v8flags.sh
 
@@ -549,6 +554,26 @@ self_test() {
     check "D7 (Q-DD6a i) file mode refused before any spawn: --after m<NFC e-acute>d.txt with --driver m<NFD e + U+0301>d.txt (non-ASCII file names) -> exit 2, 0 spawns, 'has a non-ASCII byte' once, no OUT" \
       "$(sspawn - --out "$d/sdu" --diff --fn mid --before "$frz" --after "$d/du/$nfc" --driver "$d/du/drv/$nfd")|$(grep -c -F -x -e "bytecode-budget: the module or --driver file name has a non-ASCII byte ($nfc / $nfd): rename it" "$d/sp.out" || true)|$(grep -c -e '^bytecode-budget: ' "$d/sp.out" || true)|$([[ -e "$d/sdu" ]] && echo OUT || echo no OUT)" \
       "2|VERDICT NO-VERDICT|0|1|1|no OUT"
+    # GT1 (G-TRACKED, lib/tracked.sh): a tracked --before in a copy of the repo that git cannot read (a garbage .git
+    # file, a gitfile to a missing dir, a bad config line, an index cut to 10 bytes) is a git error, never "untracked"
+    got=""
+    for x in gitfile gitmiss config index; do
+      cp -R "$R" "$d/gt-$x"
+      case $x in
+        gitfile) rm -rf "$d/gt-$x/.git"; printf 'garbage\n' >"$d/gt-$x/.git" ;;
+        gitmiss) rm -rf "$d/gt-$x/.git"; printf 'gitdir: %s\n' "$d/gt-none" >"$d/gt-$x/.git" ;;
+        config) printf '[core\n' >>"$d/gt-$x/.git/config" ;;
+        index) head -c 10 "$R/.git/index" >"$d/gt-$x/.git/index" ;;
+      esac
+      got="$got$(sspawn - --out "$d/gto-$x" --diff --fn mid --before "$d/gt-$x/m/mid.txt" --after "$frz" --driver "$sd")|$(grep -c -F -e "bytecode-budget: --before: git failed while checking whether $d/gt-$x/m/mid.txt is tracked (" "$d/sp.out" || true)|$([[ -e "$d/gto-$x" ]] && echo OUT || echo no OUT) "
+    done
+    check "GT1 file mode refused before any spawn: a tracked --before in a repo copy git cannot read (a garbage .git file, a gitfile to a missing dir, a bad config line, an index cut to 10 bytes) -> each exit 2, 0 spawns, 'git failed while checking whether' once, no OUT" \
+      "$got" "2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT "
+    # GT2: an untracked --before inside the repo (git answers "did not match") is a FROZEN copy: accepted
+    mkdir -p "$R/u"; cp "$frz" "$R/u/mid.txt"
+    check "GT2 file mode: an untracked --before inside the repo (r1, 211) --after the live tracked m/mid.txt (212) -> accepted: exit 1 DIFF, 7 spawns, before=1 after=0  211" \
+      "$(sspawn - --out "$d/gt2" --diff --fn mid --before "$R/u/mid.txt" --after "$R/m/mid.txt" --driver "$sd")|$(has '^    before=1 after=0  211$')" \
+      "1|VERDICT DIFF|7|1"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four): a symlinked raw/, a report.txt with another hard link -- refused before any write ---

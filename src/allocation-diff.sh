@@ -174,6 +174,7 @@ END {
 '
 
 # @include lib/common.sh
+# @include lib/tracked.sh
 # @include lib/v8flags.sh
 
 TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation)
