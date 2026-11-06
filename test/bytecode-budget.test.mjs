@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, cpSync, existsSync, appendFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, cpSync, existsSync, appendFileSync, realpathSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,12 +20,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 63;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); G-TRACKED b45: + 2 GT1 / GT2 rows (need git); with --fixtures C + 24 = 87)
+const C = 64;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); G-TRACKED b45: + 2 GT1 / GT2 rows (need git); G-FIFO b46: + 1 MD-FIFO row (no git needed); with --fixtures C + 24 = 88)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 // G-ENV (PLAN-b42-genv TASK 1): the top line that unsets the 4 env vars a node reads at start, and its self-test row
 const TOPLINE = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
 const QENV = 'Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn';
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
+// G-FIFO (Q-FIFO, b46): the --out pre-write clause ported from deopt-diff / ic-diff (the M-fifo-off anchor, exactly once)
+const FIFO_CLAUSE = '[[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]]';
 
 // opts may override encoding / env / cwd, never the cap: capSync refuses an opts.timeout (no caller passes one)
 function run(path, args, opts = {}) {
@@ -147,6 +149,8 @@ const MUTANTS = [
     // ext-audit B-four bb (plan TASK 5 / A2): each kills exactly one of self-test checks 50-54, in order
     ['M36-raw-symlink-off', '[[ ! -L "$OUT/raw" ]]', 'true', 'MD-36 refused before any spawn', true],
     ['M37-report-hardlink-off', '[[ ! -f "$OUT/report.txt" ]]', 'true', 'MD-37 refused before any spawn', true],
+    // G-FIFO b46: the self-test row holds the FIFO open read-write, so this mutant fails the row (spawns, raw/) instead of hanging
+    ['M-fifo-off', FIFO_CLAUSE, 'true', 'MD-FIFO refused before any spawn', true],
     ['M40-env-file-arm-off', '--env-file*|--experimental-config-file*|--experimental-default-config-file*)', '--never-x)', 'MD-39/40 refused before any spawn', true],
     ['M42-module-arm-off', '--require*|--import*|--loader*|--experimental-loader*)', '--never-x)', 'MD-42 refused before any spawn', true],
     ['M44-eval-arm-off', '--eval*|--print*)', '--never-x)', 'MD-44 refused before any spawn', true],
@@ -166,6 +170,56 @@ for (const [name, from, to, failing, exact] of MUTANTS) {
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
+
+// ---- G-FIFO (Q-FIFO, b46): --out DIR whose report.txt is a FIFO with no reader ----
+// The 5e570f0 build passes every pre-write check, makes raw/ and blocks for ever opening the FIFO for the empty report.
+// Row: exit 2, 0 node spawns (fake node), the die line once and no other tool line, OUT holds only report.txt, still a
+// FIFO; bounded by FIFO_CAP. Twin: the same run on M-fifo-off (the clause -> true, the 5e570f0 path) must hit its own
+// FIFO_TWIN_CAP; spawnSync then SIGKILLs only that child (blocked in open(2) in the main shell: no child of its own, no
+// writer left behind) and the dir, FIFO included, is removed. The capSync error is captured, then asserted (not swallowed).
+const FIFO_CAP = 30000;
+const FIFO_TWIN_CAP = 5000;
+function fifoRun(script, cap) {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-fifo-'));
+    try {
+        const f = fakeNode(dir);
+        const out = join(dir, 'o');
+        mkdirSync(out);
+        const mk = spawnSync('mkfifo', [join(out, 'report.txt')], { encoding: 'utf8' });
+        assert.equal(mk.status, 0, `mkfifo failed: ${mk.stderr}`);
+        let r = null;
+        let err = null;
+        try {
+            r = capSync('bash', [script, '--node', f.path, '--fn', 'add', '--out', out, DRIVER], { encoding: 'utf8', env: cleanEnv(), killSignal: 'SIGKILL' }, cap, 'bytecode-budget.sh --out <FIFO report.txt>');
+        } catch (e) { err = e; }
+        return { r, err, out, ls: readdirSync(out).sort(), fifo: lstatSync(join(out, 'report.txt')).isFIFO(), spawns: f.spawns() };
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+function fifoCheck(x) {
+    if (x.err) throw x.err;
+    const all = x.r.stdout + x.r.stderr;
+    assert.equal(x.r.status, 2, all);
+    assert.equal(x.spawns.length, 0, `0 node spawns, got:\n${x.spawns.join('\n')}`);
+    const lines = all.split('\n');
+    assert.equal(lines.filter((l) => l === `bytecode-budget: --out: cannot write ${x.out}/report.txt`).length, 1, `the die line once\n${all}`);
+    assert.equal(lines.filter((l) => l.startsWith('bytecode-budget: ')).length, 1, `no other tool line\n${all}`);
+    assert.deepEqual(x.ls, ['report.txt'], 'OUT holds only report.txt (no raw/)');
+    assert.equal(x.fifo, true, 'report.txt is still a FIFO');
+}
+test('bytecode-budget G-FIFO (fake node): --out DIR whose report.txt is a FIFO -> exit 2, 0 spawns, "cannot write" once, no raw/, still a FIFO, within the cap', { skip }, () => {
+    fifoCheck(fifoRun(SCRIPT, FIFO_CAP));
+});
+test('bytecode-budget G-FIFO teeth: M-fifo-off (the 5e570f0 path) blocks on the FIFO -> the row is red by its cap (SIGKILL), raw/ made, FIFO kept, 0 spawns', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-fifo-off-'));
+    try {
+        const x = fifoRun(variant(dir, 'M-fifo-off', FIFO_CLAUSE, 'true'), FIFO_TWIN_CAP);
+        assert.ok(x.err instanceof assert.AssertionError && x.err.message.includes(`timed out after ${FIFO_TWIN_CAP} ms (killed by SIGKILL)`), `expected the cap to kill the blocked run, got ${x.err ? x.err.message : 'exit ' + x.r.status}`);
+        assert.throws(() => fifoCheck(x), /timed out after/);
+        assert.deepEqual(x.ls, ['raw', 'report.txt'], 'past the pre-write block: raw/ made before the blocking open');
+        assert.equal(x.fifo, true, 'report.txt still a FIFO');
+        assert.equal(x.spawns.length, 0, x.spawns.join('\n'));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 // ---- fake node ----
 // Answers --version, --v8-options (fixture excerpt), and --print-bytecode calls (cats fixture <fn>.txt).

@@ -51,8 +51,9 @@
 #                          a refusal leaves no file in raw/ and report.txt empty.
 #   --out DIR              keep DIR/report.txt and DIR/raw/<fn>.<k>.txt (raw output of run k, 0x addresses kept;
 #                          a space in fn becomes -). DIR/raw must be absent or an empty, readable and writable
-#                          directory that is not a symlink; DIR/report.txt must not be a symlink or a file with
-#                          another hard link. Without --out nothing is written to disk.
+#                          directory that is not a symlink; DIR/report.txt must be absent (then DIR absent or
+#                          writable) or a writable regular file (never a FIFO, a device or a directory), and must not
+#                          be a symlink or a file with another hard link. Without --out nothing is written to disk.
 #                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
 #   --diff                 diff mode: probe DRIVER_BEFORE and DRIVER_AFTER (run k of each side, k = 1..N, in turn)
 #                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs, or a
@@ -585,6 +586,14 @@ self_test() {
   check "MD-37 refused before any spawn: --out DIR whose report.txt has another hard link (holding KEEP) -> exit 2, 0 spawns, 'has another hard link', KEEP kept, no raw/" \
     "$(spawn - --out "$d/q37" --fn add "$drv")|$(grep -c -F -x -e "bytecode-budget: --out: $d/q37/report.txt has another hard link (refused: the write would change that file too)" "$d/sp.out" || true)|$(cat "$d/q37h")|$(ls -A "$d/q37")" \
     "2|VERDICT NO-VERDICT|0|1|KEEP|report.txt"
+  # Q-FIFO (b46): fd 3 holds the FIFO open read-write for the row, so a build without the check opens it at once (a
+  # reader exists) and fails the row with spawns and a raw/ instead of blocking the self-test
+  mkdir -p "$d/qf"; mkfifo "$d/qf/report.txt" 2>/dev/null || true
+  if [[ -p "$d/qf/report.txt" ]]; then exec 3<>"$d/qf/report.txt"; fi
+  check "MD-FIFO refused before any spawn: --out DIR whose report.txt is a FIFO -> exit 2, 0 spawns, 'cannot write' once (the only tool line), no raw/, report.txt still a FIFO" \
+    "$(spawn - --out "$d/qf" --fn add "$drv")|$(grep -c -F -x -e "bytecode-budget: --out: cannot write $d/qf/report.txt" "$d/sp.out" || true)|$(grep -c -e '^bytecode-budget: ' "$d/sp.out" || true)|$(ls -A "$d/qf")|$([[ -p "$d/qf/report.txt" ]] && echo FIFO || echo not a FIFO)" \
+    "2|VERDICT NO-VERDICT|0|1|1|report.txt|FIFO"
+  exec 3<&-
 
   # --- MD-39/40, MD-42, MD-44 (ext-audit B-four): --v8-flags that load a file or a module of yours, or run code of yours (a prefix match) ---
   got=""
@@ -808,6 +817,9 @@ if [[ -n "$OUT" ]]; then
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ ! -e "$OUT/raw" || -w "$OUT/raw" ]] || die "--out: $OUT/raw is not writable"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
+  # Q-FIFO (b46): a FIFO / device / directory report.txt passes the checks around this line, and the empty-report write
+  # below would block on a FIFO with no reader: only a writable regular file, or none in a writable (or absent) DIR
+  [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
   [[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
   mkdir -p -- "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
   # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one

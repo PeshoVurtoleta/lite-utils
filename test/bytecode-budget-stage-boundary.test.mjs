@@ -629,9 +629,9 @@ const emuCheck = (r) => {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.deepEqual(fails, [EMU_FAIL]);
     assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
-    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 54);   // 63 - the 9 staged rows (repo setup failed)
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 55);   // 64 - the 9 staged rows (repo setup failed)
 };
-test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 54 ok', { skip }, () => {
+test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 55 ok', { skip }, () => {
     emuCheck(stRun(SCRIPT, emuEnv()));
 });
 test('stage boundary teeth: [8 KNOWN GAP EMULATED] the 9173830d build has no staged rows (exit 0) -> the row is red', { skip: baseSkip }, () => {
