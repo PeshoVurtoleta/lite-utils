@@ -75,11 +75,12 @@
 # DRIVER (driver mode): exactly two existing readable files (ref / file mode: no DRIVER path; each side runs its
 #   staged copy of --driver), each run as
 #   `node [v8 flags] --trace-deopt-verbose --trace-opt --no-concurrent-recompilation DRIVER`
-#   with cwd = its directory, NODE_OPTIONS stripped, stderr merged into stdout, piped through tee (to the --out raw
-#   file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and awk (keeps the trace
-#   lines, and for the tier section every line holding `;;; deoptimize at ` or `@@LITE-MARK` anywhere). The kept
-#   text of every run is held in memory: dense markers grow it. One run per side per k serves every fn; runs
-#   alternate before / after for k = 1..N.
+#   with cwd = its directory, NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped
+#   (unset at start, for every spawn), stderr merged into stdout, piped through tee (to the --out raw file, else
+#   /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and awk (keeps the trace lines, and for
+#   the tier section every line holding `;;; deoptimize at ` or `@@LITE-MARK` anywhere). The kept text of every run
+#   is held in memory: dense markers grow it. One run per side per k serves every fn; runs alternate before / after
+#   for k = 1..N.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. add, get value). Never
 #   qualified (Store.add). A repeated fn is refused. Matching is EXACT on the name between `<JSFunction ` and
 #   ` (sfi = `: add never matches addX, ad or Store.add, get never matches get value; node internals of other
@@ -123,8 +124,9 @@
 #   D multisets are compared. Every refused argument exits 2 before any node is spawned and before anything is written
 #   to disk, except a --v8-flags allowlist refusal (lib/v8flags.sh): it exits 2 after the --version and --v8-options
 #   spawns, before anything is written. Spawns: one `node --version` (a failing one exits 2 before anything is
-#   written), one `node --v8-options` (NODE_OPTIONS stripped; a failing one, or one that lists no V8 flag, exits 2
-#   before anything is written), then 2 x runs driver runs: 2 + 2 x runs in all (8 at --runs 3).
+#   written), one `node --v8-options` (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS
+#   stripped; a failing one, or one that lists no V8 flag, exits 2 before anything is written), then 2 x runs driver
+#   runs: 2 + 2 x runs in all (8 at --runs 3).
 # Ref / file mode: --out DIR is required; DIR/stage must be absent or an empty directory (a DIR/stage that is not a
 #   directory exits 2 "--out: DIR/stage exists and is not a directory"). After the --version and --v8-options spawns,
 #   DIR/stage/before and DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`,
@@ -180,10 +182,10 @@
 #                                    when the line-start `[bailout` lines naming fn, the <a> of them whose bytecode
 #                                    offset reads and the <d> D records are not one count
 #   "tier    <fn>  <side>  ops until TURBOFAN_JS: after op <a>, before op <b>"   a = the last marker before fn's
-#                                    first `[completed compiling` line read as E fn@TURBOFAN_JS[-OSR], b = the
-#                                    first marker after it; or "after op <a>", "before op <b>", "not compiled in
-#                                    run 1 (last marker op <n>)", "no @@LITE-MARK op lines", "markers unreadable
-#                                    (<why>)"
+#                                    first `[completed compiling` line of fn with `(target TURBOFAN_JS)` or node
+#                                    22's `(target TURBOFAN)`, OSR or not; b = the first marker after it; or
+#                                    "after op <a>", "before op <b>", "not compiled in run 1 (last marker op <n>)",
+#                                    "no @@LITE-MARK op lines", "markers unreadable (<why>)"
 #   "tier    <fn>  <side>  not reported (run 1: <rc>)"     instead of the side's lines when its run 1 did not
 #                                    exit 0 (<rc> = the driver exit, or "<tee|tr|awk> <rc>")
 #   "tier    <fn>  <side>  unreadable (awk exited <rc>)"   instead of the side's lines when the section's awk
@@ -211,6 +213,7 @@
 #   --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
@@ -283,7 +286,8 @@ substr($0, 1, 21) == "[completed compiling " {
 # none holding " -- ". Compiles / cycles from the records; per D record its bailout line's bytecode offset and the
 # first `;;; deoptimize at` line before the next line-start `[` line (paired in order, only when every line-start
 # `[bailout` line naming fn is read and is one D record); ops from `@@LITE-MARK op <n>` lines around fn's first
-# TURBOFAN_JS[-OSR] compile line. An unreadable marker / position is named, never guessed.
+# TURBOFAN_JS[-OSR] compile line (node 22 prints the tier as `(target TURBOFAN)`: D5). An unreadable marker /
+# position is named, never guessed.
 # shellcheck disable=SC2016
 TIER_AWK='
 function names(s,   t, p, c) {                    # as DEOPT_AWK names() (its test reordered)
@@ -332,7 +336,7 @@ FILENAME == ARGV[1] {                               # records, in trace order (X
       if (q > 0) { o = substr(s, q + 18); q = index(o, ","); o = (q > 1 ? substr(o, 1, q - 1) : "") }
       if (o ~ /^-?[0-9]+$/) { NRD++; OF[NRD] = o; PS[NRD] = ", no source position"; PD = NRD }
     } else if (!TF && match($0, /^\[completed compiling 0x[0-9a-fA-F]+ <JSFunction /) && substr($0, RLENGTH + 1, length(fn)) == fn &&
-      substr($0, RLENGTH + 1 + length(fn)) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN_JS\)( OSR)? - took .*\]$/) { TF = 1; TA = LM }
+      substr($0, RLENGTH + 1 + length(fn)) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN(_JS)?\)( OSR)? - took .*\]$/) { TF = 1; TA = LM }
     next
   }
   if (PD > 0 && (p = index($0, ";;; deoptimize at ")) > 0) { PS[PD] = posof(substr($0, p + 18)); PD = 0; next }
@@ -679,11 +683,13 @@ EOF
   # max-inlined-bytecode-size int, lazy-feedback-allocation bool, turbo-filter string, trace-osr bool; exit
   # $FAKE_V8O_RC instead when set) before its run counter, cats ./trace.<n>.txt or ./trace.txt
   # from cwd (n = its run count in that driver dir), in a cwd ending in /after also cats $FAKE_AFTER_EXTRA (when set),
-  # exits with ./rc or 0, and exits 7 if NODE_OPTIONS reached it ---
+  # exits with ./rc or 0, and exits 7 if NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE or NODE_REDIRECT_WARNINGS
+  # reached it ---
   local fk="$d/fk" D1 D2 out
   mkdir -p "$fk" "$d/cwd" "$d/tmp"
   printf '%s\n' "#!$BASH" 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
     'if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi' \
+    'if [ -n "${NODE_OPTIONS+x}${NODE_V8_COVERAGE+x}${NODE_COMPILE_CACHE+x}${NODE_REDIRECT_WARNINGS+x}" ]; then echo "a NODE_* env var leaked"; exit 7; fi' \
     'case "$1" in --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac' \
     'case "$1" in --v8-options) if [ -n "${FAKE_V8O_RC:-}" ]; then exit "$FAKE_V8O_RC"; fi; cat "$d/v8o.txt"; exit 0 ;; esac' \
     'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"' \
@@ -1015,6 +1021,15 @@ EOF
   check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-bytecode (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns" \
     "$o" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
 
+  # --- Q-ENV: the 4 env vars a node reads at start are unset at the top of this script (the fake exits 7 on any) ---
+  check "Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn (mono vs mono SAME, 8 spawns); the head names all four" \
+    "$(export NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt"; spawn NODE_OPTIONS=--st-probe --fn add "$D1" "$D1")|$(has "deopt-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
+    "0|VERDICT SAME|8|1"
+  # --- T14 (D5): node 22 prints `(target TURBOFAN)` where node 26 prints `(target TURBOFAN_JS)`; the ops window reads both ---
+  check "T14 D5 ops window on node 22's '(target TURBOFAN)' and '(target TURBOFAN) OSR': 1 2 TF 3 -> 'after op 2, before op 3'; the control '(target TURBOFANX)' -> 'not compiled in run 1'" \
+    "$(tie add "$PRE"$'\n'"$(mko 1 2)"$'\n'"${E9/(target TURBOFAN_JS)/(target TURBOFAN)}"$'\n'"$(mko 3)" '$')$(tie add "$PRE"$'\n'"$(mko 1 2)"$'\n'"${E9/(target TURBOFAN_JS)/(target TURBOFAN) OSR}"$'\n'"$(mko 3)" '$')$(tie add "$PRE"$'\n'"$(mko 1 2)"$'\n'"${E9/(target TURBOFAN_JS)/(target TURBOFANX)}"$'\n'"$(mko 3)" '$')" \
+    "ops until TURBOFAN_JS: after op 2, before op 3;ops until TURBOFAN_JS: after op 2, before op 3;ops until TURBOFAN_JS: not compiled in run 1 (last marker op 3);"
+
   # --- S-9 real-trace fixtures (--fixtures DIR, the node v26.8.2 set in test/fixtures/deopt-diff/node-26.8.2): F1-F17.
   # Expected values are that README's grep census; trace lines are picked by fn name (never by counting or indexing
   # MAGLEV or separator lines). Each file is read by redirection only; a missing or unreadable one is one more
@@ -1213,7 +1228,7 @@ if [[ $STAGED == 1 ]]; then
   DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
   MODE="diff ($STAGE_MODE)"
 fi
-say "deopt-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
+say "deopt-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
 say "before  $DESC_B"
 say "after   $DESC_A"
 if [[ $STAGED == 1 ]]; then

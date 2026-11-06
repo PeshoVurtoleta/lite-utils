@@ -428,12 +428,12 @@ test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of t
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 1, `check "${n}"`);
     assert.equal(ST_NAMES.length, 21);
 });
-test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 21 staged checks; host-env ok count = pre-G2 count + 42 (21 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2)', { skip: baseSkip }, async () => {
+test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 21 staged checks; host-env ok count = pre-G2 count + 44 (21 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2 + 2 G-ENV Q-ENV / T14)', { skip: baseSkip }, async () => {
     histGate(haveBase);
     const r = await ST.pre;
     assert.equal(r.status, 0, r.out + r.err);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 0, n);
-    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3); // 95 = 53 + 42 = 53 + 21 + 13 + 5 + 3 (spec: CHECKS 92 -> 95)
+    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3 + 2); // 97 = 53 + 44 = 53 + 21 + 13 + 5 + 3 + 2 (spec: CHECKS 95 -> 97)
 });
 for (const [label, key] of [['GIT_EDITOR / EDITOR / VISUAL = true', 'editor'], ['the six GIT_* vars set to missing paths', 'missing'], ["GIT_CONFIG_PARAMETERS=\"'tag.gpgsign'='true'\"", 'params']]) {
     test(`deopt-diff stage A4 env: --self-test with ${label} -> exit 0, same ok count as the host-env run, all 21 staged checks once`, { skip }, async () => {

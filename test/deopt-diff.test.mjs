@@ -17,18 +17,23 @@ import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk
 import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 95;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
+const CHECKS = 97;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
                      // + 5 B-four dd refusal rows (checks 88-92: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
                      // allowlist rows (checks 93-95: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
-                     // PLAN-md46 G2 TASK 3); a new check moves this literal.
+                     // PLAN-md46 G2 TASK 3) + 2 G-ENV rows (checks 96-97: Q-ENV e2e, T14 D5; PLAN-b42-genv TASK 3);
+                     // a new check moves this literal.
                      // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
 // P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows
 const FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'deopt-diff', 'node-26.8.2');
 const FIXTURE_ROWS = 17;
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
-// the host environment never reaches the script (NODE_OPTIONS would make the fake node exit 7; editor vars are git's)
+// the host environment never reaches the script (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE or
+// NODE_REDIRECT_WARNINGS would make the fake node exit 7 on a mutant without the top unset, e.g. under
+// `node --test --experimental-test-coverage`; editor vars are git's). NODE_V8_COVERAGE = undefined, not a delete:
+// node's child_process re-inserts a missing NODE_V8_COVERAGE key into the child env.
 const ENV = { ...process.env };
-for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+ENV.NODE_V8_COVERAGE = undefined;
 // b37 ruling "NUL mutants": gawk / mawk (Linux) keep a NUL inside a record, so the tr '\000' '?' defense is unobservable
 // there and T1 / Rf survive. NUL_MUTANTS (and their revert checks) run with the BSD-NUL shim first on PATH when the probe
 // says the host awk is NUL-clean; on a truncating host (macOS) they run as before. The shim is built on every host: the
@@ -265,6 +270,14 @@ const V8FL_MUTANTS = [
     ['M-v8fl-off', [[V8FL_CALL, '']], [V8B, V8C]],
     ['M-v8fl-late', [[V8FL_CALL + OUT_BLOCK, OUT_BLOCK + V8FL_CALL]], [V8B, V8C]],
 ];
+// The G-ENV mutant table (PLAN-b42-genv TASK 4, ASSERTIONS A1 / A2), each red on EXACTLY its one row: M-env-off deletes
+// the top unset line (the fake node then exits 7 at --version on the exported NODE_V8_COVERAGE: Q-ENV, check 96);
+// M-d5-off restores the node-26-only TIER_AWK regex (node 22's `(target TURBOFAN)` reads "not compiled": T14, check 97).
+const TOPLINE = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
+const GENV_MUTANTS = [
+    ['M-env-off', [[TOPLINE, '']], ['Q-ENV e2e']],
+    ['M-d5-off', [['\\(target TURBOFAN(_JS)?\\)( OSR)? - took', '\\(target TURBOFAN_JS\\)( OSR)? - took']], [TR(14)]],
+];
 // Controls (must SURVIVE: W1 / W2 on the pre-r2 rec() body that swallowed an awk failure -- that is the gap W1 / W2 close)
 const CONTROLS = [
     ['C1-W1-on-old-rec', [W1, [REC_NEW, REC_OLD]]],
@@ -292,6 +305,7 @@ assert.equal(MUTANTS.length, 36, 'the mutant table holds the 29 + 7 rows of the 
 assert.equal(OUT_MUTANTS.length, 5, 'the B-four dd mutant table holds M36, M37, M40, M42, M44 (TASK 5)');
 assert.equal(TIER_MUTANTS.length, 16, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4))');
 assert.equal(V8FL_MUTANTS.length, 2, 'the MD-46 G2 mutant table holds M-v8fl-off and M-v8fl-late (PLAN-md46 G2 TASK 4)');
+assert.equal(GENV_MUTANTS.length, 2, 'the G-ENV mutant table holds M-env-off and M-d5-off (PLAN-b42-genv TASK 4)');
 // The mutant self-tests are independent, so they run in parallel (6 at a time) from module load; each test awaits its own.
 let active = 0;
 const waiting = [];
@@ -336,6 +350,7 @@ if (NBASE) NBASE.catch(() => {});
 const TKILLS = skip ? null : TIER_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const OKILLS = skip ? null : OUT_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const VKILLS = skip ? null : V8FL_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
+const GKILLS = skip ? null : GENV_MUTANTS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 const SURV = skip ? null : CONTROLS.map(([name, edits]) => { const p = launch(name, edits); p.catch(() => {}); return p; });
 function killRows(table, kills, exact = false) { table.forEach(([name, , rows], i) => {
     test(`deopt-diff --self-test MUST FAIL on mutant ${name}${exact ? ' (exactly its designed row)' : ''}`, { skip }, async (t) => {
@@ -360,6 +375,7 @@ killRows(MUTANTS, KILLS);
 killRows(TIER_MUTANTS, TKILLS);
 killRows(OUT_MUTANTS, OKILLS, true);
 killRows(V8FL_MUTANTS, VKILLS);
+killRows(GENV_MUTANTS, GKILLS, true);
 CONTROLS.forEach(([name], i) => {
     test(`deopt-diff --self-test control ${name} must SURVIVE`, { skip }, async () => {
         const r = await SURV[i];
