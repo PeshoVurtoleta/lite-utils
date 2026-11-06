@@ -31,7 +31,7 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#19, #36, #47-#53)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -64,14 +64,14 @@ local, untracked).
 **#4 B2R `mkdir -p --` rejected; B2S `[[ "$OUT" != -* ]] || OUT="./$OUT"` wins.** With `mkdir -p --`, `--out -o`
 reached `ls`, which read `-o` as an option and skipped the emptiness refusals (FAIL-OPEN, engine REJECT x2, burst
 19). Rule: a dash-led argument becomes `./name`. Evidence: PLAN-ext-audit.md:441-442; CHANGELOG "external-audit
-group" (line 638); HISTORY b19 (local, untracked).
+group" (line 699); HISTORY b19 (local, untracked).
 
 **#5 Hard-linked report.txt and DRIVER report.txt refused, not left "not planned".** The orchestrator's option (d)
 (no ID written) left both unrefused though they still truncate, a real gap; MD-37 (A12) refuses a hard-linked
 report.txt. The bb port went through MD-48: guard MD-37 with `-f` (option (b), port alloc :782 read-only check
 first, was a larger change that alters C-10 for bb; option (c), copying the `-e` text verbatim, is false for a
 directory). Evidence: PLAN-ext-audit.md:475; PLAN-ext-audit-gB-four-bb.md:97-98 (local, untracked); CHANGELOG
-"B-four" (line 735).
+"B-four" (line 796).
 
 **#6 Denylist of entry-replacing / driver-writing flags rejected; runtime V8 allowlist (MD-50) wins.** The denylist
 (A18 "Q-ids: denylist vs allowlist", MD-46 LEAD) still accepted `--run`, `--prof`, `--report-*` and flags that
@@ -80,7 +80,7 @@ PLAN-ext-audit-gB-alloc.md:297-299 (local, untracked).
 
 **#7 MD-34: any symlink is refused, even one whose target is inside DIR.** Keeping an inside-DIR symlink working was
 flagged as a maintainer-only narrowing; no reason is recorded for refusing it. Winner: any symlink refused, exit 2.
-Evidence: PLAN-ext-audit-gA2.md:79-81 (local, untracked); CHANGELOG "external-audit group (MD-34)" (line 659).
+Evidence: PLAN-ext-audit-gA2.md:79-81 (local, untracked); CHANGELOG "external-audit group (MD-34)" (line 720).
 
 **#8 Preload / print flag arms: prefix globs win over exact forms.** MD-43 rejected the exact `--require` pin
 (`--require-module` bypassed it, fail-open) for the literal `--require*` arm; MD-45 rejected exact `--eval` /
@@ -89,14 +89,15 @@ Evidence: PLAN-ext-audit-gA2.md:79-81 (local, untracked); CHANGELOG "external-au
 because "never runs" stays false for `--print-*`; bb's MD-44 probe inputs use `--print-opt-code` because bb's own
 `*print-bytecode*` refusal fires first with `--print-bytecode`. D2-3 rejected a second backstop arm (check 71 greps
 only the prefix) for one widened preload arm. Evidence: PLAN-ext-audit-gB-alloc.md:211,217,223,302,160;
-PLAN-ext-audit-gB-four-dd.md:23-24,105-106 (local, untracked); CHANGELOG "B-four" (lines 726, 766).
+PLAN-ext-audit-gB-four-dd.md:23-24,105-106 (local, untracked); CHANGELOG "B-four" (line 787);
+"allocation-diff.sh, external-audit group" (line 827).
 
 **#9 MD-39 / MD-40: exact default-config-file arm, same arm in all four tools.** A broad `*config-file*` glob lost
 (reason not recorded; over-refusal risk implied); leaving `--experimental-default-config-file` unrefused lost because
 node >= 24 reads `./node.config.json` from the driver's dir; an allocation-diff-only env-file/config refusal lost
 because the preload risk applies to all four tools. The alloc test block went to a new `test/ext-audit-alloc.test.mjs`
 (it would serialize with B-four, which owns `test/ext-audit.test.mjs`). Evidence: PLAN-ext-audit-gB-alloc.md:81-88
-(local, untracked); CHANGELOG "B-four" (line 727).
+(local, untracked); CHANGELOG "B-four" (line 789).
 
 **#10 MD-56 / MD-57: where the `--v8-options` read goes.** Hoisting bb's read above its `--out` writes puts four
 spawn-free refusals behind two spawns; instead it reads right after `--version`, after the writes (MD-57). For ic,
@@ -110,7 +111,7 @@ ruling chose failure. Evidence: PLAN-ci.md:46 (A1 pin check, B2; local, untracke
 the v8flags helpers, duplicated 14 hang rows and the census; option (C), shared guard and format only with the async
 exit-flag local in 5 files, was not picked (no reason recorded); leaving deopt-diff / v8flags helpers on an allowlist
 permanently was refused because the ruling requires one wording across files. Evidence: PLAN-timeout-named.md:65-68
-(local, untracked); CHANGELOG "TIMEOUT-NAMED" lines 555-581.
+(local, untracked); CHANGELOG "TIMEOUT-NAMED" lines 559-592.
 
 **#13 deopt-diff verdict design (MD-9..14).** Rejected: an opt-in `--by-offset` key (an unrelated edit above a site
 would DIFF); a null control over D records only (misses tier-up noise; winner E+D records, tier-up noise gives
@@ -165,37 +166,37 @@ values was out of scope; the maintainer ruled "Record as known". See #66. Eviden
 **#21 Node binary re-looked-up after each `cd` (FAIL-OPEN; inlining F1).** Before and after could run different
 binaries. Fix: node is resolved once to an absolute path; `--node` naming a builtin, directory or non-executable
 file is refused exit 2 before any spawn (inlining F11 is the same class). Evidence: CHANGELOG "external-audit group
-(bb, dd)" lines 632, 635; audit FINDINGS F1, F11 (local, untracked).
+(bb, dd)" lines 693, 696; audit FINDINGS F1, F11 (local, untracked).
 
 **#22 `--v8-flags` unchecked passthrough (FAIL-OPEN; F2, F15, A3, A5, B19, D4).** Flags that load code (`--require*`,
 `--import*`, `--loader*`, `--snapshot-blob`), read files (`--env-file*`, `--experimental-config-file*`), run code
 (`--eval*`, `--print*`) or write files ran inside the measured process. Fix: prefix-matched refusal before any spawn
-(MD-39, 40, 42, 43, 44, 45), later the runtime allowlist (MD-50, see #6). Evidence: CHANGELOG "B-four" lines 726,
-727, 766; audit FINDINGS (local, untracked).
+(MD-39, 40, 42, 43, 44, 45), later the runtime allowlist (MD-50, see #6). Evidence: CHANGELOG "B-four" lines 787,
+788; "allocation-diff.sh, external-audit group" line 827; audit FINDINGS (local, untracked).
 
 **#23 Malformed `--v8-flags` entries accepted.** `---x` and `--=1` passed (ic-diff); each flag must now be `--` plus a
 letter. Related: a non-numeric inlining limit in `--v8-flags` died only after spawns (F12). Evidence: CHANGELOG
-"ic-diff external-audit" line 683.
+"ic-diff external-audit" line 744.
 
 **#24 Unwritable / unreadable output paths passed (F2 of the external audit; MD-34, MD-37, MD-36).** An unwritable
 report.txt / raw or an unreadable raw/ (0300) passed checks, the run executed, exit 0, files overwritten; a
 report.txt symlink was followed (write changed the target); a report.txt with another hard link was written through;
 a dangling raw/ symlink was misreported "not empty" (and macOS `ls -A` lists the dangling entry, so plan premise P36
 was wrong - HISTORY b31). Fix: refused with 0 spawns ("would follow it", "would change that file too", "is a
-symlink"). Evidence: 151985d (F2 closed); CHANGELOG "external-audit group" lines 644, 659; "B-four" lines 734, 735;
+symlink"). Evidence: 151985d (F2 closed); CHANGELOG "external-audit group" lines 705, 720; "B-four" lines 795, 796;
 HISTORY b31, b27 (local, untracked).
 
 **#25 Dangling raw/ read as "not empty": engine REJECT (DESIGN), burst 27.** MD-36 was placed after the `ls -A` line,
 so the dangling case never reached it; unit parked, MD-42 added. Evidence: HISTORY b27 (local, untracked); CHANGELOG
-"B-four" line 734.
+"B-four" line 795.
 
 **#26 `..` after a symlink put outputs in different directories.** raw/ and report.txt named different directories
 (OUT_L); the out was written to a checked dir. Fix: one directory (logical or physical) for all outputs; refused with
-0 spawns; the header prints the physical path. Evidence: CHANGELOG "external-audit group" lines 667, 704.
+0 spawns; the header prints the physical path. Evidence: CHANGELOG "external-audit group" lines 728, 765.
 
 **#27 Dash-led `--out` read as `mkdir` options (exit 2 only after the `--version` spawn); `cd -- -` = OLDPWD.**
 Engine REJECT x2 (FAIL-OPEN) in burst 18: a dash-leading arg resolved to OLDPWD, and `--node -/node` ran. Fix: a
-dash-led path is a name. Evidence: CHANGELOG "external-audit group (bb, dd)" line 638; HISTORY b18 (local,
+dash-led path is a name. Evidence: CHANGELOG "external-audit group (bb, dd)" line 699; HISTORY b18 (local,
 untracked); inlining F7 / F16 (dash-led `--before/--after/--driver`, local, untracked).
 
 **#28 Logical `cd` resolves `..` lexically: `link/../d.mjs` ran a decoy (FAIL-OPEN, burst 19).** Engine REJECT x2;
@@ -210,11 +211,11 @@ engine REJECT). Evidence: HISTORY b4 (local, untracked).
 R1-R9). Burst 9: a deopt line glued after driver output was dropped (A3 addendum). Burst 13: TF taken from a loose
 substring match (4 LITERAL rejects). Also, bytecode-budget 2^53 / 2^63 lengths read as SAME and passed
 WITHIN exit 0 - fix: length capped at 1..9 digits, longer is NO-VERDICT. Evidence: HISTORY b2, b3, b9, b13 (local,
-untracked); CHANGELOG "bytecode-budget" line 613.
+untracked); CHANGELOG "bytecode-budget" line 674.
 
 **#31 Walk hang on relative OUT in an unsearchable cwd (burst 23).** Fix: guard `&& "$OUT_UP" != .`. An unreadable
 DRIVER (chmod 000) was probed and ended NO-VERDICT after a spawn; now refused exit 2 before any spawn. Evidence:
-HISTORY b23 (local, untracked); CHANGELOG "Changed (bytecode-budget)" line 589.
+HISTORY b23 (local, untracked); CHANGELOG "Changed (bytecode-budget)" line 650.
 
 **#32 macOS awk cuts a line at NUL (FAIL-OPEN, burst 10).** The deopt read was the same. Fix: `tr '\000' '?'` between
 `tee` and `awk`. See #54. Evidence: HISTORY b10 (local, untracked); PLAN-phase3-g1 A4.
@@ -233,15 +234,15 @@ non-V8 options unguarded. Fix: MD-50..56 refuse them. Evidence: HISTORY b33 (loc
 exited (false red): timedOut only if `'exit'` is absent after one `setImmediate` (TIMEOUT-ATTRIB, burst 40).
 `liveV8Options` had no cap; cap 0 meant an unbounded hang; the ENOENT check broke under a spaced TMPDIR (V8N). The
 allocation-diff V2 mutant's designed-row list was wrong (36, 78 vs 36, 71, 77, 78; ADV2). Evidence: CHANGELOG
-"TIMEOUT-ATTRIB" 519, "V8N" 532, "ADV2" 549.
+"TIMEOUT-ATTRIB" 524, "V8N" 537, "ADV2" 554.
 
 **#36 STAGE-NITS / BBA4 / ICN (burst 39): surviving mutants closed.** F_LIVE fake-node call count was not asserted
 (now `./calls` is 6); the A4 `--v8-flags` refusal checked only raw/ and report.txt, so three mutants passed (now an
 exact sorted recursive OUT listing); `--node` relative-path refusal was unpinned and M-v8fl-bin not caught (relNodeDie
-row and mutant). Evidence: CHANGELOG "STAGE-NITS" 481, "BBA4" 505, "ICN" 512.
+row and mutant). Evidence: CHANGELOG "STAGE-NITS" 486, "BBA4" 510, "ICN" 517.
 
 **#37 NUL-LEAK (burst 39).** A SIGINT / SIGTERM-killed test process leaked its NUL awk shim dir. Fix: `nulTmpDir`
-removes the dir on SIGINT / SIGTERM, then re-raises. Evidence: CHANGELOG "NUL-LEAK" line 463.
+removes the dir on SIGINT / SIGTERM, then re-raises. Evidence: CHANGELOG "NUL-LEAK" line 468.
 
 ---
 
@@ -257,39 +258,38 @@ REVIEW.md` (local, untracked); memory `history-pins-must-be-reachable`.
 userland (BSD clap-style errors, TMPDIR behaviour) and macOS NUL-keeping awk; macOS 22 / 26.8.2 were cancelled at
 `timeout-minutes` 60 (npm test 57.7 min; HISTORY :106, local, untracked). Fix: uutils-aware option checks accepting
 GNU, uutils and BSD forms; a NUL-clean-aware awk PATH shim; workflow `timeout-minutes` 60 -> 120. Evidence: CI runs
-41975539068 (b692aa0), 41987982156 (2016586); CHANGELOG "CI on Linux" line 425. The macOS cancellation is explained by
-HISTORY :106 above.
+41975539068 (b692aa0), 41987982156 (2016586); CHANGELOG "CI on Linux" line 430.
 
 **#40 macOS node 22 / 26.8.2 SIGTERM at the 180 s cap on the dd NUL-shim control (burst 37-38).** The plain dd
 self-test took 102-108 s against a 120 s cap on the hosted macOS runner (REPORTED, run 42056284029). Fix: per-run
 caps raised (360 s, 900 s) and the timeout named (CI-TIMEOUT). Rule: generous CI cap headroom; treat a bare
-`null !== 0` as a timeout first. Evidence: CI run 42056284029 (218bb48); CHANGELOG "CI-TIMEOUT" line 439.
+`null !== 0` as a timeout first. Evidence: CI run 42056284029 (218bb48); CHANGELOG "CI-TIMEOUT" line 444.
 
 **#41 SIGINT race (burst 38).** `bb-stage-boundary` row 9 read code=0 on node 22: the signal landed after the
 self-test finished. Fix: an awk PATH shim blocks the self-test after the first ok line and SIGINT is sent only after
-a provable block (ready file). Evidence: CI run 41975539068 (b692aa0); CHANGELOG "SIGINT-FLAKE" line 452.
+a provable block (ready file). Evidence: CI run 41975539068 (b692aa0); CHANGELOG "SIGINT-FLAKE" line 457.
 
 **#42 node 22 applies `--test-timeout` per FILE (burst 39).** The macOS node 22 leg killed
 `allocation-diff.test.mjs` at 30.0 min ("test timed out after 1800000ms"); the 7 legs that finished the file took
 28.7-36.8 min (REPORTED, hosted CI, run 42087141421). Fix: Q-TT2
 `--test-timeout=3600000`. Rule: size the timeout to the slowest CI file. Evidence: CI run 42087141421 (9b18f5d);
-CHANGELOG "CI-FIX (a)" line 493; memory `node22-test-timeout-per-file` (local, untracked).
+CHANGELOG "CI-FIX (a)" line 499; memory `node22-test-timeout-per-file` (local, untracked).
 
 **#43 `spawnSync` blocks the event loop; a timer cannot fire (burst 39).** On ubuntu node 24 / 26 the `--fixtures MUST
 FAIL on mutant` rows (ifalse, M1, M3, S1) were reported "timed out after 180000 ms" though the children had finished,
 so the rows went red on finished runs (a false red, never a false pass). Fix: FIX_CAP 780 s, RUN_CAP 540 s. Rule: a
 timeout mark is trusted only after the exit status is checked. Evidence: CI run 42087141421 (9b18f5d); CHANGELOG
-"CI-FIX (b)" line 499.
+"CI-FIX (b)" line 504.
 
 **#44 V8-TIMEOUT (burst 39).** A5 M5 passed on a hung driver, and A4 could run 280 min against the 120 min job cap
 (a worst-case bound, 40 x the old 420 s cap; INFERRED, not measured). Fix: timeout fails by name;
-60 s cap per spawn. Evidence: CHANGELOG "V8-TIMEOUT" line 472.
+60 s cap per spawn. Evidence: CHANGELOG "V8-TIMEOUT" line 477.
 
 **#45 CI-EPIPE (burst 40).** ubuntu node 24 + 26 went RED on `v8flags.test.mjs:356` "A5 M5": spawn error EPIPE. A
 `spawnSync` stdin write races the child's exit, and `spawnOk` failed on any `r.error`. Ruling Q-EP1: EPIPE is benign
 only with a numeric exit and no timeout. Fix: row SE (3ca5e79) and v8flags (97c2122). Run 42118030748 (b0465b8) was
 the red run; run 42130164758 (aecb40f) is the first fully green run, 8 of 8 legs
-(`.handoff/evidence/b42-d4b/REVIEW.md:11`, local, untracked). Evidence: those runs; CHANGELOG "CI-EPIPE" line 559;
+(`.handoff/evidence/b42-d4b/REVIEW.md:11`, local, untracked). Evidence: those runs; CHANGELOG "CI-EPIPE" line 565;
 `.handoff/evidence/b40-ci/` (local, untracked).
 
 ---
@@ -298,22 +298,22 @@ the red run; run 42130164758 (aecb40f) is the first fully green run, 8 of 8 legs
 
 **#46 TIMEOUT-NAMED B0 (burst 40).** A cap-killed child failed as a bare `null !== 0` or passed as a green mutant
 row. Fix: shared `capSync` / `armCap` / `noTimeout` in `test/spawn-cap.mjs`; "timed out after <cap> ms". Evidence:
-3ca5e79; CHANGELOG "TIMEOUT-NAMED B0" line 555.
+3ca5e79; CHANGELOG "TIMEOUT-NAMED B0" line 561.
 
 **#47 dd base() re-ran 59 x 360 s on a timeout (burst 41, r1 REJECT FAIL-OPEN).** The timeout was not surfaced by
 name; fix `BASE_ERR` on timeout, r2 APPROVED. Merged in dd-stage: M-nocheck and M-goonly PASSED on a timed-out run in
 the old code; closed via `capSync` / `armCap` in withCase, A5, selfRun. Evidence: CHANGELOG "TIMEOUT-NAMED b41 dds"
-line 568; HISTORY b41 (local, untracked).
+line 574; HISTORY b41 (local, untracked).
 
 **#48 bbsb M-stage-chk-off PASSED on a timeout.** Fix: `runOn` / `stRun` via `capSync`. Evidence: CHANGELOG
-"TIMEOUT-NAMED b41 bbsb" line 570.
+"TIMEOUT-NAMED b41 bbsb" line 576.
 
 **#49 allocation-diff: `-h` revert row and 15 of 16 refusal revert rows PASSED on a timeout; a spawn error hung 10
-min.** Fix: `capErr` guard; a spawn `'error'` fails by name. Evidence: CHANGELOG "TIMEOUT-NAMED b41 alloc" line 573.
+min.** Fix: `capErr` guard; a spawn `'error'` fails by name. Evidence: CHANGELOG "TIMEOUT-NAMED b41 alloc" line 579.
 
 **#50 v8flags and nul-awk (burst 41).** An assumed-SIGTERM fallback could pass a hung run (fallback and local
 capped / spawnOk helpers removed; Q-TN2 = A), and a racing timed-out awk probe could pass (`whichOn` / `probeAwk`
-via `capSync`). Evidence: CHANGELOG "TIMEOUT-NAMED b41 v8f" 579, "b41 nul-awk" 581.
+via `capSync`). Evidence: CHANGELOG "TIMEOUT-NAMED b41 v8f" 585, "b41 nul-awk" 587.
 
 **#51 Matcher accepted one capSync failure form only (bursts 40-41, three lanes).** Three reviewers independently
 found the same fail-open: the matcher must reject timeout AND spawn error. The census (S5) first came back REJECT:
@@ -330,8 +330,8 @@ untracked).
 
 **#54 NUL-defense mutants need a host-probed shim.** The mutants (deopt-diff T1-tr-replaced-by-cat, Rf-tr-after-awk;
 allocation-diff M10) probe the host awk and, when NUL-clean, run under `test/nul-awk.mjs`, a PATH shim awk that cuts
-each record at its first NUL as BSD awk does (maintainer ruling Q-CI-5). Evidence: CHANGELOG "CI on Linux" line 425-
-430; `test/nul-awk.mjs`.
+each record at its first NUL as BSD awk does (maintainer ruling Q-CI-5). Evidence: CHANGELOG "CI on Linux" line 430-
+436; `test/nul-awk.mjs`.
 
 **#55 `npm test` copies need `.git` (burst 38).** The first CI-view copy lacked `.git`: about 170 history rows
 skipped (1574 tests run). Rule: private copies include `.git`, excluding only `.handoff` and `.DS_Store`. Evidence:
@@ -341,7 +341,7 @@ HISTORY b38 (local, untracked); memory `npmtest-copy-needs-git`.
 reproduced in 4 runs; cause not recorded. Rule: in the DETERMINISTIC tier this is a test bug, never "re-run it".
 Related, burst 27: a test file died silently (OOM and timeouts ruled out; cause OPEN); the spec reporter hides the
 signal and sync files buffer events, so a death-reporter plus death-signature gate (7 tests) was added. Evidence:
-HISTORY b19, b27; `.handoff/evidence/b27/u2-file-death-investigation.md` (local, untracked); CHANGELOG lines 602-609.
+HISTORY b19, b27; `.handoff/evidence/b27/u2-file-death-investigation.md` (local, untracked); CHANGELOG lines 663-670.
 
 ---
 
@@ -391,7 +391,7 @@ lines 33, 74; mechanism (EXIT trap sees `$? = 0` on 3.2.57): `.handoff/research/
 
 **#66 MD-58: the `--v8-flags` allowlist checks a numeric value's FORM only.** `--max-inlined-bytecode-size=NaN`
 (also `=/etc/passwd`, `=*`, `=2^53+1`) passes; real node exits 9 on every run and the tool fails closed later as
-NO-VERDICT. Maintainer ruling: "Record as known". Evidence: CHANGELOG lines 416-418; ROADMAP.md:264.
+NO-VERDICT. Maintainer ruling: "Record as known". Evidence: CHANGELOG lines 421-423; ROADMAP.md:264.
 
 **#67 The nul-awk shim cuts stdin only.** A file operand reaches the real awk as is; every NUL path the mutant rows
 exercise is a stdin pipe. Evidence: `test/nul-awk.mjs` lines 10-17.
@@ -403,4 +403,6 @@ b37.
 
 **#69 The 2026-11-04 audits -- per-id status NOT mapped here (UNVERIFIED).** The five audits' findings are Phase 7
 work; their per-id status lives in the audit chain and the b42 triage / rulings (`.handoff/RULINGS-b42-audit.md`
-(local, untracked)), not in this ledger. Ids already closed by a ledger entry are named there (#21, #22, #24).
+(local, untracked)), not in this ledger. Ids already closed by a ledger entry are named in entries #21, #22, #24;
+`.handoff/RULINGS-b42-audit.md` rules on the bb and dd findings, plus alloc / ic under Q-ENV (alloc A2 / A6, ic I2 /
+I6) and Q-DD4a (alloc A3 / A5).
