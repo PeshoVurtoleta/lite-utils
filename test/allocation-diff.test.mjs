@@ -22,18 +22,23 @@ import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 78;   // self-test ok lines at b36 G5 B3 (src eb9de455 / root cd94100c, sha256; 76 at B2a 00ab0dac / 8e795263,
-                // 78 since G5 B1 added checks 77 / 78); a new check moves this literal
+const C = 79;   // self-test ok lines at b43 G-ENV B5 (src 578b5418 / root e10025a9, sha256; 76 at B2a 00ab0dac / 8e795263,
+                // 78 since G5 B1 added checks 77 / 78, 79 since b43 G-ENV added check 79 Q-ENV); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ROOTUSER = typeof process.getuid === 'function' && process.getuid() === 0;
-// the host environment never reaches the script (NODE_OPTIONS / NODE_COMPILE_CACHE would reach a node; NODE would pick
+// the host environment never reaches the script (NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE /
+// NODE_REDIRECT_WARNINGS would reach a node -- the fake node exits 7, so a mutant that drops a strip would be killed by
+// the host leak, not by its row: `node --test --experimental-test-coverage` sets NODE_V8_COVERAGE; NODE would pick
 // another node; editor vars are git's; BASH_ENV / ENV would be sourced by every bash the script starts; CDPATH makes
 // `cd` print; SHELLOPTS / BASHOPTS / POSIXLY_CORRECT change every bash's options; BASH_FUNC_* are exported functions)
 const ENV = { ...process.env };
-for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'TMPDIR',
-    'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT']) delete ENV[k];
+for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE', 'GIT_EDITOR',
+    'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'TMPDIR', 'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT']) delete ENV[k];
 for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
+// node's child_process re-adds NODE_V8_COVERAGE to a spawn env that lacks the KEY (coverage always propagates), so
+// the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
+ENV.NODE_V8_COVERAGE = undefined;
 // b37 ruling "NUL mutants": gawk / mawk (Linux) keep a NUL inside a record, so the tr '\000' '?' defense is unobservable
 // there and M10 survives. NUL_MUTANTS (and their revert checks) run with the BSD-NUL shim first on PATH when the probe
 // says the host awk is NUL-clean; on a truncating host (macOS) they run as before. The shim is built on every host: the
@@ -53,8 +58,11 @@ const RAWGUARD = '  [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] 
 const VERLINE = 'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\n';
 const V8CALL = 'v8fl_check "$NODE_BIN"\n';
 const GCNLINE = 'gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"\n';
+// Q-ENV (PLAN-b42-genv TASK 5, b43): the one top line that unsets the 4 node env vars before the prologue; with it in place
+// a per-spawn `env -u NODE_OPTIONS` belt is redundant, so a mutant that drops a belt also deletes this line (E5)
+const ENVTOP = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
 
-// The 78 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 79 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ "A1' records: 2",
     /*  2 */ 'A1 records: every',
@@ -134,6 +142,7 @@ const ROW = [null,
     /* 76 */ 'MD-44 refused before',
     /* 77 */ 'MD-50 refused after',
     /* 78 */ 'MD-50 accepted:',
+    /* 79 */ 'Q-ENV e2e:',
 ];
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
@@ -384,9 +393,11 @@ const B2 = [
     ["E4", [33, 34], "driver passed bare (no ./)",
         [["\"./$2\" 2>\"$4\" 3>\"$5\")",
           "\"$2\" 2>\"$4\" 3>\"$5\")"]]],
+    // E5 (b43 G-ENV): the Q-ENV top line deleted too, else that unset strips NODE_OPTIONS first and E5 is EQUIVALENT
     ["E5", [35], "NODE_OPTIONS kept in the runs",
         [["tx=$( (cd \"$1\" && env -u NODE_OPTIONS \"$NODE_BIN\"",
-          "tx=$( (cd \"$1\" && env \"$NODE_BIN\""]]],
+          "tx=$( (cd \"$1\" && env \"$NODE_BIN\""],
+         [ENVTOP, ""]]],
     ["E6", [36], "failing --version ignored",
         [["2>/dev/null) || die \"cannot run $NODE_BIN --version\"",
           "2>/dev/null) || true"]]],
@@ -534,6 +545,10 @@ const NEW = [
     ['V3', [77], 'v8fl_check (the --v8-options read) moved after the gcn.cjs write into the temp dir',
         [[VERLINE + V8CALL, VERLINE],
          [GCNLINE, GCNLINE + V8CALL]]],
+    // M-env-off (PLAN-b42-genv TASK 6 / A1): the Q-ENV top line deleted; the 3 vars no belt strips reach the fake node,
+    // which exits 7 at --version: row 79 only (2|VERDICT NO-VERDICT|1|0)
+    ['M-env-off', [79], 'Q-ENV top unset line deleted',
+        [[ENVTOP, '']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 const NONROOT = new Set(['B2h']);

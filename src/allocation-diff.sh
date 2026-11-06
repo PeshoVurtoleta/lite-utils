@@ -55,10 +55,10 @@
 # DRIVER: an existing readable file (two in diff mode, one with --zero), each run as
 #   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
 #   --require <tmp>/gcn.cjs ./<driver file name> 3><tmp>/gcn.<side>.<k>` with cwd = its directory (`./` keeps a
-#   file name starting with `-` a path), NODE_OPTIONS stripped, stderr to its own file (never merged into
-#   stdout), stdout piped through tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the
-#   raw file keeps the NUL) and the record awk. Only records are held in memory, never trace text. Runs alternate
-#   before / after, k = 1..N.
+#   file name starting with `-` a path), NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS
+#   stripped (unset at start, for every spawn), stderr to its own file (never merged into stdout), stdout piped
+#   through tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL)
+#   and the record awk. Only records are held in memory, never trace text. Runs alternate before / after, k = 1..N.
 # Driver contract: write each marker with fs.writeSync(1, '@@LITE-MARK start\n') (and end); never use
 #   console.log or process.stdout in the driver, and never make stdout non-blocking. Observed on node v26.8.2
 #   (p4-probe, 5 of 5 runs): a console.log driver (pipe stdout touched) with a slow reader lost 268 of 666
@@ -122,6 +122,7 @@
 #   only (this repo has no statistical host).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
@@ -390,7 +391,8 @@ self_test() {
 
   # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log and "<rq> <fd3> <req>" to
   # <its dir>/req (rq: ok = an absolute --require cmp-equal to gcn_cjs(), else none / rel / bad), exits 7 if
-  # NODE_OPTIONS reached it, 9 on a driver argument starting with - (as node: "bad option"); --version prints v26.8.2
+  # NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE or NODE_REDIRECT_WARNINGS reached it, 9 on a driver argument
+  # starting with - (as node: "bad option"); --version prints v26.8.2
   # (FAKE_VER_RC: that exit); --v8-options prints 7 name + type line pairs of test/fixtures/v8flags/v8-options.v26.8.2.txt
   # verbatim (expose-gc, lazy-feedback-allocation, max-inlined-bytecode-size, allow-natives-syntax, opt, turbo-filter
   # (string), trace-osr) and exits 0 (FAKE_V8O_RC: that exit); neither is a run. A run (n = its run count in that driver
@@ -403,6 +405,7 @@ self_test() {
 d=$(dirname "$0")
 printf '%s\n' "$*" >>"$d/log"
 if [ -n "${NODE_OPTIONS+x}" ]; then echo "NODE_OPTIONS leaked"; exit 7; fi
+if [ -n "${NODE_OPTIONS+x}${NODE_V8_COVERAGE+x}${NODE_COMPILE_CACHE+x}${NODE_REDIRECT_WARNINGS+x}" ]; then echo "a NODE_* env var leaked"; exit 7; fi
 case "$1" in --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;; esac
 case "$1" in --v8-options) if [ -n "${FAKE_V8O_RC:-}" ]; then exit "$FAKE_V8O_RC"; fi
   printf '%s\n' '  --expose-gc (expose gc extension)' '        type: bool  default: --no-expose-gc' \
@@ -637,7 +640,7 @@ FAKE_MKTEMP
   mkd rpb "$(win "$(rep "$LS" 3)")"; mkd rpa "$(win "$(rep "$LS" 5)")"
   got=$(spawn PATH="nm:$mk:$PATH" -- --runs 3 "$dr/rpb/driver.js" "$dr/rpa/driver.js")
   check "A13 e2e relative PATH (PATH=nm:...): all 2 + 2R spawns run the ONE node resolved from the caller's cwd, named absolute in the head" \
-    "${got%|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "allocation-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS stripped)")" \
+    "${got%|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "allocation-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
     "1|VERDICT DIFF|8|0|1"
   rm -rf "$d/cwd/nm"
 
@@ -730,6 +733,10 @@ FAKE_MKTEMP
   check "MD-50 accepted: --v8-flags '$x' --runs 2 --zero -> exit 0 ZERO, 4 spawns: --version, --v8-options, then 2 runs carrying the 4 flags first" \
     "$(spawn -- "$NO" --runs 2 --v8-flags "$x" --zero "$dr/z0/driver.js")|$(sed -n 1,2p "$fk/log" | tr '\n' ' ')|$(sed -n 3,4p "$fk/log" | awk -v p="$x --trace-gc --min-semi-space-size=1 " 'index($0, p) == 1 { n++ } END { print n + 0 }')|$(grep -c -F -e "$x" "$fk/log" || true)" \
     "0|VERDICT ZERO|4|--version --v8-options |2|2"
+  # --- Q-ENV: the 4 env vars a node reads at start are unset at the top of this script (the fake exits 7 on any) ---
+  check "Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn (SAME, 8 spawns); the head names all four" \
+    "$(spawn NODE_OPTIONS=--st-probe NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt" -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y3b/driver.js")|$(has "allocation-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
+    "0|VERDICT SAME|8|1"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -852,7 +859,7 @@ if [[ -n "$OUT" ]]; then
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
 fi
-say "allocation-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
+say "allocation-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
 if [[ $ZERO == 1 ]]; then
   say "driver  ${DESC[0]}"
   say "mode    zero  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }${TRACE_FLAGS[*]}"

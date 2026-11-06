@@ -52,9 +52,12 @@ const P = 'allocation-diff:';
 
 // the host environment never reaches the script (same strip list as test/allocation-diff.test.mjs)
 const ENV = { ...process.env };
-for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'TMPDIR',
-    'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT']) delete ENV[k];
+for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE', 'GIT_EDITOR',
+    'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'TMPDIR', 'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT']) delete ENV[k];
 for (const k of Object.keys(ENV)) if (k.startsWith('BASH_FUNC_')) delete ENV[k];
+// node's child_process re-adds NODE_V8_COVERAGE to a spawn env that lacks the KEY (coverage always propagates), so
+// the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
+ENV.NODE_V8_COVERAGE = undefined;
 
 // A Scavenge line as --trace-gc prints it (ends with "; "); 3 in the window + 1 after `end` (the exit fence).
 const LS = '[30520:0x7966000000]       39 ms: Scavenge 5.0 (6.1) -> 4.3 (6.6) MB, pooled: 0.0 MB, 0.48 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ';
@@ -267,7 +270,7 @@ for (const [name, dirName, arg] of [['--node -/node (dir named -)', '-', '-/node
         assert.equal(r.argv.length, 6, `2 + 2 x 2 spawns, got:\n${r.argv.join('\n')}`);
         assert.equal(lines(join(g.cwd, dirName, 'log')).length, 6, 'every spawn is the named fake');
         assert.equal(lines(join(g.d, 'fk', 'log')).length, 0, 'no other fake ran');
-        assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${g.cwd}/${dirName}/node  (NODE_OPTIONS stripped)`), r.out);
+        assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${g.cwd}/${dirName}/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)`), r.out);
     });
 }
 
@@ -343,7 +346,7 @@ row('B3 --node -nd (an executable -nd on PATH): exit 0, every spawn is <S>/pn/-n
     const r = g.run(['--node', '-nd', '--runs', '2', ...D(g)], { env: { PATH: g.pathOf(join(g.d, 'pn')) } });
     accepted(r, '-nd');
     assert.deepEqual([r.argv.length, lines(join(g.d, 'pn', 'log')).length], [6, 6], r.argv.join('\n'));
-    assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${f}  (NODE_OPTIONS stripped)`), r.out);
+    assert.ok(r.lines.includes(`allocation-diff  node v26.8.2  ${f}  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)`), r.out);
 });
 
 // B1b: a directory is not a node binary. exit 2, the "not an executable file" line naming it, 0 spawns. [mutant: drop the -f / -x check]
