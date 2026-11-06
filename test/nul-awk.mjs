@@ -33,7 +33,8 @@
 //                             LIMIT: the handler runs only when the process next yields to the event loop (after every
 //                             spawnSync in the current synchronous turn; under node --test the runner may exit first and the
 //                             file runs on until then); SIGKILL is never cleaned.
-import { spawnSync } from 'node:child_process';
+// Spawns go through capSync (test/spawn-cap.mjs, 30000 ms): a timeout / spawn error fails by name, never as "exited null".
+import { capSync } from './spawn-cap.mjs';
 import { writeFileSync, chmodSync, realpathSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -55,8 +56,8 @@ export function nulTmpDir(prefix) {
 
 // the absolute path of the FILE `name` on pathVar (bash `type -P`: never a function, alias or builtin), or ''
 export function whichOn(name, pathVar, env = process.env) {
-    const r = spawnSync('bash', ['-c', 'type -P -- "$1" || true', 'which', name],
-        { encoding: 'utf8', env: { ...env, PATH: pathVar ?? '' }, timeout: 30000 });
+    const r = capSync('bash', ['-c', 'type -P -- "$1" || true', 'which', name],
+        { encoding: 'utf8', env: { ...env, PATH: pathVar ?? '' } }, 30000, `nul-awk which ${name}`);
     if (r.status !== 0) throw new Error(`nul-awk: cannot run bash to resolve ${name}: ${r.stderr || r.error}`);
     const p = r.stdout.trim();
     return p.startsWith('/') ? p : '';
@@ -65,7 +66,7 @@ export function whichOn(name, pathVar, env = process.env) {
 export function probeAwk(env = process.env) {
     const awk = whichOn('awk', env.PATH, env);
     if (!awk) throw new Error(`nul-awk probe: no awk on PATH (${env.PATH})`);
-    const r = spawnSync(awk, ['{ print length($0) }'], { input: Buffer.from('a\0b\n', 'latin1'), env, timeout: 30000 });
+    const r = capSync(awk, ['{ print length($0) }'], { input: Buffer.from('a\0b\n', 'latin1'), env }, 30000, `nul-awk probe ${awk}`);
     const out = r.stdout ? r.stdout.toString('latin1') : '';
     if (r.status !== 0 || (out !== '3\n' && out !== '1\n')) {
         throw new Error(`nul-awk probe: ${awk} on 'a<NUL>b' exited ${r.status} printing ${JSON.stringify(out)} (want "3" or "1")`);
