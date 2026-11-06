@@ -16,9 +16,10 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, relative } from 'node:path';
+import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
+import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
 const C = 78;   // self-test ok lines at b36 G5 B3 (src eb9de455 / root cd94100c, sha256; 76 at B2a 00ab0dac / 8e795263,
@@ -162,9 +163,16 @@ function runSelfTest(path, tmp, extra = {}) {
         const c = spawn('bash', [path, '--self-test'], { env: { ...ENV, TMPDIR: tmp, ...extra } });
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the self-test's EXIT trap then removes its own mktemp dir
-        const t = setTimeout(() => c.kill('SIGTERM'), 600000);
+        const h = armCap(c, 600000, 'SIGTERM');
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        c.on('close', (status) => { clearTimeout(t); res({ status, stdout: out, stderr: err, left: readdirSync(tmp) }); });
+        // a spawn error (ENOENT, EAGAIN, ...) is kept, not thrown: 'close' still fires, h.clear() runs and the caller's
+        // noTimeout reports "<what> spawn error <code>" by name (deopt-diff-boundary.test.mjs's selfTestRun idiom)
+        let se = null;
+        c.on('error', (e) => { se = e; });
+        c.on('close', (status, signal) => {
+            h.clear();
+            res({ status, signal, stdout: out, stderr: err, left: readdirSync(tmp), timedOut: h.timedOut, cap: h.cap, error: se, what: `allocation-diff --self-test (${basename(path)})` });
+        });
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most PAR dirs. edits = null: the script itself.
@@ -180,6 +188,7 @@ function launch(name, edits, shim = false, nulDir = null) {
     return (async () => {
         await gate();
         const dir = mkdtempSync(join(tmpdir(), 'ad-m-'));
+        let failed = false;
         try {
             const tmp = join(dir, 'tmp'); mkdirSync(tmp);
             const p = edits ? variant(dir, name, edits) : SCRIPT;
@@ -194,13 +203,21 @@ function launch(name, edits, shim = false, nulDir = null) {
             }
             const r = await runSelfTest(p, tmp, extra);
             r.dir = dir;
-            if (pl) {
-                r.logged = readFileSync(pl, 'utf8').split('\n').filter(Boolean);
-                r.leaked = r.logged.filter((q) => existsSync(q) && relative(dir, q).startsWith('..'));
-                for (const q of r.logged) if (q.startsWith('/')) rmSync(q, { recursive: true, force: true });
-            }
+            // a run its cap killed (or a spawn error) rejects BY NAME here, before any caller reads its status: in a
+            // finally, so a throw from the shim cleanup cannot replace the named error (it surfaces only when noTimeout passes)
+            try {
+                if (pl) {
+                    r.logged = readFileSync(pl, 'utf8').split('\n').filter(Boolean);
+                    r.leaked = r.logged.filter((q) => existsSync(q) && relative(dir, q).startsWith('..'));
+                    for (const q of r.logged) if (q.startsWith('/')) rmSync(q, { recursive: true, force: true });
+                }
+            } finally { noTimeout(r); }
             return r;
-        } finally { rmSync(dir, { recursive: true, force: true }); release(); }
+        } catch (e) { failed = true; throw e; } finally {
+            // the dir removal never masks the body's error (named or not); it throws only after a clean body.
+            // release() runs either way, so a failed removal cannot leak a PAR slot and stall the queued launches
+            try { rmSync(dir, { recursive: true, force: true }); } catch (e) { if (!failed) throw e; } finally { release(); }
+        }
     })();
 }
 function lazy(f) { let p = null; return () => { if (!p) { p = f(); p.catch(() => {}); } return p; }; }
@@ -661,6 +678,12 @@ test(`allocation-diff --self-test under the NUL shim (control): the UNMUTATED co
 // answers --version (anything else, --v8-options too: exit 0, no output -- so v8fl_check dies "--v8-options printed
 // nothing" after 2 spawns; only the B2h mutant row gets that far). PATH = mktemp shim, fake node dir, host PATH; TMPDIR =
 // d/tmp; cwd = d/cwd. `ents` lists every entry under d (the two logs excepted): a refusal writes nothing anywhere.
+// The capped run's name: the -h / refusal / B2h revert checks run it INSIDE assert.throws, so their predicates rethrow
+// this run's by-name timeout / spawn error instead of counting it as a kill (capSync's two messages).
+const AD_RUN = 'allocation-diff rig run';
+// built from AD_RUN (escaped), the same constant the capSync `what` below uses, so the two cannot drift
+const AD_RUN_RE = new RegExp(`^${AD_RUN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\S+ (timed out after \\d+ ms \\(|spawn error )`);
+function capErr(e) { return e instanceof Error && AD_RUN_RE.test(e.message); }
 function rig() {
     const d = mkdtempSync(join(tmpdir(), 'ad-rf-'));
     const fk = join(d, 'fk'); const mk = join(d, 'mk'); const dr = join(d, 'dr');
@@ -677,10 +700,10 @@ function rig() {
     for (const f of ['a.js', 'b.js', 'z.js']) writeFileSync(join(dr, f), '');
     const run = (script, args, o = {}) => {
         writeFileSync(log, ''); writeFileSync(mkl, '');
-        const r = spawnSync('bash', [script, ...args], {
-            encoding: 'utf8', timeout: 120000, cwd: o.cwd || join(d, 'cwd'),
+        const r = capSync('bash', [script, ...args], {
+            encoding: 'utf8', cwd: o.cwd || join(d, 'cwd'),
             env: { ...ENV, PATH: mk + ':' + fk + ':' + process.env.PATH, TMPDIR: o.tmpdir || join(d, 'tmp'), ...(o.env || {}) },
-        });
+        }, 120000, `${AD_RUN} ${basename(script)}`);
         const lines = (f) => readFileSync(f, 'utf8').split('\n').filter(Boolean);
         return { status: r.status, stdout: r.stdout, stderr: r.stderr, out: r.stdout + r.stderr, argv: lines(log), mk: lines(mkl) };
     };
@@ -780,7 +803,7 @@ test(`allocation-diff -h: revert checks (${HELP_TEETH.map((x) => x[0]).join(', '
     try {
         for (const [n, edits] of HELP_TEETH) {
             const p = variant(dir, n, edits);   // outside throws: a bad anchor is a row error, never a kill
-            assert.throws(() => assertHelp(p), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+            assert.throws(() => assertHelp(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
         }
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -999,7 +1022,7 @@ for (const [label, fn, teeth] of RF) {
             for (const [n, edits, nonRoot] of teeth) {
                 if (nonRoot && ROOTUSER) { t.diagnostic(`teeth ${n}: skipped (root reads a mode 000 file)`); continue; }
                 const p = variant(dir, n, edits);   // outside throws: a bad anchor is a row error, never a kill
-                assert.throws(() => fn(p), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, `teeth ${n}`);
+                assert.throws(() => fn(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, `teeth ${n}`);
             }
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
@@ -1016,7 +1039,7 @@ test('allocation-diff B2h mutant: the root script minus the MD-33 guard line (li
         const mt = readFileSync(p, 'utf8');
         assert.equal(SRC.split('\n').length - mt.split('\n').length, 1, 'the B2h mutant removes exactly one line');
         assert.equal(count(mt, 'is not readable"'), 0);
-        assert.throws(() => withRig((g) => raw0300(g, p)), (e) => { t.diagnostic(`B2h: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; });
+        assert.throws(() => withRig((g) => raw0300(g, p)), (e) => { if (capErr(e)) throw e; t.diagnostic(`B2h: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; });
         withRig((g) => {
             const o = setup0300(g);
             const r = g.run(p, ['--node', g.node, '--runs', '2', '--out', o, '--zero', g.z]);
