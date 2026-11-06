@@ -102,7 +102,10 @@ because the preload risk applies to all four tools. The alloc test block went to
 **#10 MD-56 / MD-57: where the `--v8-options` read goes.** Hoisting bb's read above its `--out` writes puts four
 spawn-free refusals behind two spawns; instead it reads right after `--version`, after the writes (MD-57). For ic,
 dropping its hashed probe for a single read lost to the MD-56 literal: ic keeps its hashed probe (2 spawns) and gets
-a new read right after `--version`. Evidence: PLAN-md46.md:236-237,247 (local, untracked).
+a new read right after `--version`. MD-57 amended (Q-BB3, b42): the read still sits right after `--version`, but bb's
+`raw/before`, `raw/after` and `stage_write` now come after it and after the version-mismatch exit (only `raw/` and an
+empty `report.txt` precede it). Evidence: PLAN-md46.md:236-237,247; PLAN-md46.md "A-b42"; RULINGS-b42-audit.md Q-BB3
+(local, untracked).
 
 **#11 History-dependent test rows FAIL when `CI=true`, they do not skip.** Silent skips hide missing pins; the
 ruling chose failure. Evidence: PLAN-ci.md:46 (A1 pin check, B2; local, untracked); see #38.

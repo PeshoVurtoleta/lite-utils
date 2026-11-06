@@ -194,8 +194,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   be absent or an empty, readable and writable directory and `DIR/report.txt` must not be a symlink;
   without `--out` nothing is written to disk), `--self-test`, `-h` (exit 2).
   Each driver runs as `node [v8 flags] --trace-deopt-verbose --trace-opt
-  --no-concurrent-recompilation DRIVER` with cwd = its directory, NODE_OPTIONS stripped, stderr
-  merged, through `tee | tr | awk`; one run per side per k serves every fn, sides alternate.
+  --no-concurrent-recompilation DRIVER` with cwd = its directory, NODE_OPTIONS stripped
+  (b45 G-ENV: all four), stderr merged, through `tee | tr | awk`; one run per side per k serves every fn, sides
+  alternate.
   Records, from trace lines that start with `[` only: `E <fn>@<tier>[-OSR]` (a `[completed
   compiling` line), `D <fn>@<tier><TAB><kind> (<reason>)` (a `[bailout` line; reason cut at the
   first `): begin. deoptimizing `), `X <why>` (a line naming fn that cannot be read, or trace text
@@ -412,7 +413,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `=value`, and `--no-` on a non-bool. A failing or empty `--v8-options` read also refuses (fail closed). Every
   refusal that spawned nothing before still spawns nothing (MD-55). `deopt-diff`: the read is before the `--out`
   mkdir; 2 + 2R spawns (8 at R=3); self-test 92 checks (+17 with `--fixtures`). `bytecode-budget`: the read sits
-  after its `--out` / stage writes (MD-57), so a refusal leaves `OUT/raw` empty and `report.txt` 0 bytes; +1 spawn
+  after `raw/` and the empty `report.txt` but before `raw/before`, `raw/after` and `stage/` (MD-57, amended by Q-BB3,
+  b45), so a refusal leaves `OUT/raw` empty and `report.txt` 0 bytes; +1 spawn
   overall; self-test 57 (81 with `--fixtures`). `ic-diff`: 3 + 2R spawns (9 at R=3); a refusal comes before any disk
   write or trace run; self-test 75. `allocation-diff`: a refusal is before the trap / mktemp; 8 spawns at `--runs 3`
   (5 with `--zero`); self-test 78. Hot bodies are byte-identical. DETERMINISTIC (`test/v8flags.test.mjs`, every
@@ -510,6 +512,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - BBA4 (burst 39, test side only): the `bytecode-budget.test.mjs` A4 `--v8-flags` refusal row with `--out` checked
   only `raw/` and `report.txt`; both runs now assert the exact sorted recursive listing of OUT, derived from the
   script's `--out` block: report mode `raw`, `report.txt`; diff mode `raw`, `raw/after`, `raw/before`, `report.txt`
+  (amended by Q-BB3, b45: diff mode now `raw`, `report.txt`, raw/ empty)
   (the refusal comes before any other write, so an extra or a missing entry is red). Mutants on private copies: an
   extra file in report mode, an extra file or a `stage/` dir in diff mode, a skipped `report.txt` each turn it red
   (HEAD's row passed the first three). The comment of the 25-token row now says its regex takes every `  --name (`
@@ -621,8 +624,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   staged); D6 a module and driver with the same name up to ASCII case; Q-DD6a a module or `--driver` file name with a
   byte outside printable ASCII (APFS folds Unicode case and NFC / NFD, so E-acute.js / e-acute.js were one file and
   the driver overwrote the staged module -> fail-open SAME), plus a stage_write `-ef` belt (a staged module and driver
-  that are one file; it fires after OUT, raw/, report.txt and stage/before are written, and in deopt-diff after its
-  --version and --v8-options spawns); B4 `--module` must be a regular file in git at each ref (ls-tree mode 100644 /
+  that are one file; it fires after OUT, raw/, report.txt and stage/before are written, and after the
+  --version and --v8-options spawns (deopt-diff; bytecode-budget too since Q-BB3, b45, with raw/before and raw/after
+  made first)); B4 `--module` must be a regular file in git at each ref (ls-tree mode 100644 /
   100755, `--literal-pathspecs`; a tracked symlink, mode 120000, is refused). Still not detected: `refs/replace`.
   Self-tests: bytecode-budget 57 -> 60 ok (D7: D1 decoy, D6 case clash, Q-DD6a NFC / NFD; `--fixtures` 81 -> 84; no
   git 53 + one FAIL); deopt-diff 92 -> 95 check(s) ok (R15 D1, R16 D6, R17 Q-DD6a; 21 staged rows S1-S4, R1-R17). `-h`
@@ -644,6 +648,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   untracked). `npm test` (private copy with .git, node v26.8.2, untimed, host PRELIMINARY, load1 4.73 at start ->
   17.60 at end; .handoff/evidence/b44-npmtest/gstage/PROVENANCE.txt): 1684 tests, 1682 pass, 0 fail, 2 known skips,
   stderr empty.
+
+- G-ENV (Q-ENV), deopt-diff (b45): `deopt-diff.sh` now unsets NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE and
+  NODE_REDIRECT_WARNINGS once at script start, so no spawn sees them (the `--version` / `--v8-options` reads included;
+  the per-spawn `env -u` belts stay); the head line and `-h` name all four, and its fake node trips (exit 7) on any of
+  the four. New self-test row 96 (Q-ENV e2e: all four set in the environment reach no spawn, mono vs mono SAME, 8
+  spawns). D5: the tier line "ops until TURBOFAN_JS" also reads node 22's `(target TURBOFAN)` and `(target TURBOFAN)
+  OSR` compile lines (REPORTED tier only); new row 97 (T14, synthetic node 22 lines per the D5 ruling, with a `(target
+  TURBOFANX)` control). Self-test 95 -> 97 checks; ok 1..95 are byte-identical to 0220d94. Roots: src/deopt-diff.sh
+  9e9f0319 -> f19c57c5, deopt-diff.sh 4273f48d -> 6742fd3d. Tests: `test/deopt-diff.test.mjs` 152 -> 156 (its host-env
+  strip deletes all four names and pins `NODE_V8_COVERAGE = undefined`), `test/deopt-diff-stage.test.mjs` 68 (A3 count
+  pin 95 -> 97); mutants M-env-off (fails row 96 only) and M-d5-off (fails row 97 only); the reviewer also ran
+  M-d5-wide (fails row 97 only; not a test twin). bytecode-budget's G-ENV lane has not landed: it does not yet unset
+  the four. Tier: DETERMINISTIC. Review: .handoff/evidence/b45-genv-dd/REVIEW-r1.md APPROVED; report
+  .handoff/evidence/b45-genv-dd/REPORT.md (local, untracked).
+- Q-BB3 (b45), bytecode-budget order of effects (G-ORDER; amends MD-57): the spawn-free refusals still come first;
+  then `raw/` is made and `report.txt` truncated, then `--version`, the `--v8-options` allowlist read and the
+  version-mismatch exit run BEFORE `raw/before`, `raw/after` and `stage_write`. So a `--node-version` mismatch, a
+  failing `--version` or an allowlist refusal with `--out` leaves DIR holding `raw/` (empty) and `report.txt` only: no
+  `raw/before`, `raw/after` or `stage/`. In ref / file mode a mismatch prints the head, mode and out lines, one `<fn>:
+  NO-VERDICT -- node version mismatch: ...` line per fn and `VERDICT NO-VERDICT` (no before / after / driver / NOTE
+  line: nothing is staged yet) and stages nothing; the run head is printed by `bb_head`, once after staging on an
+  accepted run. deopt-diff is unchanged (already in this order). Pins unchanged: self-test 60 (84 with `--fixtures`),
+  `-h` and the header text updated. Roots: src/bytecode-budget.sh 5c73bd26 -> 5fe1b678, bytecode-budget.sh 44e94b60 ->
+  d59a09de. Tests: new `test/bytecode-budget-order.test.mjs`, 67 tests = 1 pipeline control + 30 rows + 36 mutant
+  twins. Rows: A1 (mismatch with `--out` in diff / ref / file mode -> exit 2 after `--version` + `--v8-options`, DIR =
+  empty `raw/` + `report.txt` equal to stdout; a matching rerun into the same DIR -> exit 1 DIFF, 7 spawns); A2 (a
+  `--v8-flags` refusal and a failing `--version`, each in diff / ref / file mode, 6 rows: exit 2, die line on stderr,
+  empty stdout, DIR = empty `raw/` + 0-byte `report.txt`) and A2 (b) (the staged-mismatch head: exactly the 5-line
+  stdout, empty stderr, 2 rows); A4 (16 REGRESSION PIN rows: 14 spawn-free `--out` / `stage/` refusals with a mismatch
+  still exit 2 with 0 spawns and the case dir byte-unchanged; 2 gate / report mismatch rows leave DIR = empty `raw/` +
+  `report.txt` equal to stdout); A5 (20 cycles of mismatch + accepted rerun per mode: 2 + 7 spawns per cycle, 0
+  mktemp, TMPDIR / cwd delta 0). Existing rows rewritten to the new order: `test/bytecode-budget.test.mjs`,
+  `test/bytecode-budget-stage.test.mjs`, `test/bytecode-budget-stage-boundary.test.mjs` (row 12 belt now asserts the
+  spawns `--version`, `--v8-options`); `test/death-signature.test.mjs` SYNC_FILES gains the new file. Mutants:
+  M-raw-early, M-stage-early, M-head-staged, M-head-guard-off, M-hoist-above-out, M-hoist-above-stage,
+  M-raw-all-modes. The A1 / A2 / A2 (b) / A5 rows and the pipeline control are red on the 44e94b60 root; the A4 rows
+  are regression pins (green on both). Tier: DETERMINISTIC. Reviews: .handoff/evidence/b44-gorder-b1/REVIEW-r1.md and
+  .handoff/evidence/b44-gorder-b2/REVIEW-r1.md (code), both APPROVED; tests:
+  .handoff/evidence/b45-gorder-b3/REVIEW-A-r1.md REJECTED (1 LITERAL: a capped-run timeout counted as a mutant kill),
+  then REVIEW-A-r2.md APPROVED; REVIEW-B-r1.md APPROVED (local, untracked).
 
 ### Changed
 
