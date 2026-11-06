@@ -345,7 +345,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   log-file count != 1 (expected from a Worker or a forked child; only the 2-file count is gated), a
   v8-version line count != 1, a NUL byte, no final newline, and when fn has no IC site or only X sites
   in run 1 (hint `--v8-flags=--no-lazy-feedback-allocation`). Every spawn runs under `env -u
-  NODE_OPTIONS -u NODE_COMPILE_CACHE`: one `--version`, one `--v8-options`, then 2 x runs trace runs
+  NODE_OPTIONS -u NODE_COMPILE_CACHE` (b43 G-ENV: all four, unset once at script start): one `--version`, one
+  `--v8-options`, then 2 x runs trace runs
   (runs 3: 8 spawns; 9 after MD-46, which adds the allowlist `--v8-options` read first); a failing probe exits 2
   before anything is written. Refuses before any spawn or disk write (exit 2): a repeated or empty value option, a
   newline in `--fn` / `--v8-flags` / `--out` / `--node`, a stray comma in `--fn`, a repeated fn, an unknown option
@@ -384,7 +385,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--out DIR`, `--self-test`, `-h` / `--help` (exit 2). ZERO means less than one semi-space (1 MB) of
   young allocation in the window, not zero bytes. Each run is `node [v8 flags] --trace-gc
   --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --require <tmp>/gcn.cjs
-  ./<driver>` with cwd = the driver's directory and NODE_OPTIONS stripped; the driver marks the window
+  ./<driver>` with cwd = the driver's directory and NODE_OPTIONS stripped (b43 G-ENV: all four);
+  the driver marks the window
   with the whole lines `@@LITE-MARK start` and `@@LITE-MARK end`. The tool's own guard preload counts
   the run's GCs and the count must equal the trace's GC-line count. Fails closed (NO-VERDICT) on an
   unparseable trace, a missing guard count, an old-generation GC in the window, a driver failure and a
@@ -493,15 +495,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI-FIX (burst 39, test side only; confirmed by CI run 42130164758 on aecb40f, all 8 legs green): CI run 42087141421
   (9b18f5d) was red on 3 of 8 legs. (a) macOS node 22: node 22 applies `--test-timeout` per test FILE, and
   `allocation-diff.test.mjs` took 28.7-36.8 min on the 7 CI legs that finished the file (the macOS node 22 leg was
-  killed at 30.0 min), so the 30-minute Q-TT1 bound killed it; maintainer ruling Q-TT2 (2026-11-05):
-  `package.json` "test" runs `--test-timeout=3600000` (60 min). The bound is honest only in part: a hung file
-  fails by name only if it starts early enough for its 60 min to end inside the 120-minute job (the macOS `npm
-  test` takes about an hour). (b) ubuntu node 24 / 26: the `deopt-diff.test.mjs` --fixtures mutant rows failed
-  with "timed out after 180000 ms" after their runs had already finished, because two spawnSync rows blocked the
-  event loop past the async timer. Caps now: the 5 --fixtures runs 780 s, the mutant runs 540 s (3x the
-  CI-modelled worst case, the cap rule); each of the 5 runs' rows logs its loop-timed run ms. The real durations: CI
-  run 42130164758 (aecb40f) printed them on all 8 legs, every run under 50% of its cap (REPORTED, hosted CI, one run).
-  Known limit: the timer can still mark such a run
+  killed at 30.0 min), so the 30-minute Q-TT1 bound killed it; maintainer ruling Q-TT2 (2026-11-05): `package.json`
+  "test" runs `--test-timeout=3600000` (60 min). The bound is honest only in part: a hung file fails by name only if
+  it starts early enough for its 60 min to end inside the 120-minute job (the macOS `npm test` takes about an hour).
+  (b) ubuntu node 24 / 26: the `deopt-diff.test.mjs` --fixtures mutant rows failed with "timed out after 180000 ms"
+  after their runs had already finished, because two spawnSync rows blocked the event loop past the async timer. Caps
+  now: the 5 --fixtures runs 780 s, the mutant runs 540 s (3x the CI-modelled worst case, the cap rule); each of the 5
+  runs' rows logs its loop-timed run ms. The real durations: CI run 42130164758 (aecb40f) printed them on all 8 legs,
+  every run under 50% of its cap (REPORTED, hosted CI, one run). Known limit: the timer can still mark such a run
   timed out (a false red only, never a false pass) (fixed in burst 40, TIMEOUT-ATTRIB).
 - BBA4 (burst 39, test side only): the `bytecode-budget.test.mjs` A4 `--v8-flags` refusal row with `--out` checked
   only `raw/` and `report.txt`; both runs now assert the exact sorted recursive listing of OUT, derived from the
@@ -584,7 +585,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - b41 B5: `spawn-cap.test.mjs` census row S5 and the "S5 teeth" history row (no raw `timeout` key or kill timer is
     left in `test/*.mjs` outside spawn-cap; escalation timers are allowed only with `escalated`); S1 checks the fake
     is gone unconditionally; the `ci.yml` history-row comment list is updated. `spawn-cap.test.mjs`: 11 tests.
-  Not run: Linux CI, node 22 / 24 for the b41 units.
+  Confirmed: CI run 42140187169 (0e7f198, all legs green; evidence/b43-ci/SUMMARY.md), the second fully green run
+  in a row after 42130164758.
+- G-ENV (Q-ENV), allocation-diff + ic-diff (burst 43): `allocation-diff.sh` and `ic-diff.sh` now unset NODE_OPTIONS,
+  NODE_V8_COVERAGE, NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS once at script start, so no spawn sees them (the
+  `--version` / `--v8-options` allowlist reads included); the head line and `-h` name all four. Each tool's fake node
+  trips (exit 7) on any of the four. New self-test rows: allocation-diff 79 (79 checks), ic-diff 76 (76 checks).
+  Mutants M-env-off per tool; the census mutants are converted (allocation-diff E5; ic-diff M22, M-v8fl-env,
+  trace-env) -- they now also delete the top line. Closes audit findings allocation-diff A2 / A6 and ic-diff I2 / I6;
+  bytecode-budget and deopt-diff follow in a later rung (behind G-STAGE and G-ORDER (PLAN-b42-genv A1)). Tier:
+  DETERMINISTIC. Reviews: .handoff/evidence/b43-env-alloc/REVIEW-r1.md and .handoff/evidence/b43-env-ic/REVIEW-r1.md
+  (local, untracked), both APPROVED r1 (3 NITS each: host-env strip list, fake-node comment, one doc line).
+  Reviewer runs (r1), one run each, untimed (allocation-diff run load 18-32; the ic-diff run's load is not recorded):
+  `ic-diff.test.mjs` 183/183, `allocation-diff.test.mjs` 210/210, `ext-audit-alloc.test.mjs` 55/55. NIT round
+  (.handoff/evidence/b43-env-nit/, re-review .handoff/evidence/b43-env-nit/REVIEW-r2.md, APPROVED): the three test
+  files' host-env strip lists (`test/ic-diff.test.mjs`, `test/allocation-diff.test.mjs`,
+  `test/ext-audit-alloc.test.mjs`) now delete all four names AND pin `NODE_V8_COVERAGE = undefined`, because node's
+  child_process re-inserts NODE_V8_COVERAGE into a spawn env that lacks the key (reproduced by the re-review on host
+  node v26.8.2 and v26.3.1, REVIEW-r2.md; node 22 / 24 not run): with NODE_V8_COVERAGE set on the host, M-env-off
+  went from 26 (ic-diff) / 45 (allocation-diff) FAILs to exactly 1 (row 76 / row 79); the fake-node comments name
+  all four; the ic-diff `-h` "Report:" line is rewrapped (<= 120 cols). Re-run counts: `ic-diff.test.mjs` 183/183,
+  `ext-audit-alloc.test.mjs` 55/55, `allocation-diff.test.mjs` 210/210 (one run each, untimed; load averages
+  158 / 71 / 50 at the start, .handoff/evidence/b43-env-nit/provenance.txt).
 
 ### Changed
 
