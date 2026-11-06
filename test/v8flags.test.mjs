@@ -11,11 +11,11 @@
 // --turbolev help text), kept so the sha matches; no ASCII gate scans test/fixtures.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync, noTimeout } from './spawn-cap.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FRAG = join(ROOT, 'lib', 'v8flags.sh');
@@ -149,34 +149,26 @@ const RUN_CAP = 420000;
 // the whole row's 7.7 s is < 1/3 of 60000 (the cap-rule floor: >= 3x, a multiple of 60000). All-hang worst case: 40 x 60 s = 40 min per A4 row.
 const A4_CAP = 60000;
 const LIVE_CAP = 120000; // the A5 live-lane `node --v8-options` spawn
-// spawnDriver: one driver spawn, raw (timedOut / cap recorded). run() = spawnDriver + spawnOk: every driver result goes through the check,
-// so a run its cap killed (status null, SIGTERM, ETIMEDOUT) fails as "timed out after <cap> ms", never reads as a plain `null !== 0`.
-function spawnDriver(shell, frag, node, mode, args = [], o = {}) {
+// run(): one driver spawn through capSync (test/spawn-cap.mjs; b41 Q-TN2 = A, one wording): a run its cap killed (status null,
+// ETIMEDOUT) fails as "driver (<shell> <mode>) timed out after <cap> ms (killed by <signal>)", a spawn error (ENOENT, ENOBUFS) as
+// "driver (<shell> <mode>) spawn error <code>"; never reads as a plain `null !== 0`. A non-zero status is returned, the caller's to assert.
+// b40 CI-EPIPE (ruling Q-EP1) is capSync's rule: EPIPE on the stdin write is returned, not thrown, ONLY when the child exited by itself
+// with a numeric status (r.error stays on r); a signal death (status null) cannot be told from an outside kill and still throws
+// (.handoff/evidence/b40-epipe/probe.out: exit 1 at once on 1 MiB -> status 1, signal null, EPIPE; self-SIGKILL -> null, SIGKILL, EPIPE).
+function run(shell, frag, node, mode, args = [], o = {}) {
     const env = { ...ENV, ...(o.env || {}) };
     if (o.rig) Object.assign(env, { FAKE_LOG: o.rig.log, FAKE_OUT: o.rig.out, FAKE_RC: String(o.rig.rc) });
     const cap = o.cap === undefined ? RUN_CAP : o.cap;
-    assert.ok(Number.isInteger(cap) && cap > 0, `driver cap must be a positive integer ms, got ${cap}`); // 0 would mean "no timeout"
-    return capped(spawnSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', timeout: cap, env, cwd: o.cwd, input: o.input }), cap);
+    assert.ok(Number.isInteger(cap) && cap > 0, `driver cap must be a positive integer ms, got ${cap}`); // 0 would mean "no timeout"; kept ahead of capSync's own refusal: the cap-0 rows match this wording
+    return capSync(shell, [DRIVER, frag, node, mode, ...args], { encoding: 'utf8', env, cwd: o.cwd, input: o.input }, cap, `driver (${shell} ${mode})`);
 }
-function capped(r, cap) { r.timedOut = !!(r.error && r.error.code === 'ETIMEDOUT'); r.cap = cap; return r; }
-// a timed-out or failed-to-spawn result is an unverified state: fail closed with the cap (or the spawn error) named.
-// b40 CI-EPIPE (ruling Q-EP1): EPIPE on the stdin write is benign ONLY when the child exited by itself with a status. spawnSync
-// keeps its own error (ETIMEDOUT, ENOBUFS) over a pipe error, so EPIPE never hides our cap; an exit status is a number only on a
-// normal exit, and a signal death (status null) cannot be told from an outside kill: it still fails. r.error stays on r
-// (.handoff/evidence/b40-epipe/probe.out: exit 1 at once on 1 MiB -> status 1, signal null, EPIPE; self-SIGKILL -> null, SIGKILL, EPIPE).
-function benignEpipe(r) { return !!r.error && r.error.code === 'EPIPE' && !r.timedOut && typeof r.status === 'number'; }
-function spawnOk(r, what) {
-    const tail = `\n${String(r.stdout || '').split('\n').slice(-8).join('\n')}${r.stderr || ''}`;
-    assert.ok(!r.timedOut, `${what} timed out after ${r.cap} ms (killed by ${r.signal || 'SIGTERM'})${tail}`);
-    assert.ok(!r.error || benignEpipe(r), `${what} spawn error ${r.error && (r.error.code || r.error.message)}${tail}`);
-    return r;
-}
-function run(shell, frag, node, mode, args = [], o = {}) { return spawnOk(spawnDriver(shell, frag, node, mode, args, o), `driver (${shell} ${mode})`); }
 // the A5 live-lane `node --v8-options` spawn (b40 V8N): one helper for the live lane AND the cap row, so a hang fails BY NAME
 function liveV8Options(node = process.execPath, cap = LIVE_CAP) {
-    assert.ok(Number.isInteger(cap) && cap > 0, `live cap must be a positive integer ms, got ${cap}`); // 0 would mean "no timeout"
-    return spawnOk(capped(spawnSync(node, ['--v8-options'], { encoding: 'utf8', env: ENV, maxBuffer: 1 << 26, timeout: cap }), cap), 'live node --v8-options');
+    assert.ok(Number.isInteger(cap) && cap > 0, `live cap must be a positive integer ms, got ${cap}`); // 0 would mean "no timeout"; kept ahead of capSync's own refusal: the cap-0 rows match this wording
+    return capSync(node, ['--v8-options'], { encoding: 'utf8', env: ENV, maxBuffer: 1 << 26 }, cap, 'live node --v8-options');
 }
+// capture first, assert after (b41 lane rule): never a capSync inside assert.throws
+function caught(fn) { try { fn(); } catch (e) { return e; } return null; }
 function bits(r) { assert.equal(r.status, 0, `driver status ${r.status}: ${r.stderr}`); assert.equal(r.stderr, ''); return r.stdout.split('\n').filter(Boolean).map((x) => x === '1'); }
 function probe(shell, frag, tokens, node = FAKE, rg = rig(FIX_TEXT)) { return bits(run(shell, frag, node, 'tokens', [], { rig: rg, input: tokens.join('\n') + '\n' })); }
 const names = [...FIX.keys()];
@@ -381,15 +373,18 @@ test('A5 M5 (fragment absent = old code): every driver mode fails, no row can pa
 // ---- the run() cap check itself (b39): without it a hang reads as a pass in A5 M5 (status null passes notEqual(status, 0)) ----
 test('run() cap: a hanging node under a 300 ms cap -> timedOut, status null, run() throws "timed out after 300 ms"; under 60000 ms -> exit 2 die, no timeout; a missing shell -> "spawn error ENOENT"', { skip }, () => {
     try {
-        const r = spawnDriver('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 300 });
-        assert.deepEqual([r.timedOut, r.status, r.cap], [true, null, 300], `signal ${r.signal} error ${r.error && r.error.code}`);
-        assert.throws(() => spawnOk(r, 'x'), /x timed out after 300 ms/);
-        assert.throws(() => run('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 300 }), /driver \(bash check\) timed out after 300 ms/);
-        assert.throws(() => spawnDriver('bash', FRAG, HANG, 'check', [], { cap: 0 }), /positive integer/);
+        // capSync throws on the cap (b41 Q-TN2), so the killed run is read off its exact message: the cap, the kill signal (status null),
+        // the (empty) stdout / stderr tails. The expected result IS the timeout: an exact predicate, not a /timed out/ catch-all.
+        let e = caught(() => run('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 300 }));
+        assert.ok(e instanceof assert.AssertionError, `a hang under a 300 ms cap must throw an assertion, got ${e && e.name}`);
+        assert.equal(e.message, 'driver (bash check) timed out after 300 ms (killed by SIGTERM)\n--- stdout (last 8 lines):\n\n--- stderr:\n');
+        assert.throws(() => run('bash', FRAG, HANG, 'check', [], { cap: 0 }), /positive integer/);
         // not a timeout, still not a status. Exact text built from the real path (b40 V8N): WORK is mkdtemp under os.tmpdir() (= $TMPDIR
         // on POSIX), so a TMPDIR with a space made the old /\S+no-such-shell/ pattern a false red
         const noShell = join(WORK, 'no-such-shell');
-        assert.throws(() => run(noShell, FRAG, FAKE, 'check', []), (e) => { assert.equal(e.message, `driver (${noShell} check) spawn error ENOENT\n`); return true; });
+        e = caught(() => run(noShell, FRAG, FAKE, 'check', []));
+        assert.ok(e instanceof assert.AssertionError, `a missing shell must throw an assertion, got ${e && e.name}`);
+        assert.equal(e.message, `driver (${noShell} check) spawn error ENOENT`);
         const c = run('bash', FRAG, HANG, 'check', ['--no-opt'], { cap: 60000 }); // the inverse control: a cap above the 3 s hang
         assert.deepEqual([c.timedOut, c.status, c.stdout, c.stderr], [false, 2, '', `stub: ${HANG} --v8-options printed nothing\nVERDICT NO-VERDICT\n`]);
     } finally { cleanup(); }
@@ -397,8 +392,8 @@ test('run() cap: a hanging node under a 300 ms cap -> timedOut, status null, run
 
 // ---- b40 CI-EPIPE (ruling Q-EP1): the CI-red A5 M5 mechanism made deterministic. The driver dies at its `source` line before
 // reading stdin; 1 MiB of input (past any pipe buffer) makes the stdin write hit EPIPE on every host (probe.out: 3/3 on macOS).
-// Must-fail: spawnOk failing on any r.error (b39 V8) -> "spawn error EPIPE"; a predicate that drops the status test -> the
-// synthetic status-null rows pass without a throw.
+// Must-fail: capSync failing on any r.error (noTimeout alone, b39 V8) -> the status-1 / status-0 runs throw "spawn error EPIPE"; a
+// predicate that drops the status test -> the real self-SIGKILL run on 1 MiB returns without a throw (spawn-cap.test.mjs SE, same rule).
 const MIB = 'x'.repeat(1 << 20);
 test('EPIPE: a driver that exits 1 at once on 1 MiB of input -> run() keeps status 1 and r.error EPIPE, no throw; EPIPE with status null (synthetic, and a real self-SIGKILL) -> "spawn error EPIPE"', { skip }, () => {
     try {
@@ -409,27 +404,45 @@ test('EPIPE: a driver that exits 1 at once on 1 MiB of input -> run() keeps stat
         assert.match(r.stderr, /v8flags\.sh: No such file or directory\n$/);
         assert.equal(rg.spawns().length, 0);
         const epipe = () => Object.assign(new Error('spawnSync bash EPIPE'), { code: 'EPIPE' });
+        // synthetic status-null EPIPE results through the shared noTimeout (capSync's throw path): the one wording, by name
         for (const signal of [null, 'SIGKILL']) {
             const syn = { status: null, signal, error: epipe(), stdout: '', stderr: '', timedOut: false, cap: 300 };
-            assert.throws(() => spawnOk(syn, 'syn'), (e) => { assert.equal(e.message, 'syn spawn error EPIPE\n'); return true; }, `signal ${signal}`);
+            assert.throws(() => noTimeout(syn, 'syn'), (e) => { assert.equal(e.message, 'syn spawn error EPIPE'); return true; }, `signal ${signal}`);
         }
-        // a status-0 EPIPE passes (the child exited by itself); a timed-out result names the cap, never EPIPE
-        assert.equal(spawnOk({ status: 0, signal: null, error: epipe(), stdout: '', stderr: '', timedOut: false, cap: 300 }, 'syn').status, 0);
-        assert.throws(() => spawnOk({ status: 0, signal: null, error: epipe(), stdout: '', stderr: '', timedOut: true, cap: 300 }, 'syn'), (e) => e.message.startsWith('syn timed out after 300 ms ('));
-        assert.throws(() => spawnOk({ status: 0, signal: null, error: Object.assign(new Error('e'), { code: 'ENOBUFS' }), stdout: '', stderr: '', timedOut: false, cap: 300 }, 'syn'), (e) => { assert.equal(e.message, 'syn spawn error ENOBUFS\n'); return true; });
-        // the real signal path: a shell that SIGKILLs itself before reading 1 MiB -> status null, SIGKILL, EPIPE -> throws by name
-        const k = join(WORK, 'selfkill-shell');
-        writeFileSync(k, '#!/bin/sh\nkill -KILL $$\n');
-        chmodSync(k, 0o755);
-        const kr = spawnDriver(k, absent, FAKE, 'tokens', [], { rig: rg, input: MIB });
-        assert.deepEqual([kr.status, kr.signal, kr.error && kr.error.code], [null, 'SIGKILL', 'EPIPE']);
-        assert.throws(() => run(k, absent, FAKE, 'tokens', [], { rig: rg, input: MIB }), (e) => { assert.equal(e.message, `driver (${k} tokens) spawn error EPIPE\n`); return true; });
+        const fake = (name, body) => { const p = join(WORK, name); writeFileSync(p, '#!/bin/sh\n' + body + '\n'); chmodSync(p, 0o755); return p; };
+        // a status-0 EPIPE passes (a shell that exits 0 at once on 1 MiB: the child exited by itself) -> returned, r.error EPIPE kept
+        const z = fake('exit0-shell', 'exit 0');
+        const zr = run(z, absent, FAKE, 'tokens', [], { rig: rg, input: MIB });
+        assert.deepEqual([zr.status, zr.signal, zr.timedOut, zr.error && zr.error.code], [0, null, false, 'EPIPE']);
+        // a timed-out run names the cap, never EPIPE: a shell that holds stdin open unread under 1 MiB and a 300 ms cap
+        const nr = fake('noread-shell', 'exec sleep 3 >/dev/null 2>&1');
+        let e = caught(() => run(nr, absent, FAKE, 'tokens', [], { rig: rg, input: MIB, cap: 300 }));
+        assert.ok(e instanceof assert.AssertionError, `a timed-out run on 1 MiB must throw an assertion, got ${e && e.name}`);
+        assert.equal(e.message, `driver (${nr} tokens) timed out after 300 ms (killed by SIGTERM)\n--- stdout (last 8 lines):\n\n--- stderr:\n`);
+        // ENOBUFS still fails by name: a shell that prints 2 MiB past spawnSync's default 1 MiB maxBuffer, then spins. It traps TERM
+        // (exit 3) and ignores PIPE, so the ENOBUFS kill leaves a NUMERIC status (as spawn-cap.test.mjs SE nb-fake): an EPIPE rule
+        // that dropped its code test would return this run instead of throwing
+        const fl = fake('flood-shell', "trap 'exit 3' TERM; trap '' PIPE; printf '%02097152d' 0; while :; do :; done");
+        e = caught(() => run(fl, absent, FAKE, 'tokens', [], { rig: rg }));
+        assert.ok(e instanceof assert.AssertionError, `a 2 MiB flood must throw an assertion, got ${e && e.name}`);
+        assert.equal(e.message, `driver (${fl} tokens) spawn error ENOBUFS`);
+        // the real signal path: a shell that SIGKILLs itself. With no input it is returned as-is (status null, SIGKILL, no error); before
+        // reading 1 MiB -> status null, SIGKILL, EPIPE -> throws by name
+        const k = fake('selfkill-shell', 'kill -KILL $$');
+        const kr = run(k, absent, FAKE, 'tokens', [], { rig: rg });
+        assert.deepEqual([kr.status, kr.signal, kr.timedOut, kr.error], [null, 'SIGKILL', false, undefined]);
+        e = caught(() => run(k, absent, FAKE, 'tokens', [], { rig: rg, input: MIB }));
+        assert.ok(e instanceof assert.AssertionError, `a self-SIGKILL on 1 MiB must throw an assertion, got ${e && e.name}`);
+        assert.equal(e.message, `driver (${k} tokens) spawn error EPIPE`);
+        assert.equal(rg.spawns().length, 0);
     } finally { cleanup(); }
 });
 
 // ---- the live lane's cap (b40 V8N): a hanging node on the A5 live path fails BY NAME, never as a bare status ----
-test('live cap: liveV8Options on a hanging node under a 300 ms cap throws exactly "live node --v8-options timed out after 300 ms (killed by SIGTERM)" + newline; cap 0 is refused; its default cap is LIVE_CAP (120000)', { skip }, () => {
-    assert.throws(() => liveV8Options(HANG, 300), (e) => { assert.equal(e.message, 'live node --v8-options timed out after 300 ms (killed by SIGTERM)\n'); return true; });
+test('live cap: liveV8Options on a hanging node under a 300 ms cap throws exactly "live node --v8-options timed out after 300 ms (killed by SIGTERM)" + newline + the empty stdout / stderr tails; cap 0 is refused; its default cap is LIVE_CAP (120000)', { skip }, () => {
+    const e = caught(() => liveV8Options(HANG, 300));
+    assert.ok(e instanceof assert.AssertionError, `a hanging live node under a 300 ms cap must throw an assertion, got ${e && e.name}`);
+    assert.equal(e.message, 'live node --v8-options timed out after 300 ms (killed by SIGTERM)\n--- stdout (last 8 lines):\n\n--- stderr:\n');
     assert.equal(LIVE_CAP, 120000);
     const d = liveV8Options(); // the live lane's call form (process.execPath, default cap): the recorded cap IS LIVE_CAP
     assert.deepEqual([d.cap, d.timedOut, d.status, d.error], [LIVE_CAP, false, 0, undefined]);
