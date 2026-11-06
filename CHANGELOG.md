@@ -599,7 +599,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   trips (exit 7) on any of the four. New self-test rows: allocation-diff 79 (79 checks), ic-diff 76 (76 checks).
   Mutants M-env-off per tool; the census mutants are converted (allocation-diff E5; ic-diff M22, M-v8fl-env,
   trace-env) -- they now also delete the top line. Closes audit findings allocation-diff A2 / A6 and ic-diff I2 / I6;
-  bytecode-budget and deopt-diff follow in a later rung (behind G-STAGE and G-ORDER (PLAN-b42-genv A1)). Tier:
+  bytecode-budget and deopt-diff follow in a later rung (behind G-STAGE and G-ORDER (PLAN-b42-genv A1)) (both
+  landed in b45: see the two G-ENV entries below). Tier:
   DETERMINISTIC. Reviews: .handoff/evidence/b43-env-alloc/REVIEW-r1.md and .handoff/evidence/b43-env-ic/REVIEW-r1.md
   (local, untracked), both APPROVED r1 (3 NITS each: host-env strip list, fake-node comment, one doc line).
   Reviewer runs (r1), one run each, untimed (allocation-diff run load 18-32; the ic-diff run's load is not recorded):
@@ -659,9 +660,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   9e9f0319 -> f19c57c5, deopt-diff.sh 4273f48d -> 6742fd3d. Tests: `test/deopt-diff.test.mjs` 152 -> 156 (its host-env
   strip deletes all four names and pins `NODE_V8_COVERAGE = undefined`), `test/deopt-diff-stage.test.mjs` 68 (A3 count
   pin 95 -> 97); mutants M-env-off (fails row 96 only) and M-d5-off (fails row 97 only); the reviewer also ran
-  M-d5-wide (fails row 97 only; not a test twin). bytecode-budget's G-ENV lane has not landed: it does not yet unset
-  the four. Tier: DETERMINISTIC. Review: .handoff/evidence/b45-genv-dd/REVIEW-r1.md APPROVED; report
+  M-d5-wide (fails row 97 only; not a test twin). (bytecode-budget's G-ENV lane landed in b45: next entry.) Tier:
+  DETERMINISTIC. Review: .handoff/evidence/b45-genv-dd/REVIEW-r1.md APPROVED; report
   .handoff/evidence/b45-genv-dd/REPORT.md (local, untracked).
+- G-ENV (Q-ENV), bytecode-budget (b45): `bytecode-budget.sh` now unsets NODE_OPTIONS, NODE_V8_COVERAGE,
+  NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS once at script start, so no spawn sees them (every spawn:
+  `--version`, both `--v8-options` reads, the probes; the per-spawn `env -u` belts stay); the head line and `-h`
+  name all four, and its fake node trips (exit 7) on any of the four. Before this change the limits `--v8-options`
+  read (`lib/v8limits.sh`, `LIMITS=...`) had no `env -u`, so all four variables reached it, NODE_OPTIONS included;
+  that is why M-keep-NODE_OPTIONS is caught in bytecode-budget (it ends `2|NO-VERDICT|3|1`), unlike deopt-diff,
+  allocation-diff and ic-diff. New self-test row 61 (Q-ENV e2e): 61 checks, 85 with `--fixtures`; ok 1..60 are
+  byte-identical to the G-ORDER build d59a09de. Roots: src/bytecode-budget.sh 5fe1b678 -> e167367f,
+  bytecode-budget.sh d59a09de -> 85e4f92a; the other four roots are byte-unchanged (deopt-diff 6742fd3d, ic-diff
+  6665d231, allocation-diff 6f95901d, ibd 740da13b). Tests: `test/bytecode-budget.test.mjs` count pins 60 -> 61 and
+  84 -> 85 (163 tests, including the G-ENV teeth test), `test/bytecode-budget-stage.test.mjs` 60 -> 61 / 53 -> 54,
+  `test/bytecode-budget-stage-boundary.test.mjs` 53 -> 54; leak-node-options is converted (it now fails at the
+  `--version` spawn) and its regex narrowed to that `--version` leak path, because the old regex also accepted an
+  unrelated `-u` command failure (variantAll rewrote the allowlist `--v8-options` read's (v8fl_read) `env -u` belt
+  into a command named `-u`); `test/bytecode-budget-order.test.mjs` A2 (b) head-line pin re-pinned to the four-name
+  line. Mutant M-env-off is a test twin (bb.test); M-keep-V8 / CC / RW (each `2|NO-VERDICT|1|0`),
+  M-keep-NODE_OPTIONS and M-say-old are reviewer-run; not test twins (each exactly 1 FAIL); M-top-late (the unset
+  moved just above the `--version` read) survives and is equivalent (every spawn follows it). 10 new pins are red on
+  the d59a09de root. Tier: DETERMINISTIC. Review: .handoff/evidence/b45-genv-bb/REVIEW-r1.md APPROVED; report
+  .handoff/evidence/b45-genv-bb/REPORT.md (local, untracked).
 - Q-BB3 (b45), bytecode-budget order of effects (G-ORDER; amends MD-57): the spawn-free refusals still come first;
   then `raw/` is made and `report.txt` truncated, then `--version`, the `--v8-options` allowlist read and the
   version-mismatch exit run BEFORE `raw/before`, `raw/after` and `stage_write`. So a `--node-version` mismatch, a
