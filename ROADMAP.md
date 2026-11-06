@@ -263,5 +263,6 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   Known limit (maintainer ruling, burst 37, "Record as known"): the allowlist checks a numeric value's FORM only
   (MD-58), so `--max-inlined-bytecode-size=NaN` passes and real node exits 9 on every run; the tool fails closed
   later as NO-VERDICT. Burst 37 also settled Q-H1 (the -h refusal sentence now says "at the latest after one
-  --v8-options read") and CI-LINUX (the 6 ubuntu CI rows were BSD-userland oracle assumptions; fixed in the
-  working tree, awaiting a green CI run).
+  --v8-options read") and CI-LINUX (the 6 ubuntu CI rows were BSD-userland oracle assumptions; fixed, and
+  confirmed by the first fully green CI run, 42130164758 on aecb40f: all 8 legs, macOS + ubuntu x node 26.8.2 /
+  26 / 22 / 24).
