@@ -237,7 +237,8 @@ for (const T of TOOLS) {
     });
 
     // ---------------------------------------------------------------------------------------------------------------
-    // M1: an unwritable report.txt (a directory) is a clean refusal.  [mutant: drop || die]
+    // M1: an unwritable report.txt (a directory) is a clean refusal. For bb (since b47 Q-FIFO) and dd the pre-write
+    // clause refuses it; the `: >"$REPORT" || die` line is a race backstop only, so "drop || die" kills nothing here.
     // ---------------------------------------------------------------------------------------------------------------
     test(`${k} M1 --out DIR whose report.txt is a directory -> exit 2, "--out: cannot write", no "unexpected error"`, { skip }, () => {
         const R = rig(T);
@@ -395,9 +396,11 @@ for (const T of TOOLS) {
         } finally { rmAll(R.S); }
     });
 
-    if (T.dd) {
-        // N10 (dd only): an existing OUT that is not writable and has no raw/ is refused before any spawn.
-        test(`dd N10 existing OUT mode 555, no raw/: exit 2, "cannot write", 0 spawns`, { skip: skip || (process.getuid && process.getuid() === 0 ? 'root ignores mode 555' : false) }, () => {
+    {
+        // N10 (bb + dd since b47 Q-FIFO): an existing OUT that is not writable and has no raw/ is refused before any spawn,
+        // with the pre-write clause's line "--out: cannot write <OUT>/report.txt" (bb was "cannot create <OUT>/raw").
+        // Gates the clause's `-w "$OUT"` arm [mutant E: `( ! -e "$OUT" || -w "$OUT" )` -> true].
+        test(`${k} N10 existing OUT mode 555, no raw/: exit 2, "cannot write", 0 spawns`, { skip: skip || (process.getuid && process.getuid() === 0 ? 'root ignores mode 555' : false) }, () => {
             const R = rig(T);
             try {
                 const o = join(R.S, 'ro'); mkdirSync(o); chmodSync(o, 0o555);
@@ -405,7 +408,9 @@ for (const T of TOOLS) {
                 chmodSync(o, 0o755);
                 assert.equal(r.status, 2, r.out);
                 assert.ok(r.lines.some((l) => l.includes('cannot write')), r.out);
+                assert.equal(r.lines.filter((l) => l.includes(`--out: cannot write ${o}/report.txt`)).length, 1, `the exact refusal line once\n${r.out}`);
                 assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+                assert.equal(existsSync(join(o, 'raw')), false, 'raw/ must not be created');
             } finally { try { chmodSync(join(R.S, 'ro'), 0o755); } catch {} rmAll(R.S); }
         });
     }
@@ -422,9 +427,10 @@ for (const T of TOOLS) {
     const ls = (d) => readdirSync(d).sort().join(',');
     const noGit = (env) => { const e = { ...env }; for (const n of Object.keys(e)) if (n.startsWith('GIT_')) delete e[n]; return e; };
 
-    if (T.dd) {
-        // N12 [mutant X9: report.txt check missing]: existing OUT, report.txt mode 444, no raw/ -> refused before any spawn.
-        test(`dd N12 existing OUT with report.txt mode 444, no raw/: exit 2, "cannot write", 0 spawns, no raw/`, { skip: skip || (process.getuid && process.getuid() === 0 ? 'root ignores mode 444' : false) }, () => {
+    {
+        // N12 [mutant X9: report.txt check missing; bb since b47 Q-FIFO: mutant D, drop `&& -w "$OUT/report.txt"`]: existing OUT,
+        // report.txt mode 444, no raw/ -> refused before any spawn, the exact clause line once, no raw/ left behind.
+        test(`${k} N12 existing OUT with report.txt mode 444, no raw/: exit 2, "cannot write", 0 spawns, no raw/`, { skip: skip || (process.getuid && process.getuid() === 0 ? 'root ignores mode 444' : false) }, () => {
             const R = rig(T);
             try {
                 const o = join(R.S, 'o12'); mkdirSync(o);
@@ -432,10 +438,13 @@ for (const T of TOOLS) {
                 const r = run(T.script, ['--fn', 'add', '--node', R.fk, '--out', o, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
                 assert.equal(r.status, 2, r.out);
                 assert.ok(r.lines.some((l) => l.includes('cannot write')), r.out);
+                assert.equal(r.lines.filter((l) => l.includes(`--out: cannot write ${o}/report.txt`)).length, 1, `the exact refusal line once\n${r.out}`);
                 assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
                 assert.equal(existsSync(join(o, 'raw')), false, 'raw/ must not be created');
             } finally { rmAll(R.S); }
         });
+    }
+    if (T.dd) {
         // N15 control [mutant: over-refusing `( ! -e "$OUT" )`]: an existing EMPTY OUT is fine.
         test(`dd N15 control: existing empty OUT -> exit 0, report.txt + raw/before + raw/after`, { skip }, () => {
             const R = rig(T);
@@ -610,7 +619,7 @@ for (const T of TOOLS) {
     // writable-ancestor walk, and the bb --node newline dir. A refused row: exit 2, the exact die line once, 0 spawns, the
     // victim untouched. Every expected text is the plan's TASK 1 / 2 text (OUT is always absolute and realpath'd here).
     // Mutants (A1): drop -L -> N24-N26; -L moved after the mkdir -> N24-N26; drop the readable line -> N20-N23; `-r` only
-    // -> N22; drop -w -> N29 (bb); drop `2>/dev/null` -> N28 (bb); `-L` -> `-e` -> N25-N27, N32, M1 (+ dd N12); dd: no walk -> N29-N32, immediate
+    // -> N22; drop -w -> N29 (bb); drop `2>/dev/null` -> N28 (bb); `-L` -> `-e` -> N25-N27, N32, M1 (+ bb / dd N12); dd: no walk -> N29-N32, immediate
     // parent only -> N33, drop `! -L` in the walk -> N31.
     // ---------------------------------------------------------------------------------------------------------------
     const asRoot = !!(process.getuid && process.getuid() === 0);

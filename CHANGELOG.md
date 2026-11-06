@@ -33,11 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an
   empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags`
   of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
-  `--self-test` (54 canned checks, 57 after MD-46; the 4 ref / file rows need git: with no git on PATH they are one
+  `--self-test` (54 canned checks, 57 after MD-46, 64 after G-FIFO; the 4 ref / file rows need git: with no git on PATH they are one
   FAIL line and `--self-test` exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
   DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 152 tests; 161 after MD-46, 162 after
-  Q-H1): the exact self-test counts (54 and 54+24; 57 and 81 after MD-46), 24 self-test mutant rows (17 report/gate,
+  Q-H1, 166 after G-FIFO): the exact self-test counts (54 and 54+24; 57 and 81 after MD-46; 64 and 88 after G-FIFO), 24 self-test mutant rows, 25 after G-FIFO (17 report/gate, 18 after G-FIFO with M-fifo-off,
   3 of them on the length cap and 5 on the B-four refusals, + 7 diff) plus a NODE_OPTIONS-leak and a version-prefix
   mutant that must each be caught, gate rows on a fake node, 48 refusal rows with 0 node spawns (41 report/gate + 7
   diff), the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs; 9 after MD-46), and a live pair on
@@ -731,6 +731,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   .handoff/evidence/b45-gtracked-b2/REVIEW-r1.md APPROVED (B2 + B3); reports REPORT.md in each
   (local, untracked). This does not make every unexpected git error exit 2 elsewhere (G-FINAL has not landed).
 
+- G-FIFO (Q-FIFO), bytecode-budget (b47): `--out DIR` now refuses a `DIR/report.txt` that is not a writable regular
+  file before any write. Before, a FIFO `report.txt` passed every `--out` check and the empty-report write
+  `: >"$REPORT"` blocked for ever with no reader: a hang, no verdict. The deopt-diff / ic-diff / allocation-diff
+  pre-write clause is ported (byte-identical), after the report.txt symlink check and before `mkdir -p raw`:
+  report.txt must be a writable regular file, or absent with DIR absent or writable; else exit 2 NO-VERDICT, 0 node
+  spawns, nothing written, one line `--out: cannot write DIR/report.txt`. Two refusal changes (all still exit 2, 0
+  spawns): an existing unwritable DIR with no report.txt and no raw/ now says "cannot write DIR/report.txt" (was
+  "cannot create DIR/raw"); a directory or mode-444 report.txt no longer leaves a raw/ behind. The `: >"$REPORT" ||
+  die` line is now a race backstop only. `-h` (--out): report.txt must be absent (then DIR absent or writable) or a
+  writable regular file (never a FIFO, a device or a directory). Self-test MD-FIFO (fd 3 holds the FIFO open
+  read-write, so a build without the clause fails the row instead of hanging; needs no git): 63 -> 64 (`--fixtures`
+  87 -> 88; with no git 54 -> 55). Roots: bytecode-budget.sh 6fde4a26 -> 03f88d58 (src e7aa77fc -> 91cd961a); every
+  other root, src and lib file is unchanged. allocation-diff already refused a FIFO report.txt (exit 2, 0 spawns).
+  Tests: `test/bytecode-budget.test.mjs` C 63 -> 64, mutant M-fifo-off (killed exactly by MD-FIFO), a direct G-FIFO
+  row (FIFO report.txt -> exit 2, the die line once, 0 spawns, no raw/, FIFO kept; 30 s cap) and its teeth twin (the
+  M-fifo-off code path blocks and is killed by its own 5 s cap); 166 tests in the file (was 163);
+  `test/bytecode-budget-stage.test.mjs` pins 63 -> 64 and no-git 54 -> 55 (mkfifo added to the no-git PATH shim);
+  `test/bytecode-budget-stage-boundary.test.mjs` emulation pin 54 -> 55; `test/ext-audit.test.mjs` N10 (OUT mode
+  555, no raw/) and N12 (report.txt mode 444, no raw/) now run for bb as well as dd (and assert the exact refusal
+  line once, 0 spawns, no raw/), so the clause's `-w "$OUT"` and `-w "$OUT/report.txt"` arms are gated for bb
+  (mutants: drop `&& -w "$OUT/report.txt"` is killed by bb N12, `( ! -e "$OUT" || -w "$OUT" )` -> `true` by bb N10;
+  both survived before); 224 -> 226 tests in the file. Revert check on the 6fde4a26 root: the G-FIFO row is red by
+  its 30 s SIGKILL cap, the self-test counts C / C+F are red (63 / 87), M-fifo-off and the twin are red (anchor 0),
+  bb N10 (wrong message) and bb N12 (raw/ left behind) are red. Tier: DETERMINISTIC. Review:
+  .handoff/evidence/b47-fifo/REVIEW-r1.md APPROVED (no blockers; three NITs: the bb gates for the two clause arms, the
+  two refusal changes above, and a stale `checks 50-54` comment at test/bytecode-budget.test.mjs:149 (still open)) (local, untracked).
+
 ### Changed
 
 - `bytecode-budget.sh` report and gate mode: an unreadable DRIVER (chmod 000) is now refused before any
@@ -816,7 +843,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `--out` with such a `..` writes into the directory that was checked and the header prints its
     physical path.
   Tier: DETERMINISTIC. Gated in `test/ext-audit.test.mjs` (205 tests in the file: 65 in the
-  `ic-diff.sh` block, 140 in the bb / dd block; 224 after MD-46; fake nodes, no V8 run; the first 72 rows (bb 35 /
+  `ic-diff.sh` block, 140 in the bb / dd block; 224 after MD-46, 226 after G-FIFO; fake nodes, no V8 run; the first 72 rows (bb 35 /
   dd 37) are red on 8070907's scripts (bb 99790884 / dd db89aba0) except 8 that pin behavior 8070907
   already had: the controls B4B x2, N18 x2 and dd N15, plus N8 x2 and dd N11; the bb N19a control is
   red there). In `npm test`.
