@@ -388,9 +388,11 @@ memory `haiku-sweeper-one-criterion`, `commit-msg-no-coauthor` (local, untracked
 
 ## F. Open / known limits
 
-**#65 O-2: bash 3.2 `set -u` exit 0.** Post-1.0, MAINTAINER DECISION; not decided. Evidence: `.handoff/NEXT.md`
+**#65 O-2: bash 3.2 `set -u` exit 0.** Post-1.0, MAINTAINER DECISION; decided in b45
+(RULINGS-b45-finding2.md Q-F2a / Q-F2b: fixed now, superseding the post-1.0 deferral). Evidence: `.handoff/NEXT.md`
 lines 33, 74; mechanism (EXIT trap sees `$? = 0` on 3.2.57): `.handoff/research/post-1.0/RESEARCH.md:285-287`
-(local, untracked).
+(local, untracked). Closed by Q-F2a (b45) for the `set -u` fail-open: the EXIT trap now maps
+rc 0 without FINAL=1 to 2 (CHANGELOG "Q-F2a (G-FINAL)").
 
 **#66 MD-58: the `--v8-flags` allowlist checks a numeric value's FORM only.** `--max-inlined-bytecode-size=NaN`
 (also `=/etc/passwd`, `=*`, `=2^53+1`) passes; real node exits 9 on every run and the tool fails closed later as

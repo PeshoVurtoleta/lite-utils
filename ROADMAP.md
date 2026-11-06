@@ -25,7 +25,7 @@ Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
    (`sort | uniq -c`, never `sort -u`): one site -> two sites is a DIFF.
 3. Null control: runs 2..N of each side must match run 1, else NO-VERDICT.
 4. Guard: a run with no evidence about the named function is NO-VERDICT, never "identical".
-5. Fail closed: exit 0 SAME, 1 DIFF, 2 NO-VERDICT; any unplanned failure is 2, never 1.
+5. Fail closed: exit 0 SAME, 1 DIFF, 2 NO-VERDICT; any unplanned failure (rc 0 included) is 2, never 1.
 6. A `--self-test` on canned trace text through the SAME awk programs, plus a node:test wrapper whose
    mutants (one exact edit of a copy) must turn the self-test red.
 7. Verdict vs report: the verdict is gated; budget / tier / count tables are REPORTED and never move it.

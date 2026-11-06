@@ -954,3 +954,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fixed script all 50 are green) and `test/allocation-diff.test.mjs` (200 tests, 206 after MD-46, 208 after CI on
   Linux; `--self-test` prints "self-test: 76 check(s) ok", 78 after MD-46). `test/death-signature.test.mjs` lists
   the new file among the await-free spawnSync files. In `npm test`.
+- All 5 tools (`allocation-diff.sh`, `bytecode-budget.sh`, `deopt-diff.sh`, `ic-diff.sh`,
+  `inlining-budget-diff.sh`), Q-F2a (G-FINAL): on macOS `/bin/bash` 3.2 most `set -u` aborts (not inside
+  `$( )`; an unbound variable) reached the EXIT trap as rc 0, so every tool exited 0 (fail-open).
+  The trap (`lib/prologue.sh`) now maps any exit without `FINAL=1`, rc 0 included, to 2 NO-VERDICT, and runs
+  `set +e` first so a closed stderr cannot turn it into exit 1 (the old trap gave 1 = a DIFF
+  verdict). Planned exits are unchanged.
+  All 5 roots differ only in the prologue hunk (prologue 7a186909 -> 722e01f6; roots allocation-diff
+  27366cf9, bytecode-budget 6fde4a26, deopt-diff ea79be87, ic-diff d111a75a, inlining-budget-diff
+  b5c4990c). Tier: DETERMINISTIC. Tests: new `test/final-trap.test.mjs` (63 rows: trap anchor, A1 per root
+  with old-trap twins, A2 bash 3.2 lane + host row, stderr-closed rows, A3 exit-0 lint with must-fail
+  rows, A5), re-anchored bb-sb M-trap-off and ibd trap-ignores-final, the dd-boundary ibd parity row now
+  hunk-scoped, `test/death-signature.test.mjs` SYNC_FILES gains the new file. Bash 5 (Linux CI) has not yet
+  been observed for the stderr-closed twin: pending CI. Reviews: B1
+  .handoff/evidence/b45-gfinal/REVIEW-r1.md REJECTED (1 LITERAL test-comment blocker, folded into B2; the
+  code hunks clean), then .handoff/evidence/b45-gfinal-b2/REVIEW-r1.md APPROVED;
+  report .handoff/evidence/b45-gfinal/REPORT.md
+  (local, untracked).
