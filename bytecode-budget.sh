@@ -19,7 +19,8 @@
 #   --max fn=N[,fn=N]      gate mode: every function named fn must have a bytecode length <= N (1..9 digits)
 #   --node-version vX.Y.Z  gate mode (required): the node version the maxima were taken on; report mode
 #                          (optional): the node version expected. Must equal `<node> --version` exactly, else
-#                          NO-VERDICT before any probe.
+#                          NO-VERDICT before any probe; with --out, DIR then holds only raw/ (empty) and
+#                          report.txt (this run's lines): no raw/before, raw/after or stage/.
 #                          Diff mode (optional): as in report mode.
 #   --runs N               probes per function, 2..20 (default 2). Run 1 vs runs 2..N is the null control.
 #   --node BIN             node binary (default: $NODE, else node), resolved ONCE to an absolute path from the
@@ -44,10 +45,10 @@
 #                          / file flags. Refused, exit 2 at the latest after one --v8-options read and before any
 #                          measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
 #                          --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
-#                          bytecode-budget's exception: that read comes right after --version, so with --out (and in
-#                          ref / file mode) it comes after the DIR writes (raw/, an empty report.txt, stage/), as a
-#                          failing --version and a version mismatch do; a refusal leaves no file in raw/ and
-#                          report.txt empty.
+#                          bytecode-budget's exception: that read comes right after --version, so with --out it
+#                          comes after raw/ and an empty report.txt are made, as a failing --version and a version
+#                          mismatch do, and before raw/before, raw/after (diff mode) or stage/ (ref / file mode);
+#                          a refusal leaves no file in raw/ and report.txt empty.
 #   --out DIR              keep DIR/report.txt and DIR/raw/<fn>.<k>.txt (raw output of run k, 0x addresses kept;
 #                          a space in fn becomes -). DIR/raw must be absent or an empty, readable and writable
 #                          directory that is not a symlink; DIR/report.txt must not be a symlink or a file with
@@ -106,7 +107,8 @@
 #     differs (ascending): "    before=<n> after=<m>  <len>"
 #   "  <fn>: NO-VERDICT -- <before|after>: <reason>" (one line per side that has a NO-VERDICT reason below)
 #   "  <fn>: NO-VERDICT -- node version mismatch: <bin> --version is <v>, --node-version is <v>" (no before /
-#     after prefix: printed for every fn before any probe, instead of the lines above)
+#     after prefix: printed for every fn before any probe, instead of the lines above). In ref / file mode the
+#     head then has no before / after / driver / NOTE line: nothing is staged yet.
 #   The multiset is order-free and counts duplicates: 6,19 equals 19,6; 6 differs from 6,6.
 # NO-VERDICT reasons, one line per fn ("  <fn>: NO-VERDICT -- <reason>"):
 #   node version mismatch: <bin> --version is <v>, the maxima are for <v>     (gate mode)
@@ -120,14 +122,17 @@
 #   exit 0 REPORTED, or 2 NO-VERDICT. A refused argument (Options, DRIVER, fn) exits 2 before any node is
 #   spawned; a --node BIN whose --version fails, a --v8-flags token the allowlist refuses (after --version and
 #   one --v8-options read, 0 probes), or a V8 flag node lists but rejects (NO-VERDICT: driver exited <rc>),
-#   exits 2 after its spawn(s) (a V8 flag node lists but rejects still runs every probe). Spawns: one --version,
-#   two --v8-options (the --v8-flags allowlist, then the limits), then fn x runs probes.
+#   exits 2 after its spawn(s) (a V8 flag node lists but rejects still runs every probe). With --out, a failing
+#   --version, an allowlist refusal or a version mismatch leaves DIR holding raw/ (empty) and report.txt only (no
+#   raw/before, raw/after or stage/). Spawns: one --version, two --v8-options (the --v8-flags allowlist, then the
+#   limits), then fn x runs probes.
 # Diff verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. Spawns: one --version,
 #   two --v8-options (the --v8-flags allowlist, then the limits), then fn x runs x 2 probes. --diff with --max, or not
 #   exactly two DRIVERs, exits 2 before any spawn.
 #   (Ref / file mode: no DRIVER; any DRIVER path exits 2 before any spawn.)
-# Ref / file mode: --out DIR is required and DIR/stage must be absent or empty. Before any probe, DIR/stage/before and
-#   DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
+# Ref / file mode: --out DIR is required and DIR/stage must be absent or empty. Before any probe, but after
+#   --version, the --v8-flags allowlist read and the version check, DIR/stage/before and DIR/stage/after each get
+#   that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
 #   textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each side's
 #   driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its own
 #   fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
@@ -141,6 +146,9 @@
 #   (a Unicode case or NFC / NFD fold), a --driver whose directory bash's cd resolves to another file than the one
 #   read (a symlink before '..'), a DIR/stage that is a symlink, and an unreadable or unwritable DIR/stage ("is not
 #   empty"); a --before, --after or --driver value that starts with '-' is read as ./<value>.
+#   The staging itself runs after --version and the allowlist read (2 spawns): a failed copy, or a file system that
+#   still maps the staged module and driver to one file ("the same file on this file system"), exits 2 with DIR
+#   holding raw/ (raw/before and raw/after empty), an empty report.txt (no head yet) and a partial stage/.
 # Frozen "before" (file mode): --before must be a FROZEN copy. It is refused with NO-VERDICT when it, or the end of
 #   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js or
 #   <top>/<same name>, <top> = the repo around the current directory, around --after, around --before and its link
@@ -799,7 +807,7 @@ self_test() {
   check "MD-44 refused before any spawn: --v8-flags --eval=F / --eval / --print=F / --print / --print-opt-code (code run instead of the driver, or V8 internals printed into the run; a prefix match) -> exit 2, 0 spawns" \
     "$got" "$(printf '#2|VERDICT NO-VERDICT|0|1%.0s' 1 2 3 4 5)"
 
-  # --- MD-50..58 (lib/v8flags.sh): the --v8-flags allowlist, read right after --version (MD-57) from the fake's list ---
+  # --- MD-50..58 (lib/v8flags.sh): the --v8-flags allowlist, read right after --version (MD-57; with --out, before raw/before, raw/after and stage/ are made: Q-BB3) from the fake's list ---
   got=""
   for x in --bogus-flag --snapshot-blob=F --build-snapshot --openssl-config=F --experimental-require-module --experimental-print-required-tla; do
     got="$got#$(spawn - --fn add --v8-flags "$x" "$drv")|$(grep -c -F -x -e "bytecode-budget: --v8-flags must not set $x: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)" "$d/sp.out" || true)|$(wc -l <"$d/sp.out" | tr -d ' ')|$(paste -sd, - <"$fk/log")"
@@ -1006,39 +1014,38 @@ if [[ -n "$OUT" ]]; then
   # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
-  if [[ $DIFFMODE == 1 ]]; then mkdir "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"; fi
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 else
   REPORT=/dev/null   # nothing is written to disk without --out
 fi
-if [[ $STAGED == 1 ]]; then
-  stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver
-  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")
-  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
-fi
+bb_head() { # 1 = the run head after stage_write; 0 = the mismatch exit (a ref / file run has staged nothing yet: no before / after / driver / NOTE line)
+  say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
+  if [[ $DIFFMODE == 1 ]]; then
+    if [[ $STAGED != 1 || $1 == 1 ]]; then
+      say "before  $DESC_B"
+      say "after   $DESC_A"
+    fi
+    if [[ $STAGED == 1 && $1 == 1 ]]; then
+      say "driver  $DESC_D"
+      if [[ $STAGE_SAME == 1 ]]; then say "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)"; fi
+    fi
+  else
+    say "driver  ${DRV_DIR%/}/$DRV_BASE"
+  fi
+  say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--print-bytecode --print-bytecode-filter=<fn>"
+  if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
+}
 
 # ---------------------------------------------------------------------------------------------
 # node version (S-6): checked before any probe
 # ---------------------------------------------------------------------------------------------
-# --- every pre-spawn refusal is above this line (--out / stage writes are above it too); spawns start here: --version, --v8-options (the --v8-flags allowlist: refusals exit 2 here, 0 measured runs), --v8-options (limits), then the runs ---
+# --- every pre-spawn refusal is above this line (so are raw/ and the empty report.txt; raw/before, raw/after and stage/ are made below, after the version check); spawns start here: --version, --v8-options (the --v8-flags allowlist: refusals exit 2 here, 0 measured runs), --v8-options (limits), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 v8fl_check "$NODE_BIN"
 if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; elif [[ $DIFFMODE == 1 ]]; then MODE="diff"; else MODE="report"; fi
 if [[ $STAGED == 1 ]]; then MODE="diff ($STAGE_MODE)"; fi
-say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
-if [[ $DIFFMODE == 1 ]]; then
-  say "before  $DESC_B"
-  say "after   $DESC_A"
-  if [[ $STAGED == 1 ]]; then
-    say "driver  $DESC_D"
-    if [[ $STAGE_SAME == 1 ]]; then say "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)"; fi
-  fi
-else
-  say "driver  ${DRV_DIR%/}/$DRV_BASE"
-fi
-say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--print-bytecode --print-bytecode-filter=<fn>"
-if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 if [[ -n "$WANT_VER" && "$GOT_VER" != "$WANT_VER" ]]; then
+  bb_head 0
   for t in "${TARGETS[@]}"; do
     if [[ -n "$MAXLIST" ]]; then w="the maxima are for $WANT_VER"; else w="--node-version is $WANT_VER"; fi
     say "  $t: NO-VERDICT -- node version mismatch: $NODE_BIN --version is $GOT_VER, $w"
@@ -1046,6 +1053,13 @@ if [[ -n "$WANT_VER" && "$GOT_VER" != "$WANT_VER" ]]; then
   say "VERDICT NO-VERDICT"
   FINAL=1; exit 2
 fi
+if [[ -n "$OUT" && $DIFFMODE == 1 ]]; then mkdir "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"; fi
+if [[ $STAGED == 1 ]]; then
+  stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver
+  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")
+  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
+fi
+bb_head 1
 
 # ---------------------------------------------------------------------------------------------
 # limits (from this node binary, then --v8-flags overrides)

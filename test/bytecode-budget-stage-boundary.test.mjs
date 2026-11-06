@@ -548,7 +548,8 @@ const noAscii = (c, r) => assert.doesNotMatch(r.stderr, /non-ASCII byte/, msg(r)
 mutant('M-ascii-off', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U3, (c, r) => { noAscii(c, r); assert.equal(r.status, 1, msg(r)); assert.equal(c.spawns().length, 7); });
 mutant('M-ascii-off-ref', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U2R, noAscii);
 mutant('M-ascii-off-utf8', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U1UTF, noAscii);
-// the (ii) belt: on a carrier root without (i), U1 file mode reaches stage_write; a folding FS maps both names to one file
+// the (ii) belt: on a carrier root without (i), U1 file mode reaches stage_write; a folding FS maps both names to one file.
+// stage_write runs after --version and the --v8-flags allowlist read (G-ORDER), so the belt exits after those 2 spawns.
 const foldSkip = skip || (FOLDS ? false : `this file system keeps ${JSON.stringify(U_E)} and ${JSON.stringify(U_EU)} apart (no Unicode case fold): the (ii) belt row is not checked, never passed`);
 const CS_BELT = {
     ...uFile(U_E, U_EU),
@@ -556,12 +557,12 @@ const CS_BELT = {
         assert.equal(r.status, 2, msg(r));
         assert.match(r.stderr, new RegExp(`^bytecode-budget: ${reEsc(`the staged module and driver are the same file on this file system (case / Unicode fold: ${U_E} / ${U_EU}): rename the driver`)}\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
         assert.equal(onceIn(r.stderr, 'the same file on this file system'), 1, msg(r));
-        assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+        assert.deepEqual(c.spawns(), ['--version', '--v8-options']);   // G-ORDER: the belt runs in stage_write, after the version check
         assert.deepEqual(readdirSync(join(c.out, 'stage', 'after')), [], 'the belt let the after side be staged');
         emptyDirs(c);
     },
 };
-test('stage boundary: 12 (ii) belt on a carrier root without (i): U1 file mode -> exit 2 with the belt line once, 0 spawns, stage/after empty', { skip: foldSkip }, () => {
+test('stage boundary: 12 (ii) belt on a carrier root without (i): U1 file mode -> exit 2 with the belt line once after [--version, --v8-options], stage/after empty', { skip: foldSkip }, () => {
     const { c, r } = runOn(variant('belt-carrier', [[I_LINE, ':']]), CS_BELT);
     CS_BELT.check(c, r);
 });

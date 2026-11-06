@@ -404,11 +404,11 @@ test('bytecode-budget: 25 accepted --v8-flags tokens -> exit 0 REPORTED, still 1
         assert.deepEqual(sp.slice(0, 3), ['--version', '--v8-options', '--v8-options']);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-// A4: under MD-57 bb's --out writes precede the allowlist read: a refusal leaves OUT/raw empty and report.txt 0 bytes
-// (report mode and diff mode), and 20 refuse + accept cycles leave a private TMPDIR and cwd empty with no mktemp call.
-// Both modes pin the COMPLETE recursive OUT listing: the script's --out block writes only `mkdir -p OUT/raw` and
-// `: >OUT/report.txt`, plus raw/before + raw/after in diff mode (stage/ is ref / file mode only), so an extra or a
-// missing entry is red in either mode.
+// A4: under MD-57 as amended by Q-BB3 (G-ORDER) bb's --out block writes only `mkdir -p OUT/raw` and `: >OUT/report.txt`
+// before the spawns; raw/before + raw/after (diff mode) and stage/ (ref / file mode) are made only after --version,
+// the --v8-flags allowlist read and the version check. So a refusal leaves OUT = {raw/ (empty), report.txt (0 bytes)}
+// in report mode AND diff mode, and 20 refuse + accept cycles leave a private TMPDIR and cwd empty with no mktemp call.
+// Both modes pin the COMPLETE recursive OUT listing, so an extra or a missing entry is red in either mode.
 test('bytecode-budget: a --v8-flags refusal with --out leaves OUT/raw empty and report.txt 0 bytes (report and diff mode)', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-rejout-'));
     try {
@@ -423,10 +423,8 @@ test('bytecode-budget: a --v8-flags refusal with --out leaves OUT/raw empty and 
             const dout = join(s.dir, 'o');
             const r = run(SCRIPT, ['--diff', '--node', s.node, '--fn', 'add', '--v8-flags', '--bogus-flag', '--out', dout, s.B, s.A]);
             v8flRefused(r, s, '--bogus-flag');
-            assert.deepEqual(readdirSync(dout, { recursive: true }).sort(), ['raw', 'raw/after', 'raw/before', 'report.txt']);
-            assert.deepEqual(readdirSync(join(dout, 'raw')).sort(), ['after', 'before']);
-            assert.deepEqual(readdirSync(join(dout, 'raw', 'before')), []);
-            assert.deepEqual(readdirSync(join(dout, 'raw', 'after')), []);
+            assert.deepEqual(readdirSync(dout, { recursive: true }).sort(), ['raw', 'report.txt']);   // G-ORDER: no raw/before, raw/after before the spawns
+            assert.deepEqual(readdirSync(join(dout, 'raw')), []);
             assert.equal(readFileSync(join(dout, 'report.txt'), 'utf8'), '');
         } finally { s.done(); }
     } finally { rmSync(dir, { recursive: true, force: true }); }

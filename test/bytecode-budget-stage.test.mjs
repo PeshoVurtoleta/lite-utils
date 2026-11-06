@@ -201,19 +201,21 @@ row('A2 staged --fn add,mid,dup -> exactly 15 node spawns (3 + 3 fns x 2 runs x 
 });
 
 // =====================================================================================================
-// A4 (MD-46 G3, ruling MD-57): bb's --out / stage writes precede its --v8-flags allowlist read, so a refusal in ref or
-// file mode leaves OUT/stage (4 files), an EMPTY raw/before + raw/after and a 0-byte report.txt, after exactly
-// [--version, --v8-options]: exit 2, the frozen lib/v8flags.sh die line, 0 stdout bytes.
+// A4 (MD-46 G3, ruling MD-57 as amended by Q-BB3 / G-ORDER): before the spawns bb's --out block writes only an empty
+// raw/ and a 0-byte report.txt; stage/ and raw/before + raw/after are made only after --version, the --v8-flags
+// allowlist read and the version check. So a refusal in ref or file mode leaves OUT = {raw/ (empty), report.txt
+// (0 bytes)}, no stage/, after exactly [--version, --v8-options]: exit 2, the frozen lib/v8flags.sh die line, 0 stdout bytes.
 for (const mode of ['ref', 'file']) {
-    row(`A4 ${mode} mode --v8-flags --bogus-flag -> exit 2 die after [--version, --v8-options]; OUT = stage/ 4 files + empty raw/before, raw/after + 0-byte report.txt`, {
+    row(`A4 ${mode} mode --v8-flags --bogus-flag -> exit 2 die after [--version, --v8-options]; OUT = empty raw/ + 0-byte report.txt (no stage/, no raw/before, raw/after)`, {
         args: (c) => [...(mode === 'ref' ? refO(c) : fileO(c)), '--v8-flags', '--bogus-flag'],
         check: (c, r) => {
             assert.equal(r.status, 2, msg(r));
             assert.equal(r.stderr, "bytecode-budget: --v8-flags must not set --bogus-flag: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)\nVERDICT NO-VERDICT\n");
             assert.equal(r.stdout, '');
             assert.deepEqual(c.spawns(), ['--version', '--v8-options']);
-            assert.deepEqual(walk(c.out).map((x) => x.slice(c.out.length + 1)).sort(), ['report.txt', 'stage/after/driver.mjs', 'stage/after/mod.js', 'stage/before/driver.mjs', 'stage/before/mod.js']);
-            assert.deepEqual(readdirSync(join(c.out, 'raw')).sort(), ['after', 'before']);
+            assert.deepEqual(walk(c.out).map((x) => x.slice(c.out.length + 1)).sort(), ['report.txt']);
+            assert.deepEqual(readdirSync(c.out).sort(), ['raw', 'report.txt']);   // G-ORDER: no stage/ before the spawns
+            assert.deepEqual(readdirSync(join(c.out, 'raw')), []);
             assert.equal(readFileSync(join(c.out, 'report.txt'), 'utf8'), '');
         },
     });
