@@ -6,7 +6,7 @@
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh,
 // <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests; + MD-46 G2 rung 1 (dd: MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15-blob / F15-build / F15-ossl / V8-ok / RETv8) = 210 tests; + MD-46 G3 rung 2 (bb: the same flip and the same 5 new rows, V8-ok / RETv8 keyed per tool) = 215 tests; + MD-46 G4 rung 3 (ic: N15 8 -> 9, MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15a / F15b / F15c, 4 V8R, V8OK, V8RET = 9 new rows) = 224 tests.
-// A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (10 s timeout = red); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
+// A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (the 10 s cap = red, by name: "dd N34 run timed out after 10000 ms"); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
 // FROZEN EXPECTATION (b17-head: bb 99790884, dd db89aba0; PLAN A4): of the 15 rows added by B3b (N12-N18), 12 red and the 3
@@ -25,6 +25,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { capSync } from './spawn-cap.mjs';
 
 // Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
 // 0 subtests. Yield once BEFORE each test so the previous test's report flushes (afterEach runs before its own
@@ -79,7 +80,7 @@ function baseEnv(extra = {}) {
     return { ...e, ...extra };
 }
 function run(script, args, { cwd, env }) {
-    const r = spawnSync(BASH, [script, ...args], { encoding: 'utf8', timeout: 300000, cwd, env });
+    const r = capSync(BASH, [script, ...args], { encoding: 'utf8', cwd, env }, 300000, `ext-audit ${basename(script)} run`);
     const out = (r.stdout || '') + (r.stderr || '');
     return { status: r.status, out, lines: out.split('\n'), stdout: r.stdout };
 }
@@ -741,15 +742,16 @@ for (const T of TOOLS) {
     // dd walk: `while [[ ! -e U && ! -L U && U != . ]]` then `[[ -d U && -w U && -x U ]] || die`. bb has no walk: its mkdir -p
     // refuses with "cannot create <OUT>/raw" (the N30 control text), so each bb row is a CONTROL pinning that existing refusal
     // (exit 2, that one line, 0 spawns), verified against the live bb root before writing; it asserts nothing the walk adds.
-    // N34 [dd mutant: drop `&& U != .` -> infinite loop -> the 10 s spawn timeout reads as red]: cwd mode 0000 + relative `--out o`.
+    // N34 [dd mutant: drop `&& U != .` -> infinite loop -> the 10 s cap fails the row by name, "dd N34 run timed out after 10000 ms"]: cwd mode 0000 + relative `--out o`.
     // The cwd is locked from INSIDE the spawn (`cd D && chmod 000 .`), because spawnSync cannot chdir into a 0000 dir.
     test(`${k} N34${T.dd ? '' : ' (control)'} cwd mode 0000 + relative --out o: exit 2, ${T.dd ? '"(. is not a writable directory)"' : '"cannot create o/raw"'}, 0 spawns, no hang`, { skip: rootSkip }, () => {
         const R = rig(T);
         try {
             const dv = join(R.S, 'driver.mjs'); writeFileSync(dv, ''); // the driver lives OUTSIDE the locked cwd
             const args = ['--fn', 'add', '--node', R.fk, '--out', 'o', ...drvArgs(T, dv)];
-            const r0 = spawnSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, T.script, ...args], { encoding: 'utf8', timeout: 10000, env: R.env });
-            try { chmodSync(R.cwd, 0o755); } catch {}
+            // capSync throws by name on the 10 s cap (the N34 mutant's hang); the finally unlocks the cwd before that throw propagates
+            let r0;
+            try { r0 = capSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, T.script, ...args], { encoding: 'utf8', env: R.env }, 10000, `${k} N34 run`); } finally { try { chmodSync(R.cwd, 0o755); } catch {} }
             assert.equal(r0.error, undefined, `no timeout / spawn error: ${r0.error}`);
             const out = (r0.stdout || '') + (r0.stderr || '');
             const want = T.dd ? `${P} ${WALK('o', '.')}` : `${P} --out: cannot create o/raw`;
@@ -1085,8 +1087,9 @@ for (const T of TOOLS) {
 // holding keep/, raw/ 0600, raw/ a symlink to a 0300 dir; skip at euid 0), SYM (report.txt symlink: live, dangling relative INSIDE
 // OUT (MD-34 "even inside DIR"), dangling into an existing dir), ALIAS (BASH_ENV `alias node='<abs fake>'`), N37 (A9: no raw `cd:` line)
 // and one A4 retention row. Die texts are the dd / bb texts the plan pastes verbatim into ic (prefix "ic-diff:").
-// FAKE NODE = test/ic-diff.test.mjs:530-538 line for line, plus ONE added line that also logs "$PWD" to "$d/pwd" (rows N3 / N4 / N8
-// assert the run directory). It logs argv to <its dir>/log; a trace run exits 0 and copies ./ic.log (a mono IC log of get) beside
+// FAKE NODE = the fake node that rig() writes in test/ic-diff.test.mjs (its A4 block, `writeFileSync(join(fk, 'node'), [`#!${bash}`,
+// 'd=$(dirname "$0")', ...`), line for line except the fixed #!/bin/bash and the --v8-options arm (here: cat V8O), plus ONE added line
+// that also logs "$PWD" to "$d/pwd" (rows N3 / N4 / N8 assert the run directory). It logs argv to <its dir>/log; a trace run exits 0 and copies ./ic.log (a mono IC log of get) beside
 // the --logfile, so an accepted run is VERDICT SAME, exit 0. Each fake logs into its OWN directory: "which binary ran" = which log.
 // Spawn counts are the sum of every fake's log lines (probes + trace runs; accepted --runs 3 = 2 + 6 = 8, PLAN A3).
 // gB B-four ic B3 (PLAN-ext-audit-gB-four-ic.md TASK 6 / A4 / A5; MD-47, MD-49): F2 is CLOSED in ic -- the old F2 pin is re-pinned as N29 (F2 closed), plus the dd walk rows N30-N32, N34-N36 (+ N33 control)
@@ -1352,12 +1355,13 @@ function icRows() {
             assert.ok(existsSync(join(dir, 'raw', 'before')) && existsSync(join(dir, 'raw', 'after')), `${dir}/raw/before + raw/after`);
         }
     });
-    // N34 [mutant: drop `&& U != .` -> infinite loop -> the 10 s timeout reads as red]: cwd mode 0000 + relative `--out o`, locked from INSIDE the spawn (spawnSync cannot chdir into 0000).
+    // N34 [mutant: drop `&& U != .` -> infinite loop -> the 10 s cap fails the row by name, "ic N34 run timed out after 10000 ms"]: cwd mode 0000 + relative `--out o`, locked from INSIDE the spawn (spawnSync cannot chdir into 0000).
     icTest('N34 cwd mode 0000 + relative --out o: exit 2, "(. is not a writable directory)", 0 spawns, no hang', (R) => {
         const dv = icDriver(join(R.S, 'drvx', 'driver.mjs'));
         const args = ['--fn', 'get', '--node', R.fk, '--out', 'o', dv, dv];
-        const r0 = spawnSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, IC, ...args], { encoding: 'utf8', timeout: 10000, env: { ...R.env, TMPDIR: join(R.S, 'mk') } });
-        try { chmodSync(R.cwd, 0o755); } catch {}
+        // capSync throws by name on the 10 s cap (the N34 mutant's hang); the finally unlocks the cwd before that throw propagates (icTest's rmAll cannot read a 0000 dir)
+        let r0;
+        try { r0 = capSync(BASH, ['-c', 'cd "$1" && chmod 000 . && shift && exec "$@"', 'x', R.cwd, BASH, IC, ...args], { encoding: 'utf8', env: { ...R.env, TMPDIR: join(R.S, 'mk') } }, 10000, 'ic N34 run'); } finally { try { chmodSync(R.cwd, 0o755); } catch {} }
         assert.equal(r0.error, undefined, `no timeout / spawn error: ${r0.error}`);
         const out = (r0.stdout || '') + (r0.stderr || '');
         const want = `${ICP} ${WALK('o', '.')}`;
