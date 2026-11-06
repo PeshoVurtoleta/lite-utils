@@ -20,8 +20,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 60;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); with --fixtures C + 24 = 84)
+const C = 61;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); with --fixtures C + 24 = 85)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
+// G-ENV (PLAN-b42-genv TASK 1): the top line that unsets the 4 env vars a node reads at start, and its self-test row
+const TOPLINE = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
+const QENV = 'Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn';
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
 // opts may override encoding / env / cwd, never the cap: capSync refuses an opts.timeout (no caller passes one)
@@ -43,10 +46,15 @@ function variant(dir, name, from, to) {
     return p;
 }
 
-// Same, but replaces EVERY occurrence (at least one).
-function variantAll(dir, name, from, to) {
-    const src = readFileSync(SCRIPT, 'utf8');
+// Same, but replaces EVERY occurrence (at least one); then each [from, to] of `extra` once (anchor exactly once).
+function variantAll(dir, name, from, to, extra = []) {
+    let src = readFileSync(SCRIPT, 'utf8');
     assert.ok(src.includes(from), `mutant ${name}: anchor not found`);
+    for (const [a, b] of extra) {
+        const n = src.split(a).length - 1;
+        assert.equal(n, 1, `mutant ${name}: extra anchor must match exactly once, matched ${n}`);
+        src = src.replace(a, () => b);
+    }
     const p = join(dir, `${name}.sh`);
     writeFileSync(p, src.split(from).join(to));
     chmodSync(p, 0o755);
@@ -257,11 +265,41 @@ test('bytecode-budget teeth: a script that leaks NODE_OPTIONS to the probe is ca
         const env = { ...process.env, NODE_OPTIONS: '--no-warnings' };
         const good = gate('add=6', NV, {}, SCRIPT, { env });
         assert.equal(good.r.status, 0, good.r.stdout + good.r.stderr);
-        const p = variantAll(dir, 'leak-node-options', 'env -u NODE_OPTIONS ', '');
+        // G-ENV (PLAN-b42-genv A4): the top unset line strips NODE_OPTIONS for every spawn, so the mutant also deletes it.
+        // Without that delete NODE_OPTIONS never reaches the fake; the mutant still exits 2, but only because the edit also
+        // breaks v8fl_read's `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE` ("cannot run ... --v8-options"): census.txt b45-genv-bb
+        const p = variantAll(dir, 'leak-node-options', 'env -u NODE_OPTIONS ', '', [[TOPLINE, '']]);
         const bad = gate('add=6', NV, {}, p, { env });
         assert.equal(bad.r.status, 2, 'mutant survived: ' + bad.r.stdout + bad.r.stderr);
-        // the fake node's --version arm exits 7 too, so the script dies at the version probe
-        assert.match(bad.r.stdout + bad.r.stderr, /cannot run .* --version|VERDICT NO-VERDICT/);
+        // the fake node's --version arm exits 7 too, so the script dies at the version probe (the leak path, not the
+        // collateral --v8-options break)
+        assert.match(bad.r.stdout + bad.r.stderr, /cannot run .* --version$/m);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// G-ENV teeth (PLAN-b42-genv TASK 2, ASSERTION A1): the root minus the top unset line -> --self-test exit 1, exactly one
+// FAIL, the Q-ENV e2e row (the fake node exits 7 at --version on the exported NODE_V8_COVERAGE). The host env loses the
+// four names first (under --experimental-test-coverage NODE_V8_COVERAGE would trip every fake-node row of the mutant);
+// NODE_V8_COVERAGE = undefined, not a delete: node's child_process re-inserts a missing NODE_V8_COVERAGE key.
+function envNoNode() {
+    const e = cleanEnv();
+    for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS']) delete e[k];
+    e.NODE_V8_COVERAGE = undefined;
+    return e;
+}
+test('bytecode-budget G-ENV teeth: the root minus the top unset line -> --self-test exit 1, exactly 1 FAIL, the Q-ENV e2e row', { skip }, () => {
+    const good = run(SCRIPT, ['--self-test'], { env: envNoNode() });
+    assert.equal(good.status, 0, good.stdout + good.stderr);
+    assert.equal(good.stdout.split('\n').filter((l) => l.startsWith('ok   ' + QENV)).length, 1, 'the Q-ENV e2e row passes exactly once');
+    const dir = mkdtempSync(join(tmpdir(), 'bb-envoff-'));
+    try {
+        const r = run(variant(dir, 'M-env-off', TOPLINE, ''), ['--self-test'], { env: envNoNode() });
+        const f = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
+        assert.equal(r.status, 1, 'mutant M-env-off survived: ' + r.stdout + r.stderr);
+        assert.equal(f.length, 1, f.join('\n'));
+        assert.ok(f[0].startsWith('FAIL ' + QENV), f[0]);
+        assert.match(r.stdout, /^ {5}got: {2}2\|VERDICT NO-VERDICT\|1\|0$/m, 'the fake exits 7 at --version after 1 spawn');
+        assert.equal(okCount(r.stdout), C - 1);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

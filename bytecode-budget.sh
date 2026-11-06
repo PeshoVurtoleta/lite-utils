@@ -82,7 +82,8 @@
 #
 # DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
 #   `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
-#   with cwd = its directory and NODE_OPTIONS stripped. V8 prints a function only once it is compiled.
+#   with cwd = its directory and NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped
+#   (unset at start, for every spawn). V8 prints a function only once it is compiled.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. read, get value). Never
 #   qualified: Store.read prints nothing on node 26, so it is refused. A repeated fn is refused.
 #   Matching is EXACT and counts EVERY function with that name (same-name functions, class and object
@@ -172,6 +173,7 @@
 #   are one FAIL line and --self-test exits 1).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 set -euo pipefail
 # Fail closed: an exit that is not a planned verdict (FINAL=1), a die / usage (2) or 0 becomes 2 NO-VERDICT,
@@ -605,10 +607,12 @@ self_test() {
   check "diff: worst() over fns, NO-VERDICT > DIFF > SAME (mid DIFF + lazy NO-VERDICT -> NO-VERDICT, either order)" \
     "$got" " DIFF>DIFF NO-VERDICT>NO-VERDICT | NO-VERDICT>NO-VERDICT DIFF>NO-VERDICT"
 
-  # --- this script end to end, with a fake node (logs argv, prints a version, cats a capture per filter) ---
+  # --- this script end to end, with a fake node (logs argv, exits 7 if NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE
+  # or NODE_REDIRECT_WARNINGS reached it, prints a version, cats a capture per filter) ---
   local fk="$d/fk" drv="$d/drv/driver.mjs" rc out
   mkdir -p "$fk" "$d/drv" "$d/tmp" "$d/cwd"; : >"$drv"
   printf '%s\n' '#!/bin/sh' 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
+    'if [ -n "${NODE_OPTIONS+x}${NODE_V8_COVERAGE+x}${NODE_COMPILE_CACHE+x}${NODE_REDIRECT_WARNINGS+x}" ]; then echo "a NODE_* env var leaked"; exit 7; fi' \
     'case "$1" in --version) echo "${FAKE_VER:-v26.8.2}"; exit 0 ;; --v8-options) printf "%s\n" "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)" "        type: int" "  --reserve-inline-budget-scale-factor (scale factor of bytecode size used to calculate the inlining budget)" "        type: float" "  --expose-gc (expose gc extension)" "        type: bool"; exit 0 ;; esac' \
     'f=""; for a; do case "$a" in --print-bytecode-filter=*) f="${a#--print-bytecode-filter=}" ;; esac; done' \
     'n=$(( $(cat "$d/$f.n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$d/$f.n"' \
@@ -819,6 +823,10 @@ self_test() {
     "0|VERDICT REPORTED|5|1"
   check "MD-50..58 allowlist rows write nothing to disk (cwd and TMPDIR stay empty)" \
     "$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" 0
+  # --- Q-ENV: the 4 env vars a node reads at start are unset at the top of this script (the fake exits 7 on any) ---
+  check "Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn (3 fns within -> exit 0, 9 spawns); the head names all four" \
+    "$(export NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt"; spawn NODE_OPTIONS=--st-probe --max add=6,mid=211,dup=19 --node-version v26.8.2 "$drv")|$(has "bytecode-budget  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
+    "0|VERDICT WITHIN|9|1"
 
   if [[ -n "$FIXTURES" ]]; then
     # TASK 0 census (grep -A1 over the captures, no script awk): every matched header has its length line.
@@ -1019,7 +1027,7 @@ else
   REPORT=/dev/null   # nothing is written to disk without --out
 fi
 bb_head() { # 1 = the run head after stage_write; 0 = the mismatch exit (a ref / file run has staged nothing yet: no before / after / driver / NOTE line)
-  say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS stripped)"
+  say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
   if [[ $DIFFMODE == 1 ]]; then
     if [[ $STAGED != 1 || $1 == 1 ]]; then
       say "before  $DESC_B"

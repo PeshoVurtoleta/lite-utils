@@ -158,6 +158,21 @@ function outTree(out) {
 }
 let baseParity = null;   // parity(BASE) is the same for every row: compute it once
 const parityBase = () => (baseParity ??= parity(BASE));
+// G-ENV b45 (PLAN-b42-genv TASK 1, Q-ENV): the live head line names the 4 env vars unset at start, the base names only
+// NODE_OPTIONS. That ONE intended delta is applied to the base text exactly HEADS[case] times (the head lines the case
+// prints: stdout, plus report.txt in the --out tree; 0 for the refusals that exit before the head), then the texts are
+// compared byte-for-byte as before. Base counts: .handoff/evidence/b45-genv-bb/fix1/base-heads.out.
+const HEAD_OLD = '  (NODE_OPTIONS stripped)\n';
+const HEAD_NEW = '  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)\n';
+const HEADS = { 'report --fn read,dup': 1, 'report --fn add,mid,dup,lazy,big --runs 3': 1, 'report --fn "get value"': 1, 'gate within': 1,
+    'gate over': 1, 'gate version mismatch': 1, 'report version mismatch': 1, 'two DRIVERs without --diff': 0, '--runs 1': 0, 'gate --out tree': 2 };
+assert.deepEqual(Object.keys(HEADS), PARITY_CASES.map(([name]) => name), 'one HEADS count per parity case');
+let wantParity = null;
+const parityWant = () => (wantParity ??= parityBase().map((c) => {
+    const n = c.text.split(HEAD_OLD).length - 1;
+    assert.equal(n, HEADS[c.name], `parity case ${c.name}: base head lines (G-ENV delta count)`);
+    return { ...c, text: c.text.split(HEAD_OLD).join(HEAD_NEW) };
+}));
 function parity(script) {
     const dir = mkdtempSync(join(tmpdir(), 'bbq-par-'));
     try {
@@ -176,7 +191,7 @@ function parity(script) {
 }
 test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the a26e9f15 base (stdout, stderr, rc, spawns, --out tree)', { skip: baseSkip }, () => {
     histGate(haveBase);
-    const want = parityBase(), got = parity(SCRIPT);
+    const want = parityWant(), got = parity(SCRIPT);
     for (let i = 0; i < want.length; i++) {
         assert.equal(got[i].text, want[i].text, `parity case ${want[i].name}`);
         // `all > 0 ? 1 : 0` assumes every base case that spawned at all passed its --version probe (only then does the live
@@ -193,7 +208,7 @@ for (const [mname, from, to, caseName] of [
         const dir = mkdtempSync(join(tmpdir(), `bbq-${mname}-`));
         try {
             const p = variant(dir, mname, from, to);
-            const want = parityBase(), got = parity(p);
+            const want = parityWant(), got = parity(p);
             const i = want.findIndex((c) => c.name === caseName);
             assert.equal(got[i].text.split("\n")[0], want[i].text.split("\n")[0], "mutant changed rc");
             assert.notEqual(got[i].text, want[i].text, `mutant ${mname} still byte-identical on ${caseName}`);

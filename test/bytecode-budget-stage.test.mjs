@@ -456,7 +456,8 @@ test('bytecode-budget stage A4 control MUTANT A4-stage-in-tmpdir (stage root $TM
 
 // =====================================================================================================
 // A5 self-test (B2: N = 4 new checks; --self-test = 49 ok, --fixtures 73; ext-audit B-four bb + 5: 54 / 78; MD-46 G3 + 3: 57 / 81;
-// G-STAGE b44 + 3 (D7 D1, D7 D6, D7 Q-DD6a i): 60 / 84; the totals are also asserted in bytecode-budget.test.mjs C).
+// G-STAGE b44 + 3 (D7 D1, D7 D6, D7 Q-DD6a i): 60 / 84; G-ENV b45 + 1 (Q-ENV e2e, no git): 61 / 85; the totals are also
+// asserted in bytecode-budget.test.mjs C).
 // The seven staged check names below are the contract (all need git).
 // =====================================================================================================
 const ST_NAMES = [
@@ -474,12 +475,12 @@ const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
 const stRun = (script, env = cleanEnv()) => capSync('bash', [script, '--self-test'], { encoding: 'utf8', env }, 240000, 'bytecode-budget.sh --self-test');
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok   ' + name)).length;
 
-test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 7 staged checks present exactly once, 60 ok', { skip }, () => {
+test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 7 staged checks present exactly once, 61 ok', { skip }, () => {
     const r = stRun(SCRIPT);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, `check "${n}"`);
-    assert.equal(okLines(r.stdout).length, 60);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist) + 3 (G-STAGE D7 D1 / D6 / Q-DD6a i); also pinned by bytecode-budget.test.mjs C
+    assert.equal(okLines(r.stdout).length, 61);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist) + 3 (G-STAGE D7 D1 / D6 / Q-DD6a i) + 1 (G-ENV Q-ENV e2e); also pinned by bytecode-budget.test.mjs C
 });
 test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 7 staged checks (and 45 ok)', { skip: baseSkip }, () => {
     histGate(haveBase);
@@ -515,16 +516,16 @@ test('bytecode-budget stage A5 (d): a PATH without git -> exit 1, exactly one FA
     t.diagnostic(`no-git: rc=${r.status} FAIL lines=${JSON.stringify(f)} ok=${okLines(r.stdout).length}`);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(f.length, 1, f.join('\n'));
-    assert.equal(okLines(r.stdout).length, 53);   // 60 - the 7 staged rows (they need git); the 5 B-four bb rows and the 3 MD-46 G3 rows need none
+    assert.equal(okLines(r.stdout).length, 54);   // 61 - the 7 staged rows (they need git); the 5 B-four bb rows, the 3 MD-46 G3 rows and the Q-ENV row need none
     assert.ok(f[0].startsWith('FAIL ' + NOGIT_NAME), f[0]);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);   // the staged rows do not run without git
 });
-test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 60 ok, exit 0 (hook safety)', { skip }, () => {
+test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 61 ok, exit 0 (hook safety)', { skip }, () => {
     const env = { ...cleanEnv() };
     for (const k of GITVARS) env[k] = join(ROOT, 'no-such-' + k);
     const r = stRun(SCRIPT, env);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
-    assert.equal(okLines(r.stdout).length, 60);
+    assert.equal(okLines(r.stdout).length, 61);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, n);
 });

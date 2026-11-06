@@ -238,7 +238,7 @@ for (const m of ['ref', 'file']) {
         t?.diagnostic(`rc=${r.status} stdout-lines=${r.stdout.split('\n').length - 1} stderr=${JSON.stringify(r.stderr.slice(0, 160))}`);
         assert.equal(r.status, 2, msg(r));
         assert.equal(r.stdout, [
-            `bytecode-budget  node v26.8.2  ${c.node}  (NODE_OPTIONS stripped)`,
+            `bytecode-budget  node v26.8.2  ${c.node}  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)`,
             `mode    diff (${m})  runs 2  v8 flags --print-bytecode --print-bytecode-filter=<fn>`,
             `out     ${c.out}`,
             `  mid: NO-VERDICT -- node version mismatch: ${c.node} --version is v26.8.2, --node-version is v26.8.1`,
