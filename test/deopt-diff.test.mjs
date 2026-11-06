@@ -8,12 +8,13 @@
 // require it to throw (the row would be red if the mutant did nothing).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, copyFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk.mjs';
+import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
 const CHECKS = 92;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
@@ -44,20 +45,15 @@ const envFor = (name) => (NUL && NUL.nulClean && NUL_MUTANTS.has(name) ? NULENV 
 const SELF_CAP = 360000;
 function selfTest(path, extra = [], cap = SELF_CAP) {
     const t0 = Date.now();
-    const r = spawnSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', timeout: cap, env: ENV });
-    r.timedOut = !!(r.error && r.error.code === 'ETIMEDOUT'); r.cap = cap; r.ms = Date.now() - t0;   // ms: elapsed wall ms
+    // capSync (test/spawn-cap.mjs) throws a timed-out run by name ("self-test timed out after <cap> ms (...)")
+    const r = capSync('bash', [path, '--self-test', ...extra], { encoding: 'utf8', env: ENV }, cap, 'self-test');
+    r.ms = Date.now() - t0;   // ms: elapsed wall ms
     return r;
 }
 function okCount(out) { return (out.match(/^ok /gm) || []).length; }
-// a run its cap killed (selfTest / runOne / e2e) fails as "<what> timed out after <cap> ms", never as a bare `null !== 0`;
-// what: the run's own subject (e2e sets 'e2e run'), default 'self-test'
-function timeoutMsg(r) {
-    if (!r.timedOut) return '';
-    // a null signal is printed as the real exit status, never as an assumed SIGTERM (b39 CI-FIX NIT 2)
-    const how = r.signal ? `killed by ${r.signal}` : `exit status ${r.status}, no signal`;
-    return `${r.what || 'self-test'} timed out after ${r.cap} ms (${how}, ${okCount(r.stdout || '')} ok row(s) printed)`;
-}
-function noTimeout(r) { assert.ok(!r.timedOut, `${timeoutMsg(r)}\n${String(r.stdout || '').split('\n').slice(-8).join('\n')}${r.stderr || ''}`); }
+// a run its cap killed (selfTest / runOne / e2e) fails by name through spawn-cap.mjs noTimeout / timeoutMsg (b41 Q-TN2: one
+// wording, "<what> timed out after <cap> ms (...)" then the stdout tail, which carries the ok rows), never as a bare
+// `null !== 0`
 
 // A copy of the script in a temp dir, with exact-once edits (each must match exactly once, else the row is invalid).
 function variant(dir, name, edits) {
@@ -83,11 +79,15 @@ test('deopt-diff --self-test: every check passes', { skip }, () => {
 });
 
 // One unmutated run outside the repo, shared as the baseline for every revert check below.
+// A baseline capSync threw (timeout / spawn error) is cached too: every revert row rethrows it, none re-runs the baseline.
 let BASE = null;
+let BASE_ERR = null;
 function base() {
     if (BASE) return BASE;
+    if (BASE_ERR) throw BASE_ERR;
     const dir = mkdtempSync(join(tmpdir(), 'dd-base-'));
     try { BASE = selfTest(variant(dir, 'baseline', [['#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n']])); }
+    catch (e) { BASE_ERR = e; throw e; }
     finally { rmSync(dir, { recursive: true, force: true }); }
     return BASE;
 }
@@ -298,9 +298,9 @@ const waiting = [];
 function gate() { return new Promise((res) => { const go = () => { active++; res(); }; if (active < 6) go(); else waiting.push(go); }); }
 function release() { active--; const w = waiting.shift(); if (w) w(); }
 // A run is timed on the event loop, and a spawnSync row blocks it: when the loop frees, the cap timer fires before the
-// poll phase delivers the exit of a run that already ended. So the timer waits ONE setImmediate (check phase, after poll)
-// and kills only a run whose 'exit' has not arrived by then ('close' comes later still, in the close-callbacks phase:
-// .handoff/evidence/b40-ta/phase-probe.out). RUN_CAP 540000 (was 180000; 3x 165.6 s = 496.8 s, rounded up to 60000): CI run
+// poll phase delivers the exit of a run that already ended. So the cap (armCap, test/spawn-cap.mjs) waits ONE setImmediate
+// (check phase, after poll) and kills only a run whose 'exit' has not arrived by then ('close' comes later still, in the
+// close-callbacks phase: .handoff/evidence/b40-ta/phase-probe.out). RUN_CAP 540000 (was 180000; 3x 165.6 s = 496.8 s, rounded up to 60000): CI run
 // 42087141421, the first 6 mutant runs end only when the loop frees after the two spawnSync rows "every check passes" +
 // "an unmodified copy" = 106.1 + 59.4 = 165.6 s (ubuntu node 24, job 127455187537; 164.4 s ubuntu node 26, job
 // 127455187797; 104.3-140.6 s on the other 6 legs), and T1 / Rf run under the NUL shim like NBASE (114.0-165.3 s)
@@ -308,12 +308,15 @@ const RUN_CAP = 540000;   // the per-run cap of the mutant runs; a run gets its 
 function runOne(path, extra = [], env = ENV, cap = RUN_CAP) {
     return new Promise((res) => {
         const c = spawn('bash', [path, '--self-test', ...extra], { env });
-        let out = ''; let err = ''; let timedOut = false; let settled = false; const t0 = Date.now();
+        let out = ''; let err = ''; const t0 = Date.now();
         // SIGTERM, not SIGKILL: the script's EXIT trap then removes its own mktemp dir
-        const t = setTimeout(() => setImmediate(() => { if (settled) return; timedOut = true; c.kill('SIGTERM'); }), cap);
-        c.on('exit', () => { settled = true; });
+        const h = armCap(c, cap, 'SIGTERM');
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        c.on('close', (status, signal) => { clearTimeout(t); res({ status, signal, stdout: out, stderr: err, timedOut, cap, ms: Date.now() - t0 }); });
+        // every caller runs noTimeout(r) before its status asserts (assertKilled, the control / fixture rows)
+        c.on('close', (status, signal) => {
+            h.clear();
+            res({ status, signal, stdout: out, stderr: err, timedOut: h.timedOut, cap: h.cap, what: 'self-test', ms: Date.now() - t0 });
+        });
     });
 }
 // the temp dir is made inside the gate, so an interrupted run leaves at most 6 dirs, never one per mutant
@@ -369,7 +372,7 @@ CONTROLS.forEach(([name], i) => {
 // --- b37 "NUL mutants": the probe + shim pinned (their own rows). ORACLE: the ruling's BSD record semantics (a record
 // is cut at its first NUL) and the real awk run directly on the same input, never the shim's own output.
 function awkRun(bin, args, input, env = ENV) {
-    const r = spawnSync(bin, args, { input: input === undefined ? undefined : Buffer.from(input, 'latin1'), env, timeout: 30000 });
+    const r = capSync(bin, args, { input: input === undefined ? undefined : Buffer.from(input, 'latin1'), env }, 30000, 'awk run');
     return { status: r.status, out: r.stdout ? r.stdout.toString('latin1') : '', err: r.stderr ? r.stderr.toString('latin1') : '' };
 }
 test('nul-awk probe: the host awk reads a<NUL>b as length 3 (NUL-clean) or 1 (truncating); the NUL mutants take the shim iff NUL-clean', { skip }, (t) => {
@@ -420,8 +423,8 @@ test('nul-awk shim: first on PATH, execs the real awk (never itself), cuts a<NUL
         assert.deepEqual([s2.awk, realpathSync(s2.real)], [s1.awk, realpathSync(real)]);
         assert.equal(awkRun(s2.awk, ['{ print }'], 'q\0r\n').out, 'q\n');
         // stdin that never reaches EOF (a FIFO held open read-write): an awk that never reads stdin still exits
-        const r = spawnSync('bash', ['-c', 'mkfifo "$1/ff" && exec 3<>"$1/ff" && exec "$2" "BEGIN { print 7 }" <&3', 'pin', dd, awk],
-            { encoding: 'utf8', env: ENV, timeout: 20000 });
+        const r = capSync('bash', ['-c', 'mkfifo "$1/ff" && exec 3<>"$1/ff" && exec "$2" "BEGIN { print 7 }" <&3', 'pin', dd, awk],
+            { encoding: 'utf8', env: ENV }, 20000, 'awk FIFO-stdin pin');
         assert.deepEqual([r.status, r.stdout], [0, '7\n'], r.stderr);
     } finally { rmSync(dd, { recursive: true, force: true }); }
 });
@@ -460,8 +463,8 @@ function nulSigRun(sig) {   // sig null: no signal; the parent ends the child's 
     return new Promise((done) => {
         const ch = spawn(process.execPath, ['--input-type=module', '-e', NULSIG_CHILD, pathToFileURL(NUL_AWK_JS).href],
             { env: { ...ENV, TMPDIR: td }, stdio: ['pipe', 'pipe', 'pipe'] });
-        let out = '', err = '', dir = null, built = false, timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; ch.kill('SIGKILL'); }, NULSIG_CAP);
+        let out = '', err = '', dir = null, built = false;
+        const h = armCap(ch, NULSIG_CAP, 'SIGKILL');
         ch.stdout.setEncoding('utf8'); ch.stderr.setEncoding('utf8');
         ch.stderr.on('data', (c) => { err += c; });
         ch.stdout.on('data', (c) => {
@@ -470,16 +473,18 @@ function nulSigRun(sig) {   // sig null: no signal; the parent ends the child's 
             if (m) { dir = m[1]; built = existsSync(join(dir, 'awk')); if (sig) ch.kill(sig); else ch.stdin.end(); }
         });
         ch.on('close', (code, signal) => {
-            clearTimeout(timer);
+            h.clear();
             const left = dir !== null && existsSync(dir);
             const ents = readdirSync(td);
             rmSync(td, { recursive: true, force: true });
-            done({ code, signal, dir, built, left, ents, out, err, timedOut, td });
+            done({ code, signal, dir, built, left, ents, out, err, timedOut: h.timedOut, cap: h.cap, td });
         });
     });
 }
 function nulSigReady(r) {
-    assert.ok(!r.timedOut, `child alive after ${NULSIG_CAP} ms: the signal was swallowed (no re-raise)\n${r.out}${r.err}`);
+    // by name, before the status asserts: a child alive at its cap swallowed the signal (no re-raise)
+    noTimeout({ status: r.code, signal: r.signal, stdout: r.out, stderr: r.err, timedOut: r.timedOut, cap: r.cap },
+        'nulTmpDir child (alive at its cap: the signal was swallowed, no re-raise)');
     assert.ok(r.dir !== null && r.dir.startsWith(r.td + '/dd-nulsig-') && r.built, `a READY line naming the built shim dir: ${JSON.stringify(r.out)} ${r.err}`);
 }
 for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -521,20 +526,28 @@ test(`deopt-diff --self-test under the NUL shim (control): the UNMUTATED copy pa
     for (const row of [R.nul, R.nul0]) assert.equal(oks.filter((l) => l.startsWith('ok ' + row)).length, 1, row);
 });
 // b38 CI-TIMEOUT: a run its cap kills says so. ORACLE: a fake self-test that sleeps 5 s (its sleep detached from the
-// pipes, so the kill closes them at once) and the caps given here, never the script. Both runners: runOne (async) and
-// selfTest (spawnSync). Cap 300 ms -> timedOut, status null, "timed out after 300 ms"; cap 60000 ms -> exit 0, no timeout.
+// pipes, so the kill closes them at once) and the caps given here, never the script. Both runners: runOne (async, armCap)
+// and selfTest (capSync). Cap 300 ms -> timedOut, status null, "timed out after 300 ms" (selfTest: thrown by name);
+// cap 60000 ms -> exit 0, no timeout.
 test('runOne / selfTest cap: a 5 s fake self-test under a 300 ms cap -> timedOut, status null, "timed out after 300 ms"; under 60000 ms -> exit 0', { skip }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dd-cap-'));
     try {
         const p = join(dir, 'slow.sh');
         writeFileSync(p, '#!/usr/bin/env bash\nsleep 5 </dev/null >/dev/null 2>&1\necho "ok fake slow self-test"\n');
         chmodSync(p, 0o755);
+        // runOne (armCap) returns the timed-out run: timedOut, status null, noTimeout throws it by name
+        const r = await runOne(p, [], ENV, 300);
+        assert.equal(r.timedOut, true, `runOne: cap 300 ms on a 5 s run must time out (status ${r.status})`);
+        assert.equal(r.status, null, 'runOne');
+        assert.ok(timeoutMsg(r).includes('timed out after 300 ms'), `runOne: "${timeoutMsg(r)}"`);
+        assert.throws(() => noTimeout(r), /timed out after 300 ms/, 'runOne');
+        // b41 Q-TN2: selfTest is capSync, which THROWS a timed-out run by name instead of returning it; the throw is
+        // captured (never inside assert.throws) and must be that by-name timeout, killed by SIGTERM (so status null)
+        let thrown = null;
+        try { selfTest(p, [], 300); } catch (e) { thrown = e; }
+        assert.ok(thrown instanceof assert.AssertionError && thrown.message.startsWith('self-test timed out after 300 ms (killed by SIGTERM)\n'),
+            `selfTest: cap 300 ms on a 5 s run must throw "self-test timed out after 300 ms (killed by SIGTERM)", got ${thrown && thrown.message}`);
         for (const [how, go] of [['runOne', (cap) => runOne(p, [], ENV, cap)], ['selfTest', async (cap) => selfTest(p, [], cap)]]) {
-            const r = await go(300);
-            assert.equal(r.timedOut, true, `${how}: cap 300 ms on a 5 s run must time out (status ${r.status})`);
-            assert.equal(r.status, null, how);
-            assert.ok(timeoutMsg(r).includes('timed out after 300 ms'), `${how}: "${timeoutMsg(r)}"`);
-            assert.throws(() => noTimeout(r), /timed out after 300 ms/, how);
             const c = await go(60000);   // the inverse control: a cap above the sleep
             assert.deepEqual([c.timedOut, c.status, c.stdout], [false, 0, 'ok fake slow self-test\n'], `${how}: ${c.stderr}`);
             assert.equal(timeoutMsg(c), '', how);
@@ -561,7 +574,7 @@ test('runOne cap: a run that exited while a spawnSync blocked the loop past its 
         chmodSync(blk, 0o755);
         const cap = 300; const t0 = Date.now();
         const run = runOne(p, [], ENV, cap);
-        const b = spawnSync('bash', [blk, mark, '1.0'], { encoding: 'utf8', timeout: 120000, env: ENV });
+        const b = capSync('bash', [blk, mark, '1.0'], { encoding: 'utf8', env: ENV }, 120000, 'loop blocker');   // blocks the loop
         assert.equal(b.status, 0, `blocker: 3 = no marker, 4 = the fake still runs, 5 = no ps (${b.signal}) ${b.stderr}`);
         assert.ok(Date.now() - t0 >= cap + 700, 'the loop was blocked past the cap');
         const r = await run;
@@ -571,13 +584,15 @@ test('runOne cap: a run that exited while a spawnSync blocked the loop past its 
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('timeoutMsg: a timed-out run with a null signal prints its real exit status, never an assumed "killed by SIGTERM"', { skip }, () => {
-    assert.equal(timeoutMsg({ timedOut: true, cap: 300, signal: null, status: 1, stdout: 'ok a\nok b\n' }),
-        'self-test timed out after 300 ms (exit status 1, no signal, 2 ok row(s) printed)');
-    assert.equal(timeoutMsg({ timedOut: true, cap: 300, signal: 'SIGTERM', status: null, stdout: '' }),
-        'self-test timed out after 300 ms (killed by SIGTERM, 0 ok row(s) printed)');
-    assert.equal(timeoutMsg({ timedOut: false, cap: 300, signal: null, status: 1, stdout: '' }), '');
+    // b41 Q-TN2: spawn-cap.mjs timeoutMsg (one wording); the stdout tail carries the ok rows
+    const m1 = timeoutMsg({ timedOut: true, cap: 300, signal: null, status: 1, stdout: 'ok a\nok b\n', what: 'self-test' });
+    assert.equal(m1, 'self-test timed out after 300 ms (exit status 1, no signal)\n--- stdout (last 8 lines):\nok a\nok b\n--- stderr:\n');
+    assert.ok(!m1.includes('SIGTERM'), m1);
+    assert.equal(timeoutMsg({ timedOut: true, cap: 300, signal: 'SIGTERM', status: null, stdout: '', what: 'self-test' }),
+        'self-test timed out after 300 ms (killed by SIGTERM)\n--- stdout (last 8 lines):\n\n--- stderr:\n');
+    assert.equal(timeoutMsg({ timedOut: false, cap: 300, signal: null, status: 1, stdout: '', what: 'self-test' }), '');
     assert.equal(timeoutMsg({ timedOut: true, cap: 300, signal: 'SIGTERM', status: null, stdout: '', what: 'e2e run' }),
-        'e2e run timed out after 300 ms (killed by SIGTERM, 0 ok row(s) printed)');
+        'e2e run timed out after 300 ms (killed by SIGTERM)\n--- stdout (last 8 lines):\n\n--- stderr:\n');
 });
 
 // =====================================================================================================================
@@ -699,7 +714,7 @@ function assertHelp(r) {
     assert.ok(flat.includes('-r / -e / -p are refused as non-flags. ' + V8FL_HELP), 'the shared text follows the -r / -e / -p sentence');
 }
 test('deopt-diff -h: exit 2, the usage header (reason list and precedence line) and the shared MD-46 --v8-flags text', { skip }, () => {
-    assertHelp(spawnSync('bash', [SCRIPT, '-h'], { encoding: 'utf8', timeout: 60000, env: ENV }));
+    assertHelp(capSync('bash', [SCRIPT, '-h'], { encoding: 'utf8', env: ENV }, 60000, 'deopt-diff -h'));
 });
 
 // --- e2e rows from the B2-r2 review: fail-closed shapes no self-test row pins. A fake node (bash) answers --version
@@ -711,7 +726,7 @@ const D10 = '[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizin
 const REASON = (why) => `  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: ${why}`;
 
 // run SCRIPTPATH: before = the mono trace (E only), after = AFTER (raw bytes); -> { status, lines, spawns, out }
-const E2E_CAP = 60000;   // the per-run cap of an e2e run (spawnSync timeout)
+const E2E_CAP = 60000;   // the per-run cap of an e2e run (capSync: a timed-out run throws "e2e run timed out after ...")
 function e2e(script, after) {
     const dir = mkdtempSync(join(tmpdir(), 'dd-e2e-'));
     try {
@@ -728,12 +743,12 @@ function e2e(script, after) {
             writeFileSync(join(dir, n, 'trace.txt'), text);
         }
         writeFileSync(join(fk, 'log'), '');
-        const r = spawnSync('bash', [script, '--node', join(fk, 'node'), '--fn', 'add', join(dir, 'before', 'driver.js'), join(dir, 'after', 'driver.js')],
-            { encoding: 'utf8', timeout: E2E_CAP, env: ENV, cwd: dir });
+        const r = capSync('bash', [script, '--node', join(fk, 'node'), '--fn', 'add', join(dir, 'before', 'driver.js'), join(dir, 'after', 'driver.js')],
+            { encoding: 'utf8', env: ENV, cwd: dir }, E2E_CAP, 'e2e run');
         const out = r.stdout + r.stderr;
         // timedOut / cap / signal / stdout / stderr / what: the shape noTimeout reads (a revert row checks it outside its throws)
         return { status: r.status, out, lines: out.split('\n'), spawns: readFileSync(join(fk, 'log'), 'utf8').split('\n').filter(Boolean).length,
-            timedOut: !!(r.error && r.error.code === 'ETIMEDOUT'), cap: E2E_CAP, signal: r.signal, stdout: r.stdout, stderr: r.stderr, what: 'e2e run' };
+            timedOut: r.timedOut, cap: r.cap, signal: r.signal, stdout: r.stdout, stderr: r.stderr, what: r.what };
     } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 // exit 2, one VERDICT line (NO-VERDICT, never SAME / DIFF), 8 spawns (R=3: 1 version + 1 --v8-options + 3 + 3), the OWN reason line
@@ -766,7 +781,7 @@ for (const [label, after, why, teeth] of E_ROWS) {
         try {
             const p = variant(dir, 'teeth', teeth);
             const r = e2e(p, after);
-            noTimeout(r);   // outside the throws: a timed-out teeth run must not pass the revert check (b38 NIT)
+            noTimeout(r);   // a timed-out teeth run already threw inside e2e (capSync); a no-op kept as a guard outside the throws
             assert.throws(() => assertX(r, why), assert.AssertionError);
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
