@@ -161,14 +161,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--self-test` rows (a real git < 2.32, skipped here; an emulated git < 2.32 and its 9173830d twin; a
   SIGINT run on this build and on 9173830d); and 10 one-edit mutant tests (8 distinct exact-once edits of a
   copy of the script; each must turn its row red). Row groups: ref names (odd bytes, a rev expression, an
-  annotated tag, a tag that is also a branch), a leading-dash `--before` / `--after` / `--out`, driver and
-  module file names that contain or start with the module name, `--out` with spaces (exactly 17 files), an
-  existing but empty `OUT/stage` (allowed) versus one holding a file (refused), and a `--self-test` run with
-  a git older than 2.32. A real git < 2.32 row is skipped on git 2.54.0. KNOWN GAPS, pinned as current
-  behaviour (not features; each is a later code fix): a git-tracked symlink as `--module` stages the link
-  and ends NO-VERDICT (driver exits non-zero) after 6 spawns (7 after MD-46); `git replace` of the module's blob
-  changes the staged bytes (the script does not pass `--no-replace-objects`); `OUT/stage` as a regular file is
-  refused with the reason "--out: <OUT>/stage is not empty (give a new or empty DIR)"; an emulated
+  annotated tag, a tag that is also a branch), a leading-dash `--before` / `--after` / `--out` (`--before` / `--after`
+  now run as ./<name>, G-STAGE b44), driver and module file names that contain or start with the module name, `--out`
+  with spaces (exactly 17 files), an existing but empty `OUT/stage` (allowed) versus one holding a file (refused), and
+  a `--self-test` run with a git older than 2.32. A real git < 2.32 row is skipped on git 2.54.0. KNOWN GAPS, pinned
+  as
+  current
+  behaviour (not features; each is a later code fix): a git-tracked symlink as `--module` stages the link and ends
+  NO-VERDICT (driver exits non-zero) after 6 spawns (7 after MD-46) (closed by G-STAGE, b44: exit 2, 0 spawns); `git
+  replace` of the module's blob changes the staged bytes (the script does not pass `--no-replace-objects`);
+  `OUT/stage` as a regular file is refused with the reason "--out: <OUT>/stage is not empty (give a new or empty
+  DIR)"; an emulated
   git < 2.32 with `tag.gpgSign=true` makes `--self-test` exit 1
   (its tag helper lacks `-c tag.gpgSign=false`); SIGINT during `--self-test` leaves its temp dir (no INT /
   TERM trap; pre-existing, not new in group 2b). `npm test`: 401 tests, 400 pass, 1 skip, 0 fail (node
@@ -257,17 +260,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tier    ` lines): 43 golden-vector files (10 cases, 7 runs and 3 refusals: exit code, stdout, stderr
   and spawn log each = 40 files, plus the `--out` report and file list and `leftovers.count`) of the
   pre-group build 221ff2ec equal those of the group 2 build. `-h` documents both modes and the known
-  gaps as Not detected (a tracked symlink `--module` stages the link text, `refs/replace` swaps the
-  staged blob, a leading-dash path value exits 2 only through the EXIT trap, an unreadable
-  `DIR/stage` or one that is a symlink to an empty directory). Tier: a verdict on a user driver is
-  STATISTICAL, as in driver mode (run it under the host quiet lock); the staging,
-  the refusals and the byte-identical NO-VERDICT are DETERMINISTIC.
+  gaps as Not detected (a tracked symlink `--module` stages the link text, `refs/replace` swaps the staged blob, a
+  leading-dash path value exits 2 only through the EXIT trap, an unreadable `DIR/stage` or one that is a symlink to an
+  empty directory; all but `refs/replace` closed by G-STAGE, b44). Tier: a verdict on a user driver is STATISTICAL, as
+  in driver mode (run it under the host quiet lock); the staging, the refusals and the byte-identical NO-VERDICT are
+  DETERMINISTIC.
   `--self-test` gains 18 ref / file rows on a temp git repo with a fake node (S1-S4: ref r1 | r2
   DIFF, r1 | r1 SAME with the NOTE, file mode frozen | live with the live file rewritten mid-run,
-  byte-identical DIFF -> NO-VERDICT; R1-R14: refusals, each with its own die line), 53 -> 71 checks;
-  with no git on PATH, or a failed repo set-up, the 18 rows are ONE FAIL line. Its git calls are
-  isolated (no editor, global or system config, hooks or signing; the six `GIT_*` variables unset).
-  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin now 89; 92 after MD-46) and
+  byte-identical DIFF -> NO-VERDICT; R1-R14: refusals, each with its own die line), 53 -> 71 checks (21 rows, R1-R17,
+  95 checks after G-STAGE, b44); with no git on PATH, or a failed repo set-up, the 18 rows are ONE FAIL line. Its git
+  calls are isolated (no editor, global or system config, hooks or signing; the six `GIT_*` variables unset).
+  Gated in `npm test` by `test/deopt-diff.test.mjs` (the pin now 89; 92 after MD-46; 95 after G-STAGE, b44) and
   `test/deopt-diff-stage.test.mjs` (65 tests: 22 verdict / refusal rows, each with a twin that must
   exit 2 `unknown option` and go red on the pre-group build; 11 exact-once mutants; 2 retention
   rows, 20 staged runs = 140 spawns (160 after MD-46) and 11 files per OUT; 8 self-test rows: env, no git, two
@@ -607,6 +610,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   all four; the ic-diff `-h` "Report:" line is rewrapped (<= 120 cols). Re-run counts: `ic-diff.test.mjs` 183/183,
   `ext-audit-alloc.test.mjs` 55/55, `allocation-diff.test.mjs` 210/210 (one run each, untimed; load averages
   158 / 71 / 50 at the start, .handoff/evidence/b43-env-nit/provenance.txt).
+- G-STAGE (burst 44), bytecode-budget + deopt-diff ref / file mode (`lib/stage.sh`, shared; 49d22705 -> 6895301f):
+  stage_check / stage_write now refuse, each exit 2 with its die line once, 0 node spawns, 0 mktemp, OUT not created
+  or left as it was (unless stated): G1 a dash-led `--before` / `--after` / `--driver` is read as ./<name> (it now
+  runs; it was an "unexpected error" through the EXIT trap), `--module` gets `--`; C-22 `--` on every basename /
+  dirname / cd / grep / mkdir / cp path argument; G2 `OUT/stage` as a symlink; G3 an `OUT/stage` that is not readable
+  / searchable or not writable, refused as "is not empty" like a non-empty one (an unsearchable or unwritable one was
+  refused only after raw/ + report.txt were written, in deopt-diff after 2 spawns); D1 a `--driver` whose directory
+  bash's `cd` resolves to another file than the one read (`-ef`; a symlink before '..': a decoy driver would be
+  staged); D6 a module and driver with the same name up to ASCII case; Q-DD6a a module or `--driver` file name with a
+  byte outside printable ASCII (APFS folds Unicode case and NFC / NFD, so E-acute.js / e-acute.js were one file and
+  the driver overwrote the staged module -> fail-open SAME), plus a stage_write `-ef` belt (a staged module and driver
+  that are one file; it fires after OUT, raw/, report.txt and stage/before are written, and in deopt-diff after its
+  --version and --v8-options spawns); B4 `--module` must be a regular file in git at each ref (ls-tree mode 100644 /
+  100755, `--literal-pathspecs`; a tracked symlink, mode 120000, is refused). Still not detected: `refs/replace`.
+  Self-tests: bytecode-budget 57 -> 60 ok (D7: D1 decoy, D6 case clash, Q-DD6a NFC / NFD; `--fixtures` 81 -> 84; no
+  git 53 + one FAIL); deopt-diff 92 -> 95 check(s) ok (R15 D1, R16 D6, R17 Q-DD6a; 21 staged rows S1-S4, R1-R17). `-h`
+  of both names the new refusals. Roots bb f48d745e -> 44e94b60, dd f3f2ab7e -> 4273f48d (src bb 71cec9b3 -> 5c73bd26,
+  src dd 39abdbaa -> 9e9f0319); ic / alloc / ibd roots byte-unchanged (6665d231 / 6f95901d / 740da13b). Tests:
+  `bytecode-budget*.test.mjs` (count pins, -stage, -stage-boundary) gain rows for D1, D6, B4, G1, G2, G3 and Q-DD6a
+  U1-U4 (+ a LANG / LC_ALL=en_US.UTF-8 row and an ASCII control), the -ef belt on a carrier root and the `:x.js`
+  literal-pathspec row, with exact-once mutant twins (M-ef-off, M-nocase, M-lstree-off, M-dash-revert, M-trap-off
+  re-carried, M-stage-link-off, M-stage-readable, M-ascii-off, M-ef-belt-off, M-literal-off); `deopt-diff*.test.mjs`
+  gain rows for G1, G2, G3, B4 (+ `:x.js`), Q-DD6a U1-U3 (+ the UTF-8 row and an ASCII control) and the belt carrier,
+  with twins M-lstree-off, M-literal-off, M-dash-revert, M-stage-link-off and M-ef-belt-off; its D1 / D6 / Q-DD6a
+  refusals are pinned through the self-test count (R15-R17, 95). Not yet pinned (FILLERS): the G3 `-x` half in both
+  tools, the `-w` half in deopt-diff (its M-stage-readable anchor matches 0 times: an abort, not a caught mutant), and
+  deopt-diff's Q-DD6a (i) rows have a mutant (the M-ascii-off carrier) only where the file system folds. The belt rows
+  SKIP "not checked, never passed" where the file system does not fold the names. 32 new rows are red on the 943bed4
+  roots, the 3 controls green. Tier: DETERMINISTIC. Reviews: B1 r1 REJECTED (DESIGN, ruled Q-DD6a), then
+  .handoff/evidence/b44-gstage-b1/REVIEW-r2.md APPROVED; .handoff/evidence/b44-gstage-b2/REVIEW-r1.md APPROVED;
+  .handoff/evidence/b44-gstage-b3b4/REVIEW-r1.md APPROVED (6 test files: 743 tests, 742 pass, 1 known skip) (local,
+  untracked). `npm test` (private copy with .git, node v26.8.2, untimed, host PRELIMINARY, load1 4.73 at start ->
+  17.60 at end; .handoff/evidence/b44-npmtest/gstage/PROVENANCE.txt): 1684 tests, 1682 pass, 0 fail, 2 known skips,
+  stderr empty.
 
 ### Changed
 
