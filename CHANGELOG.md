@@ -137,8 +137,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reaches the live module by another path (an absolute path or a package self-reference) instead of
   `./NAME`; a hard link of `--before` to a tracked file that is not `--after`, `<top>/Signal.js` or
   `<top>/<same name>`; a git error while checking (e.g. safe.directory "dubious ownership") reads as
-  untracked, so a tracked `--before` behind it is not refused. Tier: DETERMINISTIC (one node binary;
-  each staged side keeps its null control). Gated in `npm test` by
+  untracked, so a tracked `--before` behind it is not refused (closed by G-TRACKED, b45: exit 2 NO-VERDICT, 0
+  spawns, naming git's first line; a .git git does not recognise as a repository still reads as no repository).
+  Tier: DETERMINISTIC (one node binary; each staged side keeps its null control). Gated in `npm test` by
   `test/bytecode-budget-stage.test.mjs` (119 tests, 123 after MD-46; they need git and skip without it): verdict
   rows on a fake node whose length is the staged module's bytes (r1 = 211, r2 = 212, hand-derived),
   refusal rows (exit 2, 0 spawns, the OUT dir is not created, except the stage-not-empty row, which
@@ -709,6 +710,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   .handoff/evidence/b44-gorder-b2/REVIEW-r1.md (code), both APPROVED; tests:
   .handoff/evidence/b45-gorder-b3/REVIEW-A-r1.md REJECTED (1 LITERAL: a capped-run timeout counted as a mutant kill),
   then REVIEW-A-r2.md APPROVED; REVIEW-B-r1.md APPROVED (local, untracked).
+
+- G-TRACKED (Q-BB2; B18 / B21 / B22), bytecode-budget + deopt-diff file mode (b45): a git error while checking whether
+  `--before` is tracked (dubious ownership, a broken .git file, a gitfile to a missing dir, a bad config, a corrupt
+  index) now exits 2 NO-VERDICT with 0 spawns, naming git's first line. Before, such a `--before` read as untracked:
+  the old `is_tracked` passed git's 128 (127 with no git, which still reads as untracked) through as "not
+  tracked". Not detected: a .git git does not recognise as
+  a repository (unreadable, corrupt HEAD, no objects/) reads as no repository. The `ls-files` call now also runs with
+  `--literal-pathspecs` (is_tracked now reads a tracked `:x.js` as tracked and an untracked `*` as untracked;
+  pinned by the tracked.test.mjs `A1 literal-pathspecs` rows and mutant M7). New fragment
+  `lib/tracked.sh` (`is_tracked`) is included in bb, dd, ic and alloc (ic / alloc: definition only, no caller; their
+  self-test and `-h` are byte-identical); inlining-budget-diff is unchanged (its `is_tracked` keeps the known gap,
+  D-4a). Self-test GT1 / GT2: bytecode-budget 61 -> 63 (`--fixtures` 85 -> 87; with no git, 54), deopt-diff 97 -> 99
+  (23 staged rows); the `-h` text of both names the refusal. Tests: new `test/tracked.test.mjs` (68 tests from the
+  plan's ASSERTIONS: A1 per tool, ibd known-gap rows, A5 git-spawn counts / retention, mutants M1-M7 with exact kill
+  sets); `test/build.test.mjs` roster rows (+4); the bb-sb M-literal-off anchor narrowed;
+  `test/death-signature.test.mjs` SYNC_FILES gains the new file. Tier: DETERMINISTIC.
+  Reviews: .handoff/evidence/b45-gtracked-b1/REVIEW-r1.md REJECTED (2 LITERAL), then REVIEW-r2.md APPROVED;
+  .handoff/evidence/b45-gtracked-t/REVIEW-r1.md REJECTED (2 LITERAL), then REVIEW-r2.md APPROVED;
+  .handoff/evidence/b45-gtracked-b2/REVIEW-r1.md APPROVED (B2 + B3); reports REPORT.md in each
+  (local, untracked). This does not make every unexpected git error exit 2 elsewhere (G-FINAL has not landed).
 
 ### Changed
 
