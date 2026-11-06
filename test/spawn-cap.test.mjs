@@ -1,13 +1,15 @@
-// test/spawn-cap.test.mjs -- rows S1-S4 of test/spawn-cap.mjs (b40 TIMEOUT-NAMED, PLAN-timeout-named.md ASSERTIONS 1-4).
+// test/spawn-cap.test.mjs -- rows S1-S4 / SE of test/spawn-cap.mjs and census row S5 (b40-b41 TIMEOUT-NAMED, PLAN-timeout-named.md
+// ASSERTIONS 1-5).
 // ORACLE: fake children whose behaviour the row fixes (a hang, a SIGTERM trap that exits 3, a marker write, an instant
 // exit) and the caps given here, never a tool script. Every fake pid is recorded and must be gone (ESRCH) by the last
-// row; every temp dir is `scap-*` under os.tmpdir() and removed. S5 (the census) lands later (B5).
+// row; every temp dir is `scap-*` under os.tmpdir() and removed. S5 (b41 B5) reads the test/*.mjs texts: no raw cap is left.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const DIRS = [];    // every scap- dir this file made
@@ -50,20 +52,38 @@ test('S1 capSync: a hang under a 300 ms cap throws "hang-fake timed out after 30
     try {
         const P = join(d, 'pid');
         const t0 = Date.now();
-        const e = caught(() => capSync('bash', ['-c', 'echo $$ >"$P.tmp" && mv "$P.tmp" "$P"; exec sleep 30'], { encoding: 'utf8', env: { ...process.env, P } }, 300, 'hang-fake'));
+        // $0 = d, and exec -a keeps it as the sleep's argv[0]: from spawn to death the fake's command line holds d
+        const e = caught(() => capSync('bash', ['-c', 'echo $$ >"$P.tmp" && mv "$P.tmp" "$P"; exec -a "$0" sleep 30', d], { encoding: 'utf8', env: { ...process.env, P } }, 300, 'hang-fake'));
         const ms = Date.now() - t0;
         assert.ok(e, 'capSync must throw on a run its cap killed');
         assert.match(e.message, /^hang-fake timed out after 300 ms \(killed by SIGTERM\)/);
         assert.ok(e instanceof assert.AssertionError, `an assertion failure, got ${e.name}`);
         assert.ok(ms < 10000, `capSync returned after ${ms} ms`);
-        // a bash slower than the cap never wrote P (written via .tmp + mv: never seen half-written): the row then rests on
-        // the named-timeout assertions above only
+        // a bash slower than the cap never wrote P (written via .tmp + mv: never seen half-written); when it did, that pid
+        // is gone (and the cleanup row checks it again)
         if (existsSync(P)) {
             const pid = Number(readFileSync(P, 'utf8').trim());
             assert.ok(Number.isInteger(pid) && pid > 1, `pid ${pid}`);
             PIDS.push(pid);
             assert.equal(alive(pid), false, `the fake ${pid} (exec sleep 30) must be reaped by spawnSync`);
         }
+        // b41 B5 (b40 B0 review NIT: "the fake pid is gone" was checked only when P existed): UNCONDITIONAL -- no process on
+        // the host shows d in its command line any more (bash before its exec, or the sleep after it; P written or not).
+        // The probe is ps itself under argv[0] = d/ps-probe: its own row must be listed and be the ONLY d row (the teeth:
+        // ps prints full command lines, -ww, and shows an exec -a name).
+        // b41 B5 r2 (review B4): a cap that fires while bash runs its foreground `mv` orphans that mv, which still shows d
+        // until it exits: re-probe up to 50 x 100 ms until only the probe holds d, then assert on the last probe (a surviving
+        // `sleep 30` outlives the 5 s and stays red).
+        const nap = new Int32Array(new SharedArrayBuffer(4));
+        let ps = null; let rows = null;
+        for (let i = 0; i < 50; i++) {
+            if (i > 0) Atomics.wait(nap, 0, 0, 100);
+            ps = capSync('bash', ['-c', 'exec -a "$0" ps -A -ww -o pid=,args=', join(d, 'ps-probe')], { encoding: 'utf8' }, 30000, 'ps probe');
+            assert.equal(ps.status, 0, `ps -A -ww -o pid=,args= exit ${ps.status}: ${ps.stderr}`);
+            rows = ps.stdout.split('\n').filter((l) => l.includes(d));
+            if (rows.length === 1 && Number(rows[0].trim().split(/\s+/)[0]) === ps.pid) break;
+        }
+        assert.deepEqual(rows.map((l) => Number(l.trim().split(/\s+/)[0])), [ps.pid], `only the ps probe may show ${d}:\n${rows.join('\n')}`);
     } finally { rmDir(d); }
 });
 // S1b (b40 TN B0 r2, review NIT): opts.killSignal passes through to spawnSync -- the same hang under opts
@@ -240,6 +260,156 @@ test('SE capSync: exit 1 at once on 1 MiB of input -> returned (status 1, r.erro
     assert.deepEqual([raw.status, raw.signal, raw.error && raw.error.code], [null, 'SIGKILL', 'EPIPE']);
     // noTimeout's own contract is unchanged: any r.error throws there (the EPIPE rule is capSync's)
     assert.equal(caught(() => noTimeout({ timedOut: false, status: 1, signal: null, error: Object.assign(new Error('e'), { code: 'EPIPE' }) }, 'nt')).message, 'nt spawn error EPIPE');
+});
+
+// S5 (ASSERTION 5, b41 B5): the census. After b41 every capped spawn of test/*.mjs goes through spawn-cap.mjs, so the
+// PENDING list and the allowlist are EMPTY: any raw cap in a test/*.mjs outside EXEMPT is a finding (file:line + pattern).
+// The whole text is read, comments included (prose that trips a pattern is reworded, never exempted).
+//   RE1  /\btimeout\s*:\s*\d/ and RE2 /setTimeout\(\s*\(\)\s*=>\s*\w+\.kill\(/ -- ASSERTION 5 verbatim.
+//   RE1W (N0 MISS a, fail closed) any `timeout` KEY: line start / `{` / `,` then timeout (bare or quoted) then `:` `,` or
+//        `}` (a literal, an identifier cap `timeout: cap`, a shorthand `{ timeout }`), a computed key `['timeout']:`, or
+//        an assignment `.timeout =` / `['timeout'] =` (also `??=` `||=` `&&=`). capSync refuses opts.timeout, so no spawn options object may carry one. It also counts node:test
+//        option objects (`{ timeout: N }` passed to test() / describe()): there are NONE in test/*.mjs (b41 grep), so
+//        none may appear -- a per-test timeout would need its own entry here, with its reason.
+//   TIMER (N0 MISS b) every setTimeout( / setInterval( whose call text holds kill( / group( / SIG<NAME>, or whose callback is
+//        an identifier other than the resolver of its own `new Promise((r) => setTimeout(r, ms))` sleep (opaque: it could
+//        kill; a 1-param arrow that forwards its argument to setTimeout is NOT a sleep).
+//        Allowed only by TIMER_OK (file, exact count, a text each of them holds): the two escalation timers named by their
+//        `escalated` flag and the deopt-diff-boundary mid-run SIGTERM poll (a kill under test, not a cap). A new one in any
+//        file is red; so is an allowed one that loses its text, and a count that moves either way.
+// Out of scope (N0 MISS c): a polling-loop bound with no timer (deopt-diff-stage-boundary's 1500 x 20 ms wait for its ready
+// marker): no pattern tells a bound from a loop. Only top-level test/*.mjs is read (test/fixtures/ holds inputs, not tests).
+// Also not seen (b41 B5 r2 review NIT): `setTimeout(c.kill.bind(c), ms)` with no SIG argument; AbortSignal.timeout(ms) passed
+// as a spawn `signal`; a node:timers/promises sleep followed by a kill; a key preceded by a /* */ comment
+// (`{ /* c */ timeout: 5 }`). Each is a known blind spot, not a pass.
+// Must-fail controls (in the row): synthetic sources with one raw site per pattern count exactly 1; one live file with one
+// raw `timeout: 5` re-added is red naming file + line. The texts at S5_PIN (before the b41 conversions) count exactly
+// S5_PIN_N in their own history row (S5 teeth): CI=true FAILS it when S5_PIN is missing, locally it skips with the reason.
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const ROOT = dirname(TEST_DIR);
+const EXEMPT = new Map([
+    ['spawn-cap.mjs', 'the helper itself: capSync hands its cap to spawnSync as the timeout, armCap owns the kill timer'],
+    ['spawn-cap.test.mjs', 'its rows run raw spawnSync controls on purpose (S3 timeout 0, the S4 blocker, the SE raw shape)'],
+]);
+const TIMER_OK = new Map([
+    ['bytecode-budget-stage-boundary.test.mjs', [1, 'escalated = true', 'sigintRun: SIGKILL to the group 30 s after its SIGINT']],
+    ['deopt-diff-stage-boundary.test.mjs', [1, 'escalated = true', 'row 12: SIGKILL to the group 30 s after its SIGTERM']],
+    ['deopt-diff-boundary.test.mjs', [1, 'clearInterval(poll)', 'a setInterval poll that SIGTERMs the run mid-way: the kill under test']],
+]);
+const S5_RE1 = /\btimeout\s*:\s*\d/g;
+const S5_RE2 = /setTimeout\(\s*\(\)\s*=>\s*\w+\.kill\(/g;
+const S5_RE1W = /(?:^|[{,])\s*(?:timeout|'timeout'|"timeout")\s*[:,}]|\[\s*['"]timeout['"]\s*\]\s*:|\.timeout\s*(?:\?\?|\|\||&&)?=(?!=)|\[\s*['"]timeout['"]\s*\]\s*(?:\?\?|\|\||&&)?=(?!=)/gm;
+const S5_TIMER = /\bset(?:Timeout|Interval)\s*\(/g;
+const S5_KILLY = /\bkill\s*\(|\bgroup\s*\(|\bSIG[A-Z]+/;
+const S5_PIN = 'aecb40f';
+const S5_PIN_N = { RE1: 14, RE2: 2, RE1W: 18, TIMER: 5 };
+const lineAt = (src, i) => src.slice(0, i).split('\n').length;
+// a call's text from its '(' to the matching ')'; parens in strings are not special: an unbalanced call runs to the end of
+// the file, which can only add findings
+function callText(src, open) {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+        if (src[k] === '(') depth++;
+        else if (src[k] === ')' && --depth === 0) return src.slice(open, k + 1);
+    }
+    return src.slice(open);
+}
+function censusOf(name, src) {
+    const raw = [];
+    const n = { RE1: 0, RE2: 0, RE1W: 0, TIMER: 0 };
+    for (const [tag, re] of [['RE1', S5_RE1], ['RE2', S5_RE2], ['RE1W', S5_RE1W]]) {
+        for (const m of src.matchAll(re)) {
+            n[tag]++;
+            raw.push(`${name}:${lineAt(src, m.index + Math.max(0, m[0].search(/timeout|setTimeout/)))} ${tag}`);
+        }
+    }
+    const timers = [];
+    for (const m of src.matchAll(S5_TIMER)) {
+        const call = callText(src, m.index + m[0].length - 1);
+        const id = /^\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(call);
+        // b41 B5 r2 (review B2): only the resolver of a `new Promise((r) => setTimeout(r, ms))` sleep is exempt
+        const rid = id && id[1].replace(/\$/g, '\\$');
+        const sleep = id && new RegExp(`new\\s+Promise\\(\\s*(?:\\(\\s*${rid}\\s*\\)|\\b${rid})\\s*=>\\s*$`).test(src.slice(Math.max(0, m.index - 60), m.index));
+        if (id ? !sleep : S5_KILLY.test(call)) timers.push({ line: lineAt(src, m.index), kind: id ? 'opaque' : 'kill', call });
+    }
+    const ok = TIMER_OK.get(name);
+    const allowed = ok !== undefined && timers.length === ok[0] && timers.every((t) => t.call.includes(ok[1]));
+    if (!allowed) {
+        for (const t of timers) { n.TIMER++; raw.push(`${name}:${t.line} TIMER(${t.kind})`); }
+        if (ok !== undefined) raw.push(`${name} TIMER_OK wants ${ok[0]} timer(s) holding "${ok[1]}", found ${timers.length}`);
+    }
+    return { raw, n };
+}
+test('S5 census: no raw cap (timeout key, kill timer) is left in test/*.mjs outside spawn-cap.mjs / spawn-cap.test.mjs; synthetic and re-added controls are red', () => {
+    // synthetic must-fail controls: one site per pattern -> exactly 1; look-alike prose / sleeps / test options -> 0
+    const syn = (src) => censusOf('syn.mjs', src).n;
+    assert.deepEqual(syn("spawnSync('x', [], { timeout: 5 });\n"), { RE1: 1, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("const t = setTimeout(() => c.kill('SIGKILL'), 100);\n"), { RE1: 0, RE2: 1, RE1W: 0, TIMER: 1 });
+    assert.deepEqual(syn("spawnSync('x', [], {\n    env,\n    timeout: CAP,\n});\n"), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("spawnSync('x', [], { env, timeout });\n"), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("o.timeout = cap;\n"), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 });
+    for (const op of ['??=', '||=', '&&=']) {
+        assert.deepEqual(syn(`opts.timeout ${op} cap;\n`), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 }, `.timeout ${op}`);
+        assert.deepEqual(syn(`opts['timeout'] ${op} cap;\n`), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 }, `['timeout'] ${op}`);
+    }
+    assert.deepEqual(syn("spawnSync('x', [], { ['timeout']: 5 });\n"), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("spawnSync('x', [], { [\"timeout\"]: cap });\n"), { RE1: 0, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("const later = (fn) => setTimeout(fn, 30000);\nconst l2 = fn => setTimeout(fn, 30000);\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 2 });
+    assert.deepEqual(syn("test('t', { timeout: 5000 }, () => {});\n"), { RE1: 1, RE2: 0, RE1W: 1, TIMER: 0 });
+    assert.deepEqual(syn("h = setTimeout(() => { escalated = true; try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }, 30000);\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 1 });
+    assert.deepEqual(syn("hard = setTimeout(() => group('SIGKILL'), 30000);\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 1 });
+    assert.deepEqual(syn("const t = setTimeout(stop, 30000);\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 1 });
+    assert.deepEqual(syn("p = setInterval(() => { c.kill('SIGTERM'); }, 20);\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 1 });
+    assert.deepEqual(syn("// the timeout: an exact predicate\nawait new Promise((r) => setTimeout(r, 20));\nawait new Promise(res => setTimeout(res, 5));\n"
+        + "const m = `no timeout / spawn error`;\ntest('t', { skip }, () => {});\nif (opts.timeout === 5) x();\nif (opts.timeout >= 5 || opts.timeout !== 1) x();\n"), { RE1: 0, RE2: 0, RE1W: 0, TIMER: 0 });
+    // TIMER_OK has teeth: the allowed escalation passes only with its flag, only at its exact count
+    const esc = "h = setTimeout(() => { escalated = true; process.kill(-ch.pid, 'SIGKILL'); }, 30000);\n";
+    assert.deepEqual(censusOf('deopt-diff-stage-boundary.test.mjs', esc).raw, []);
+    assert.deepEqual(censusOf('deopt-diff-stage-boundary.test.mjs', esc.replace('escalated = true; ', '')).raw,
+        ['deopt-diff-stage-boundary.test.mjs:1 TIMER(kill)', 'deopt-diff-stage-boundary.test.mjs TIMER_OK wants 1 timer(s) holding "escalated = true", found 1']);
+    assert.equal(censusOf('deopt-diff-stage-boundary.test.mjs', esc + esc).n.TIMER, 2);
+    assert.equal(censusOf('build.test.mjs', esc).n.TIMER, 1, 'an escalation timer in a file TIMER_OK does not name is raw');
+
+    // the live files
+    for (const n of EXEMPT.keys()) assert.ok(existsSync(join(TEST_DIR, n)), `EXEMPT ${n} is a live file (a stale exemption is a finding)`);
+    const live = readdirSync(TEST_DIR).filter((n) => n.endsWith('.mjs') && !EXEMPT.has(n)).sort();
+    assert.ok(live.length >= 19 && live.includes('nul-awk.mjs') && live.includes('build.test.mjs'), `test/*.mjs read: ${live.join(' ')}`);
+    for (const n of TIMER_OK.keys()) assert.ok(live.includes(n), `TIMER_OK ${n} is a live file`);
+    const texts = new Map(live.map((n) => [n, readFileSync(join(TEST_DIR, n), 'utf8')]));
+    const raw = live.flatMap((n) => censusOf(n, texts.get(n)).raw);
+    assert.deepEqual(raw, [], `raw caps outside spawn-cap.mjs (convert them to capSync / armCap):\n${raw.join('\n')}`);
+    // must-fail: one live file with one raw `timeout: 5` re-added at line 2 is red, by file and line
+    const b = texts.get('build.test.mjs').split('\n');
+    b.splice(1, 0, "const r = spawnSync('bash', ['-c', 'exit 0'], { timeout: 5 });");
+    assert.deepEqual(censusOf('build.test.mjs', b.join('\n')).raw, ['build.test.mjs:2 RE1', 'build.test.mjs:2 RE1W']);
+});
+
+// S5 teeth (history row, b41 B5 r2 review B5): the texts at S5_PIN (deopt-diff / v8flags local helpers, the four PENDING
+// files, ext-audit unconverted) count exactly S5_PIN_N. CI=true: a missing S5_PIN FAILS this row (one spelling with the
+// other history rows); locally it skips with the reason. ls-tree --full-tree: ROOT may be a subdir of the repo (an overlay).
+const S5_ENV = { ...process.env };
+for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete S5_ENV[k];
+const hasPin = capSync('git', ['-C', ROOT, 'cat-file', '-e', `${S5_PIN}^{commit}`], { env: S5_ENV }, 30000, 'git cat-file').status === 0
+    ? true : `no git history with ${S5_PIN}: not checked, never passed`;
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
+test(`S5 teeth: the test/*.mjs texts at ${S5_PIN} count exactly RE1 ${S5_PIN_N.RE1} / RE2 ${S5_PIN_N.RE2} / RE1W ${S5_PIN_N.RE1W} / TIMER ${S5_PIN_N.TIMER} (git history row)`,
+    { skip: histSkip(hasPin) }, () => {
+    histGate(hasPin);
+    const env = S5_ENV;
+    const ls = capSync('git', ['-C', ROOT, 'ls-tree', '--full-tree', '--name-only', `${S5_PIN}:test`], { env, encoding: 'utf8' }, 30000, 'git ls-tree');
+    assert.equal(ls.status, 0, ls.stderr);
+    const pinned = ls.stdout.split('\n').filter((n) => n.endsWith('.mjs') && !EXEMPT.has(n));
+    assert.equal(pinned.length, 19, `${S5_PIN} test/*.mjs: ${pinned.join(' ')}`);
+    const tot = { RE1: 0, RE2: 0, RE1W: 0, TIMER: 0 };
+    for (const n of pinned) {
+        const r = capSync('git', ['-C', ROOT, 'show', `${S5_PIN}:test/${n}`], { env, encoding: 'utf8', maxBuffer: 1 << 26 }, 30000, 'git show');
+        assert.equal(r.status, 0, r.stderr);
+        const c = censusOf(n, r.stdout).n;
+        for (const k of Object.keys(tot)) tot[k] += c[k];
+    }
+    assert.deepEqual(tot, S5_PIN_N, `${S5_PIN} census`);
 });
 
 test('cleanup: every scap- dir this file made is removed, every fake pid is gone', async () => {

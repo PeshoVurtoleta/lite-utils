@@ -5,9 +5,9 @@
 # of 2026-11) and macos-latest (/bin/bash 3.2, case-insensitive APFS, BSD userland), plus one node 26.8.2 leg per
 # OS: 8 legs. No Windows: the tools are bash only. The provenance step prints the awk / tr / mktemp flavour.
 # fetch-depth 0: the parity / teeth rows read `git show <commit>:<file>`. The pins live in the test files only:
-# GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of
-# test/bytecode-budget*.test.mjs, the deopt-diff-boundary A4 git row, and the 221ff2ec base rows of
-# test/deopt-diff-stage*.test.mjs) FAILS when its commit is missing (locally it skips with the reason). The history
+# GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of test/bytecode-budget*.test.mjs,
+# the deopt-diff-boundary A4 git row, the 221ff2ec base rows of test/deopt-diff-stage*.test.mjs, the spawn-cap S5 teeth
+# aecb40f census row) FAILS when its commit is missing (locally it skips with the reason). The history
 # step below fails a shallow clone up front.
 # The live deopt-diff pair asserts exact lines only on node v26.8.2 (MD-21 (a)), so the two 26.8.2 legs run that
 # tier on every push; on every other node it asserts the exit codes and the spawn count only
