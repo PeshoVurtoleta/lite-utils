@@ -4,7 +4,8 @@
 // Teeth: every row of NEW (group 2b) behaviour also runs on the pre-staging build (`git show 3b2209a:bytecode-budget.sh`,
 // sha256/8 9173830d), where it must exit 2 "unknown option --before(-ref)" AND its own check must go red. Rows that
 // pin a KNOWN GAP or a pre-existing behaviour say so, and each has a named one-edit mutant of a copy (exact-once
-// string edit, abort otherwise) that the row must be red on (row 2 has none: its fix is the deferred ls-tree mode FILLER).
+// string edit, abort otherwise) that the row must be red on. G-STAGE (PLAN-b42-gstage TASK 5 + A1 / A6) flipped rows 2 and 4
+// and added sections 10-13; each of those rows is also run on the frozen 943bed4 root (revert log: evidence/b44-gstage-b3/).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -53,6 +54,20 @@ const DRV_SUF = join(ROOT, 'drv', 'mod.js.driver.mjs'); // file name STARTS with
 const FROZEN = join(ROOT, 'frozen', 'mod.js');          // untracked, 211
 const ODD_B = "a'b\"$c;d", ODD_A = 'x#y@z!%\u00fc';      // legal ref names with shell-active / non-ASCII bytes
 const SHA = {};
+// G-STAGE repos: EXE = REPO's history with src/mod.js of tree mode 100755; UNI = src/<non-ASCII>.js r1 211 / r2 212;
+// LIT = a regular x.js (211 / 212) beside a tracked symlink ':x.js' -> other.js (':' leads pathspec magic in git)
+const EXE = join(ROOT, 'exe'), UNI = join(ROOT, 'uni'), LIT = join(ROOT, 'lit');
+// non-ASCII file names from \u escapes (the source stays ASCII): e-acute, E-acute, NFC m<e-acute>d, NFD m<e + U+0301>d
+const U_E = '\u00e9.js', U_EU = '\u00c9.js', U_NFC = 'm\u00e9d.js', U_NFD = 'me\u0301d.js', U_DRV = 'd\u00e9.mjs';
+let FOLDS = false;   // does this file system map U_E and U_EU to one entry (APFS / HFS+ default)? probed below
+function probeFold(d) { mkdirSync(d); writeFileSync(join(d, U_E), 'a\n'); writeFileSync(join(d, U_EU), 'b\n'); return readdirSync(d).length === 1; }
+function mkTwo(dir, paths, v1, v2) {   // r1 = v1 / r2 = v2 in each path (relative to dir), tags r1 r2
+    git(dir, 'init', '-q');
+    for (const p of paths) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), v1); }
+    git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'r1'); git(dir, 'tag', 'r1');
+    for (const p of paths) writeFileSync(join(dir, p), v2);
+    git(dir, 'commit', '-q', '-a', '-m', 'r2'); git(dir, 'tag', 'r2');
+}
 function mkRepo(dir) {
     mkdirSync(join(dir, 'src'), { recursive: true });
     git(dir, 'init', '-q');
@@ -73,6 +88,13 @@ if (!skip) try {
     git(REP, 'replace', blob, r.stdout.trim());
     for (const [p, imp] of [[DRV, 'mod.js'], [DRV_LINK, 'link.js'], [DRV_DASH, '-mod.js'], [DRV_MY, 'mod.js'], [DRV_SUF, 'mod.js']]) writeFileSync(p, `import './${imp}';\n`);
     writeFileSync(FROZEN, '211\n');
+    mkdirSync(join(EXE, 'src'), { recursive: true }); git(EXE, 'init', '-q'); writeFileSync(join(EXE, 'src', 'mod.js'), '211\n'); chmodSync(join(EXE, 'src', 'mod.js'), 0o755);
+    git(EXE, 'add', '.'); git(EXE, 'commit', '-q', '-m', 'r1'); git(EXE, 'tag', 'r1'); writeFileSync(join(EXE, 'src', 'mod.js'), '212\n'); git(EXE, 'commit', '-q', '-a', '-m', 'r2'); git(EXE, 'tag', 'r2');
+    if (!git(EXE, 'ls-tree', 'r1', '--', 'src/mod.js').startsWith('100755 blob ')) throw new Error('EXE fixture: src/mod.js is not tree mode 100755 (core.fileMode off?)');
+    mkdirSync(UNI); mkTwo(UNI, ['src/' + U_E, 'src/' + U_NFC], '211\n', '212\n');
+    mkdirSync(LIT); symlinkSync('other.js', join(LIT, ':x.js')); mkTwo(LIT, ['x.js'], '211\n', '212\n');
+    if (!git(LIT, '--literal-pathspecs', 'ls-tree', 'r1', '--', ':x.js').startsWith('120000 blob ')) throw new Error('LIT fixture: :x.js is not a tracked symlink');
+    FOLDS = probeFold(join(ROOT, 'fold-probe'));
 } catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
 
 // ---- the pre-staging build (teeth) ----
@@ -133,7 +155,9 @@ function runOn(script, cs) {
     const c = mkCase();
     if (cs.prep) cs.prep(c);
     const env = { ...cleanEnv(), TMPDIR: c.tmp, ...(cs.env ? cs.env(c) : {}) };
-    const r = capSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', cwd: c.cwd, env }, 120000, basename(script));
+    let r;
+    try { r = capSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', cwd: c.cwd, env }, 120000, basename(script)); }
+    finally { if (cs.post) cs.post(c); }   // e.g. a mode-000 OUT/stage back to 0755, so the checks and ROOT's rmSync can read it
     return { c, r };
 }
 function flat(o) { const a = []; for (const [k, v] of Object.entries(o)) if (v !== null) a.push(k, v); return a; }
@@ -147,9 +171,9 @@ const files = (d) => walk(d).filter((f) => !f.endsWith('/')).map((f) => f.slice(
 const snap = (d) => walk(d).sort().map((f) => (f.endsWith('/') ? f.slice(d.length) : `${f.slice(d.length)}=${readFileSync(f, 'utf8')}`)).join('|');
 
 const TWIN = /^bytecode-budget: unknown option --before(-ref)? \(see --help\)\nVERDICT NO-VERDICT$/m;
-function row(name, cs) {
-    test(`stage boundary: ${name}`, { skip }, () => { const { c, r } = runOn(SCRIPT, cs); cs.check(c, r); });
-    test(`stage boundary teeth: [${name}] exits 2 'unknown option --before(-ref)' on 9173830d and its check goes red`, { skip: baseSkip }, () => {
+function row(name, cs) {   // cs.skip: a host reason this row cannot run (e.g. root ignores mode 000)
+    test(`stage boundary: ${name}`, { skip: skip || cs.skip }, () => { const { c, r } = runOn(SCRIPT, cs); cs.check(c, r); });
+    test(`stage boundary teeth: [${name}] exits 2 'unknown option --before(-ref)' on 9173830d and its check goes red`, { skip: baseSkip || cs.skip }, () => {
         histGate(haveBase);
         const { c, r } = runOn(BASE, cs);
         assert.equal(r.status, 2, msg(r));
@@ -159,7 +183,7 @@ function row(name, cs) {
     return cs;
 }
 function mutant(name, desc, edits, cs, observe) {
-    test(`stage boundary MUTANT ${name} (${desc}): its row goes red`, { skip }, (t) => {
+    test(`stage boundary MUTANT ${name} (${desc}): its row goes red`, { skip: skip || cs.skip }, (t) => {
         const { c, r } = runOn(variant(name, edits), cs);
         t.diagnostic(`${name}: rc=${r.status} stderr=${JSON.stringify(r.stderr.trim().slice(0, 200))}`);
         assert.throws(() => cs.check(c, r), assert.AssertionError, `${name}: the row still passes on the mutant`);
@@ -229,23 +253,33 @@ for (const bad of ['r*', 'r?', 'r[12]', 'sp ace', 'r2^{/no such message}']) {
 }
 
 // =====================================================================================================
-// 2. KNOWN GAP (deferred FILLER: ls-tree mode 100644/100755 check): a TRACKED SYMLINK --module is a blob of mode
-// 120000; ref mode stages its TARGET TEXT ("mod.js") as the module, the driver fails, NO-VERDICT after 7 spawns.
+// 2. G-STAGE B4 (was a KNOWN GAP): a TRACKED SYMLINK --module is a blob of mode 120000, and its staged text would be the
+// link target's path ("mod.js"). ls-tree's mode must be 100644 or 100755: refused, exit 2, 0 spawns, no OUT. The frozen
+// 943bed4 root stages "mod.js" and runs (NO-VERDICT after 7 spawns): red there and on M-lstree-off.
 // =====================================================================================================
-row('2 KNOWN GAP tracked symlink --module src/link.js -> exit 2 NO-VERDICT "driver exited 1 in run 1" both sides, 7 spawns, staged link.js = "mod.js"', {
+const LSTREE_RX = (p, ref, mode) => reEsc(`--before-ref: ${p} at ${ref} is not a regular file in git (mode ${mode}): its staged text would not be the module`);
+const CS_LINKMOD = row('2 tracked symlink --module src/link.js -> exit 2 "--before-ref: src/link.js at r1 is not a regular file in git (mode 120000)", 0 spawns, no OUT', {
     args: (c) => refO(c, { '--module': 'src/link.js', '--driver': DRV_LINK }),
     env: () => ({ FAKE_MOD: 'link.js' }),
+    check: refuses(() => LSTREE_RX('src/link.js', 'r1', '120000')),
+});
+mutant('M-lstree-off', 'the ls-tree mode refusal -> true', [['[[ "$m" == ok ]] || { m=', 'true || { m=']], CS_LINKMOD, (c, r) => {
+    assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- before: driver exited 1 in run 1$/m, msg(r));
+    assert.equal(c.spawns().length, 7, c.spawns().join('\n'));
+    assert.equal(readFileSync(join(c.out, 'stage', 'before', 'link.js'), 'utf8'), 'mod.js');   // the old gap: the link text staged
+});
+// control: an executable module (tree mode 100755) is a regular file -> a clean run
+const CS_EXE = row('2 control: --module src/mod.js of tree mode 100755 -> not refused, exit 1 DIFF, 7 spawns, empty stderr', {
+    args: (c) => refO(c, { '--repo': EXE }),
     check: (c, r) => {
-        assert.equal(r.status, 2, msg(r));
-        assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- before: driver exited 1 in run 1$/m, msg(r));
-        assert.match(r.stdout, /^ {2}mid: NO-VERDICT -- after: driver exited 1 in run 1$/m, msg(r));
-        assert.match(r.stdout, /^VERDICT NO-VERDICT$/m, msg(r));
+        verdict(1, 'DIFF')(r);
+        assert.equal(r.stderr, '', msg(r));
+        assert.ok(r.stdout.includes(CNT_B211), msg(r));
         assert.equal(c.spawns().length, 7, c.spawns().join('\n'));
-        const st = join(c.out, 'stage', 'before', 'link.js');
-        assert.ok(lstatSync(st).isFile(), 'staged copy is a regular file');
-        assert.equal(readFileSync(st, 'utf8'), 'mod.js');
     },
 });
+mutant('M-lstree-644-only', 'the mode test accepts 100644 only', [['"100644 blob "*|"100755 blob "*) m=ok', '"100644 blob "*) m=ok']], CS_EXE,
+    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stderr, /mode 100755/, msg(r)); });
 
 // =====================================================================================================
 // 3. KNOWN GAP (deferred: --no-replace-objects): refs/replace swaps the staged blob. r1's 211 blob replaced by 213.
@@ -264,8 +298,10 @@ mutant('M-no-replace', 'cat-file blob gets --no-replace-objects (the deferred fi
     (c, r) => { assert.equal(readFileSync(join(c.out, 'stage', 'before', 'mod.js'), 'utf8'), '211\n'); });
 
 // =====================================================================================================
-// 4. a path value with a leading '-' (deferred refusal): dirname / basename / stat read it as an option; set -e exits 1
-// and ONLY the EXIT trap turns that into exit 2 "unexpected error (exit 1)". 0 spawns, OUT not created.
+// 4. G-STAGE G1 (was a deferred refusal): a --before / --after / --driver value with a leading '-' is read as ./<value>,
+// so a dash-led file name is a clean run. The frozen 943bed4 root gave exit 2 "unexpected error (exit 1)" (dirname /
+// basename / stat read the name as an option, set -e exits 1, the EXIT trap maps it): red there and on M-dash-revert.
+// The oracle below still names that old failure (the M-dash-revert observation).
 // =====================================================================================================
 // The option-error oracle: BSD ("dirname: illegal option -- b"), GNU ("dirname: invalid option -- 'b'") or uutils
 // ("error: unexpected argument '-b' found" ... "Usage: dirname [OPTION] NAME..."), tied to dirname / basename / stat.
@@ -286,25 +322,35 @@ test('stage boundary: 4 the leading-dash option-error oracle accepts BSD / GNU /
     assert.ok(!dashToolErr('cp: illegal option -- b\n'), 'BSD wording for another tool');
     assert.ok(!dashToolErr(''));
 });
-const dashCheck = (c, r) => {
+const dashOld = (c, r) => {   // the pre-G1 failure: exit 2 via the EXIT trap, a tool's option error, 0 spawns, no OUT
     assert.equal(r.status, 2, msg(r));
     assert.match(r.stderr, /^bytecode-budget: unexpected error \(exit 1\)\nVERDICT NO-VERDICT$/m, msg(r));
     assert.ok(dashToolErr(r.stderr), msg(r));
     assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
     assert.ok(!existsSync(c.out), 'OUT was created');
 };
-const CS_DASH_B = row('4 --before -b.js (a readable file in cwd) -> exit 2 via the EXIT trap "unexpected error (exit 1)", 0 spawns, no OUT', {
+const dashRun = (side, text) => (c, r) => {
+    verdict(1, 'DIFF')(r);
+    assert.equal(r.stderr, '', msg(r));
+    assert.equal(c.spawns().length, 7, c.spawns().join('\n'));   // --version, 2 x --v8-options, 1 fn x 2 runs x 2 sides
+    assert.equal(readFileSync(join(c.out, 'stage', side, side === 'before' ? 'mod.js' : '-mod.js'), 'utf8'), text);
+};
+const CS_DASH_B = row('4 --before -b.js (a readable file in cwd) -> read as ./-b.js: exit 1 DIFF, 7 spawns, empty stderr, stage/before/mod.js = 211', {
     prep: (c) => writeFileSync(join(c.cwd, '-b.js'), '211\n'),
     args: (c) => fileO(c, { '--before': '-b.js' }),
-    check: dashCheck,
+    check: dashRun('before', '211\n'),
 });
-row('4 --after -mod.js (driver imports ./-mod.js) -> exit 2 via the EXIT trap, 0 spawns, no OUT', {
+row('4 --after -mod.js (driver imports ./-mod.js) -> read as ./-mod.js: exit 1 DIFF, 7 spawns, empty stderr, stage/after/-mod.js = 212', {
     prep: (c) => writeFileSync(join(c.cwd, '-mod.js'), '212\n'),
     args: (c) => fileO(c, { '--after': '-mod.js', '--driver': DRV_DASH }),
-    check: dashCheck,
+    env: () => ({ FAKE_MOD: '-mod.js' }),
+    check: dashRun('after', '212\n'),
 });
-mutant('M-trap-off', 'EXIT trap condition -> false (rc 1 escapes)', [['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
-    (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); });
+const G1_LINE = '[[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"';
+mutant('M-dash-revert', 'the G1 ./ rewrite line removed', [[G1_LINE, ':']], CS_DASH_B, dashOld);
+// re-carried (PLAN A5 (2): M-trap-off was HOLLOW once G1 made row 4 a clean run): G1 removed AND the EXIT trap off -> rc 1 escapes
+mutant('M-trap-off', 'G1 line removed + EXIT trap condition -> false (rc 1 escapes)', [[G1_LINE, ':'], ['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
+    (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); assert.equal(c.spawns().length, 0, c.spawns().join('\n')); });
 // ext-audit (B1e): a dash-led --out is a supported DIR name (read as ./-o9, never as an option), so this is a clean run
 row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 7 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {
     args: (c) => refO(c, { '--out': '-o9' }),
@@ -338,7 +384,7 @@ const nameRow = (label, drv) => row(`5 driver ${label} with module mod.js -> not
 });
 const CS_MY = nameRow('mymod.js', DRV_MY);
 const CS_SUF = nameRow('mod.js.driver.mjs', DRV_SUF);
-const M_SUBSTR = [['[[ "$STAGE_NAME" != "$(basename "$DRIVER")" ]]', '[[ "$(basename "$DRIVER")" != *"$STAGE_NAME"* ]]']];
+const M_SUBSTR = [['[[ "$STAGE_NAME" != "$b" ]]', '[[ "$b" != *"$STAGE_NAME"* ]]']];   // b = basename -- "$DRIVER"
 mutant('M-substr-mymod', 'same-name rule widened to a substring match', M_SUBSTR, CS_MY, (c, r) => assert.match(r.stderr, /same file name/));
 mutant('M-substr-suffix', 'same-name rule widened to a substring match', M_SUBSTR, CS_SUF, (c, r) => assert.match(r.stderr, /same file name/));
 
@@ -374,7 +420,8 @@ const stageRefused = (c, r) => {
     assert.equal(c.spawns().length, 0);
     assert.equal(snap(c.out), c.before, 'OUT changed');
 };
-const STAGE_CHK = '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
+const STAGE_TEST = '{ [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; }';
+const STAGE_CHK = STAGE_TEST + ' || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';   // G-STAGE G3 (A1) form
 const CS_ONE = row('7 OUT/stage holding ONE file -> exit 2 "--out: <OUT>/stage is not empty", 0 spawns, OUT byte-for-byte unchanged (no raw/, no report.txt)', {
     prep: (c) => { mkdirSync(join(c.out, 'stage'), { recursive: true }); writeFileSync(join(c.out, 'stage', 'f'), 'x\n'); c.before = snap(c.out); },
     args: (c) => refO(c),
@@ -389,6 +436,167 @@ const CS_SFILE = row('7 KNOWN GAP adversarial: OUT/stage is a regular FILE -> ex
 });
 mutant('M-stage-chk-off-file', 'the stage-not-empty refusal deleted', [[STAGE_CHK, ':']], CS_SFILE,
     (c, r) => { assert.equal(r.status, 2, msg(r)); assert.ok(existsSync(join(c.out, 'raw')), 'raw/ was not created first'); });
+
+const onceIn = (s, needle) => s.split(needle).length - 1;
+const emptyDirs = (c) => { assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries'); assert.deepEqual(readdirSync(c.cwd), [], 'cwd kept entries'); };
+// =====================================================================================================
+// 10. G-STAGE G2: OUT/stage is a symlink -> refused before any spawn or write (the writes would follow it). The frozen
+// 943bed4 root runs the empty-dir link (exit 1 DIFF, the 4 staged files land in elsewhere/) and dies on the dangling one
+// only after writing OUT/raw: red there and on M-stage-link-off.
+// =====================================================================================================
+const linkRefused = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.match(r.stderr, new RegExp(`^bytecode-budget: ${reEsc(`--out: ${c.out}/stage is a symlink (refused: the writes would follow it)`)}\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
+    assert.equal(onceIn(r.stderr, 'is a symlink'), 1, msg(r));
+    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+    assert.deepEqual(readdirSync(c.out), ['stage'], 'OUT gained entries');
+    assert.ok(lstatSync(join(c.out, 'stage')).isSymbolicLink());
+    emptyDirs(c);
+};
+const CS_SLINK = row('10 OUT/stage a symlink to an EMPTY dir -> exit 2 "--out: <OUT>/stage is a symlink" once, 0 spawns, the target still empty, OUT holds only the link', {
+    prep: (c) => { mkdirSync(join(c.dir, 'elsewhere')); mkdirSync(c.out); symlinkSync(join(c.dir, 'elsewhere'), join(c.out, 'stage')); },
+    args: (c) => refO(c),
+    check: (c, r) => { linkRefused(c, r); assert.deepEqual(readdirSync(join(c.dir, 'elsewhere')), [], 'the link target gained entries'); },
+});
+const CS_SDANG = row('10 OUT/stage a DANGLING symlink -> exit 2 "is a symlink" once, 0 spawns, nothing created at the target, OUT holds only the link', {
+    prep: (c) => { mkdirSync(c.out); symlinkSync(join(c.dir, 'nowhere'), join(c.out, 'stage')); },
+    args: (c) => refO(c),
+    check: (c, r) => { linkRefused(c, r); assert.ok(!existsSync(join(c.dir, 'nowhere')), 'the dangling target was created'); },
+});
+const M_LINK_OFF = [['[[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink', 'true || die "--out: $OUT/stage is a symlink']];
+mutant('M-stage-link-off', 'the G2 symlink refusal -> true', M_LINK_OFF, CS_SLINK, (c, r) => {
+    assert.equal(r.status, 1, msg(r));
+    assert.deepEqual(files(join(c.dir, 'elsewhere')), ['after/driver.mjs', 'after/mod.js', 'before/driver.mjs', 'before/mod.js']);
+});
+mutant('M-stage-link-off-dangling', 'the G2 symlink refusal -> true', M_LINK_OFF, CS_SDANG, (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.doesNotMatch(r.stderr, /is a symlink/, msg(r));
+    assert.ok(existsSync(join(c.out, 'raw')), 'raw/ was not written before the late failure');
+});
+
+// =====================================================================================================
+// 11. G-STAGE G3 (PLAN A1, the bb mirror of dd row 10b): an unreadable / unsearchable OUT/stage reads as empty to ls -A, and
+// an unwritable one fails only in stage_write after OUT/raw is written. Both are refused up front with the "is not empty"
+// line (A5 (3): that wording stays), 0 spawns, OUT unchanged. The frozen 943bed4 root writes raw/ + report.txt first.
+// =====================================================================================================
+const uid0 = typeof process.getuid === 'function' && process.getuid() === 0;
+const permRefused = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.match(r.stderr, new RegExp(`^bytecode-budget: --out: ${reEsc(c.out)}/stage is not empty \\(give a new or empty DIR\\)\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
+    assert.equal(onceIn(r.stderr, 'is not empty'), 1, msg(r));
+    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+    assert.equal(snap(c.out), c.before, 'OUT changed (raw/ or report.txt written?)');
+    emptyDirs(c);
+};
+const permRow = (label, mode, withFile) => row(`11 OUT/stage ${label} -> exit 2 "--out: <OUT>/stage is not empty" once, 0 spawns, OUT unchanged (no raw/, no report.txt)`, {
+    skip: uid0 ? `root ignores mode ${mode.toString(8)}` : false,
+    prep: (c) => {
+        mkdirSync(join(c.out, 'stage'), { recursive: true }); if (withFile) writeFileSync(join(c.out, 'stage', 'f'), 'x\n');
+        c.before = snap(c.out); chmodSync(join(c.out, 'stage'), mode);
+    },
+    post: (c) => chmodSync(join(c.out, 'stage'), 0o755),
+    args: (c) => refO(c),
+    check: permRefused,
+});
+const CS_000 = permRow('mode 000 holding a file', 0o000, true);
+const CS_555 = permRow('EMPTY, mode 555 (readable, not writable)', 0o555, false);
+const lateCreate = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.match(r.stderr, /cannot create .*stage\/before and .*stage\/after/, msg(r));
+    assert.ok(existsSync(join(c.out, 'raw')) && existsSync(join(c.out, 'report.txt')), 'raw/ + report.txt were not written first');
+};
+mutant('M-stage-readable-off', 'the G3 form back to the HEAD emptiness test', [[STAGE_TEST, '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]']], CS_000, lateCreate);
+mutant('M-stage-w-off', '-w dropped from the G3 clause', [['[[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]]', '[[ -r "$OUT/stage" && -x "$OUT/stage" ]]']], CS_555, lateCreate);
+
+// =====================================================================================================
+// 12. G-STAGE Q-DD6a (i): a module or --driver file name with a byte outside printable ASCII is refused in stage_check (APFS
+// folds Unicode case and NFC / NFD, so such a pair could stage as ONE file): exit 2, the die line once, 0 spawns, TMPDIR
+// empty, OUT absent. The frozen 943bed4 root stages and runs every one of them: red there and on M-ascii-off.
+// =====================================================================================================
+const uRefused = (m, d) => (c, r) => {
+    refuses(() => reEsc(`the module or --driver file name has a non-ASCII byte (${m} / ${d}): rename it`))(c, r);
+    assert.equal(onceIn(r.stderr, 'non-ASCII byte'), 1, msg(r));
+    emptyDirs(c);
+};
+const uDrv = (c, d, m) => { mkdirSync(join(c.dir, 'ud')); writeFileSync(join(c.dir, 'ud', d), `import './${m}';\n`); return join(c.dir, 'ud', d); };
+const uFile = (m, d, extraEnv = {}) => ({
+    prep: (c) => { for (const x of ['uf', 'ua']) mkdirSync(join(c.dir, x)); writeFileSync(join(c.dir, 'uf', m), '211\n'); writeFileSync(join(c.dir, 'ua', m), '212\n'); c.drv = uDrv(c, d, m); },
+    args: (c) => fileO(c, { '--before': join(c.dir, 'uf', m), '--after': join(c.dir, 'ua', m), '--driver': c.drv }),
+    env: () => ({ FAKE_MOD: m, ...extraEnv }),
+    check: uRefused(m, d),
+});
+const uRef = (m, d) => ({
+    prep: (c) => { c.drv = uDrv(c, d, m); },
+    args: (c) => refO(c, { '--module': 'src/' + m, '--repo': UNI, '--driver': c.drv }),
+    env: () => ({ FAKE_MOD: m }),
+    check: uRefused(m, d),
+});
+const CS_U1F = row('12 U1 file mode: module <e-acute>.js, --driver <E-acute>.js (Unicode case pair) -> exit 2 "has a non-ASCII byte" once, 0 spawns, TMPDIR empty, no OUT', uFile(U_E, U_EU));
+row('12 U1 ref mode: --module src/<e-acute>.js, --driver <E-acute>.js -> the same refusal', uRef(U_E, U_EU));
+row('12 U2 file mode: module m<NFC e-acute>d.js, --driver m<NFD e + U+0301>d.js -> the same refusal', uFile(U_NFC, U_NFD));
+const CS_U2R = row('12 U2 ref mode: --module src/m<NFC e-acute>d.js, --driver m<NFD>d.js -> the same refusal', uRef(U_NFC, U_NFD));
+const CS_U3 = row('12 U3 file mode: non-ASCII module <e-acute>.js + ASCII --driver driver.mjs -> the same refusal', uFile(U_E, 'driver.mjs'));
+row('12 U4 file mode: ASCII module mod.js + non-ASCII --driver d<e-acute>.mjs -> the same refusal', uFile('mod.js', U_DRV));
+const CS_U1UTF = row('12 U1 file mode with LANG / LC_ALL=en_US.UTF-8 in the env -> the same refusal (the root pins LC_ALL=C)', uFile(U_E, U_EU, { LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' }));
+row('12 ASCII control: file mode module med.js, --driver drv.js -> not refused, exit 1 DIFF, 7 spawns, empty stderr', {
+    ...uFile('med.js', 'drv.js'),
+    check: (c, r) => { verdict(1, 'DIFF')(r); assert.equal(r.stderr, '', msg(r)); assert.equal(c.spawns().length, 7, c.spawns().join('\n')); emptyDirs(c); },
+});
+const I_LINE = '[[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"';
+const II_LINE = '[[ ! "$dir/$STAGE_NAME" -ef "$dir/$b" ]] || die "the staged module and driver are the same file on this file system (case / Unicode fold: $STAGE_NAME / $b): rename the driver"';
+const noAscii = (c, r) => assert.doesNotMatch(r.stderr, /non-ASCII byte/, msg(r));
+mutant('M-ascii-off', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U3, (c, r) => { noAscii(c, r); assert.equal(r.status, 1, msg(r)); assert.equal(c.spawns().length, 7); });
+mutant('M-ascii-off-ref', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U2R, noAscii);
+mutant('M-ascii-off-utf8', 'the Q-DD6a (i) refusal removed', [[I_LINE, ':']], CS_U1UTF, noAscii);
+// the (ii) belt: on a carrier root without (i), U1 file mode reaches stage_write; a folding FS maps both names to one file
+const foldSkip = skip || (FOLDS ? false : `this file system keeps ${JSON.stringify(U_E)} and ${JSON.stringify(U_EU)} apart (no Unicode case fold): the (ii) belt row is not checked, never passed`);
+const CS_BELT = {
+    ...uFile(U_E, U_EU),
+    check: (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stderr, new RegExp(`^bytecode-budget: ${reEsc(`the staged module and driver are the same file on this file system (case / Unicode fold: ${U_E} / ${U_EU}): rename the driver`)}\\nVERDICT NO-VERDICT$`, 'm'), msg(r));
+        assert.equal(onceIn(r.stderr, 'the same file on this file system'), 1, msg(r));
+        assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+        assert.deepEqual(readdirSync(join(c.out, 'stage', 'after')), [], 'the belt let the after side be staged');
+        emptyDirs(c);
+    },
+};
+test('stage boundary: 12 (ii) belt on a carrier root without (i): U1 file mode -> exit 2 with the belt line once, 0 spawns, stage/after empty', { skip: foldSkip }, () => {
+    const { c, r } = runOn(variant('belt-carrier', [[I_LINE, ':']]), CS_BELT);
+    CS_BELT.check(c, r);
+});
+test('stage boundary MUTANT M-ef-belt-off ((i) and (ii) removed): the belt row goes red (one staged file holds the driver text)', { skip: foldSkip }, (t) => {
+    const { c, r } = runOn(variant('M-ef-belt-off', [[I_LINE, ':'], [II_LINE, ':']]), CS_BELT);
+    t.diagnostic(`M-ef-belt-off: rc=${r.status} spawns=${c.spawns().length} stderr=${JSON.stringify(r.stderr.trim().slice(0, 200))}`);
+    assert.throws(() => CS_BELT.check(c, r), assert.AssertionError, 'M-ef-belt-off: the belt row still passes');
+    assert.doesNotMatch(r.stderr, /same file on this file system/, msg(r));
+    assert.equal(c.spawns().length, 7, c.spawns().join('\n'));
+    assert.deepEqual(readdirSync(join(c.out, 'stage', 'before')), [U_E], 'the fold did not leave ONE staged file');
+    assert.equal(readFileSync(join(c.out, 'stage', 'before', U_E), 'utf8'), `import './${U_E}';\n`);
+});
+
+// =====================================================================================================
+// 13. G-STAGE B4 literal pathspec (PLAN A6 blocker 2): ':x.js' is pathspec magic for x.js unless --literal-pathspecs. A
+// tracked symlink ':x.js' beside a regular x.js: --module ':x.js' must read ITS mode (120000) -> refused. Frozen 943bed4
+// stages the link text "other.js" and runs; M-literal-off reads x.js's mode (100644) and stages it too: red on both.
+// =====================================================================================================
+const CS_LIT = row('13 tracked symlink :x.js -> other.js beside a regular x.js, --module :x.js -> exit 2 "--before-ref: :x.js at r1 is not a regular file in git (mode 120000)" once, 0 spawns, no OUT', {
+    prep: (c) => { mkdirSync(join(c.dir, 'xd')); c.drv = join(c.dir, 'xd', 'driver.mjs'); writeFileSync(c.drv, "import './:x.js';\n"); },
+    args: (c) => refO(c, { '--module': ':x.js', '--repo': LIT, '--driver': c.drv }),
+    env: () => ({ FAKE_MOD: ':x.js' }),
+    check: (c, r) => { refuses(() => LSTREE_RX(':x.js', 'r1', '120000'))(c, r); assert.equal(onceIn(r.stderr, 'is not a regular file in git'), 1, msg(r)); emptyDirs(c); },
+});
+mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C', 'git -C']], CS_LIT, (c, r) => {
+    assert.doesNotMatch(r.stderr, /not a regular file in git/, msg(r));
+    assert.equal(readFileSync(join(c.out, 'stage', 'before', ':x.js'), 'utf8'), 'other.js');
+});
+
+// PLAN A5 retention: 20 cycles of the new refusal rows, each into a fresh case: every cycle leaves TMPDIR and cwd empty
+// (each row's own check also asserts its OUT / link-target state).
+test('stage boundary: A5 retention -- 20 cycles of 8 G-STAGE refusal rows (B4 x2, G2 x2, G3, Q-DD6a U1 file / U2 ref / UTF-8) keep 0 TMPDIR / cwd entries', { skip }, () => {
+    const set = [CS_LINKMOD, CS_LIT, CS_SLINK, CS_SDANG, CS_U1F, CS_U2R, CS_U1UTF, ...(uid0 ? [] : [CS_000])];
+    for (let i = 0; i < 20; i++) for (const cs of set) { const { c, r } = runOn(SCRIPT, cs); cs.check(c, r); emptyDirs(c); }
+});
 
 // =====================================================================================================
 // 8. git < 2.32 ignores GIT_CONFIG_GLOBAL (the self-test's isolation of the user's ~/.gitconfig)
@@ -420,7 +628,7 @@ const emuCheck = (r) => {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.deepEqual(fails, [EMU_FAIL]);
     assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
-    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 53);   // 57 - the 4 staged rows (repo setup failed)
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 53);   // 60 - the 7 staged rows (repo setup failed)
 };
 test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 53 ok', { skip }, () => {
     emuCheck(stRun(SCRIPT, emuEnv()));

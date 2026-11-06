@@ -151,17 +151,18 @@
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
 #   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
-#   reads as untracked, so a tracked --before behind such an error is not refused. Known gaps, as in
-#   bytecode-budget: a TRACKED SYMLINK --module is a blob (mode 120000), so ref mode stages its target TEXT as the
-#   module (the driver then fails: NO-VERDICT, never a verdict on the link target); refs/replace swaps the staged
-#   blob (a `git replace` of a ref's blob stages the replacement, and the head's sha256/8 is the replacement's); a
-#   path value starting with '-' (e.g. --before -b.js) is read as an option by dirname / basename / stat and exits 2
-#   only through the EXIT trap ("unexpected error (exit 1)", 0 spawns, nothing written). The stage checks
-#   (lib/stage.sh): an unreadable (mode 000) DIR/stage passes the emptiness test, even when it is not empty, so the
-#   run spends its --version and --v8-options spawns and writes DIR/raw/before, DIR/raw/after and an empty
-#   DIR/report.txt before it dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a
-#   symlink to an empty directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already
-#   gets the raw files in driver mode).
+#   reads as untracked, so a tracked --before behind such an error is not refused. Known gap, as in
+#   bytecode-budget: refs/replace swaps the staged blob (a `git replace` of a ref's blob stages the replacement, and
+#   the head's sha256/8 is the replacement's).
+# Refused (ref / file mode, lib/stage.sh; exit 2 before any spawn or write, as in bytecode-budget): a --module that
+#   is not a regular file in git at a ref (a TRACKED SYMLINK is mode 120000: "is not a regular file in git (mode
+#   120000)"); a module and --driver whose file names are equal up to ASCII case (one file on a case-insensitive
+#   file system); a module or --driver file name with a non-ASCII byte (a Unicode case or NFC / NFD fold); a
+#   --driver whose directory bash's cd resolves to another file than the one read (a symlink before '..': a decoy
+#   driver would be staged); a DIR/stage that is a symlink ("is a symlink"; a dangling one is "exists and is not a
+#   directory"); and an unreadable, unsearchable or unwritable DIR/stage, refused as "is not empty" even when it is
+#   empty. A --before, --after or --driver value that starts with '-' is read as the file ./<value>, never as an
+#   option.
 # Tier section: read from run 1 of each side, printed after the fn lines (and the byte-identical NO-VERDICT line)
 #   in every report that reaches VERDICT. Every line starts "tier    " and none holds " -- " (a " -- " in a reason
 #   or file name prints as " - - "): "tier    REPORTED: run 1 of each side, never part of the verdict", then per
@@ -439,7 +440,7 @@ worst() { # NO-VERDICT > DIFF > SAME
 # ---------------------------------------------------------------------------------------------
 STAGE_MODE=""; STAGE_NAME=""; STAGE_DRIVER=""; STAGE_ABS_B=""; STAGE_ABS_A=""; STAGE_SHA_B=""; STAGE_SHA_A=""
 stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE_* inputs of stage_write
-  local side ref sha x t=""
+  local side ref sha x t="" b m
   [[ -z "$BEFORE_REF$AFTER_REF" || -z "$BEFORE_FILE$AFTER_FILE" ]] \
     || die "--before-ref/--after-ref (ref mode) and --before/--after (file mode) are exclusive: give one pair"
   if [[ -n "$BEFORE_REF$AFTER_REF" ]]; then
@@ -453,6 +454,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
     [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
   done
+  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename, grep and cp read ./-NAME
+  [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"
   [[ -n "$DRIVER" ]] || die "$STAGE_MODE mode needs --driver FILE (a driver that imports the module as './<name>')"
   [[ -f "$DRIVER" && -r "$DRIVER" ]] || die "--driver not found (or not a readable file): $DRIVER"
@@ -473,9 +476,13 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
       [[ "$ref" != -* ]] || die "--$side-ref must not start with '-', got '$ref'"
       sha=$(git -C "$REPO" rev-parse --verify --quiet "$ref^{commit}") || die "--$side-ref: '$ref' is not a commit in $REPO (git fetch?)"
       [[ "$(git -C "$REPO" cat-file -t "$sha:$MODULE" 2>/dev/null)" == blob ]] || die "--$side-ref: $ref ($sha) has no file $MODULE"
+      # the tree mode, not only the type: a tracked symlink (120000) is a blob too, and its staged text is the link target's path
+      m=$(git --literal-pathspecs -C "$REPO" ls-tree "$sha" -- "$MODULE" 2>/dev/null) || m=""
+      case "$m" in *$'\n'*) ;; "100644 blob "*|"100755 blob "*) m=ok ;; esac
+      [[ "$m" == ok ]] || { m=${m%%[[:space:]]*}; die "--$side-ref: $MODULE at $ref is not a regular file in git (mode ${m:-none}): its staged text would not be the module"; }
       if [[ $side == before ]]; then STAGE_SHA_B="$sha"; else STAGE_SHA_A="$sha"; fi
     done
-    STAGE_NAME=$(basename "$MODULE")
+    STAGE_NAME=$(basename -- "$MODULE")
   else
     [[ -z "$MODULE" ]] || die "file mode takes no --module (the module name is --after's file name)"
     for side in before after; do
@@ -484,19 +491,30 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
     done
     refuse_live "$BEFORE_FILE" --before
     [[ ! "$BEFORE_FILE" -ef "$AFTER_FILE" ]] || die "--before and --after are the same file (hard link / symlink): --before must be a FROZEN copy"
-    STAGE_NAME=$(basename "$AFTER_FILE")
-    STAGE_ABS_B=$(cd "$(dirname "$BEFORE_FILE")" && pwd)/$(basename "$BEFORE_FILE")
-    STAGE_ABS_A=$(cd "$(dirname "$AFTER_FILE")" && pwd)/$(basename "$AFTER_FILE")
+    STAGE_NAME=$(basename -- "$AFTER_FILE")
+    STAGE_ABS_B=$(cd -- "$(dirname -- "$BEFORE_FILE")" && pwd)/$(basename -- "$BEFORE_FILE")
+    STAGE_ABS_A=$(cd -- "$(dirname -- "$AFTER_FILE")" && pwd)/$(basename -- "$AFTER_FILE")
   fi
-  [[ "$STAGE_NAME" != "$(basename "$DRIVER")" ]] || die "the module and --driver have the same file name ($STAGE_NAME): rename the driver"
-  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
-  STAGE_DRIVER=$(cd "$(dirname "$DRIVER")" && pwd)/$(basename "$DRIVER")
-  [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"
+  b=$(basename -- "$DRIVER")
+  [[ "$STAGE_NAME" != "$b" ]] || die "the module and --driver have the same file name ($STAGE_NAME): rename the driver"
+  # a case-insensitive file system (macOS, Windows) stages both under one name: refuse a pair equal up to ASCII case, on every host
+  [[ "$(printf '%s' "$STAGE_NAME" | LC_ALL=C tr 'A-Z' 'a-z')" != "$(printf '%s' "$b" | LC_ALL=C tr 'A-Z' 'a-z')" ]] || die "the module and --driver have the same file name up to case ($STAGE_NAME / $b): rename the driver"
+  # a non-ASCII or control byte (LC_ALL=C: [:print:] is 0x20-0x7E) can fold too (APFS: Unicode case, NFC / NFD): refuse it
+  [[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"
+  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" -- "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
+  STAGE_DRIVER=$(cd -- "$(dirname -- "$DRIVER")" && pwd)/$(basename -- "$DRIVER")
+  # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
+  # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one
+  [[ "$STAGE_DRIVER" -ef "$DRIVER" ]] || die "--driver: cannot resolve the directory of $DRIVER (a symlink before '..'?)"
+  [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"
+  # an unreadable or unsearchable DIR/stage reads as empty to ls -A (its error is hidden), and an unwritable one fails only
+  # in stage_write, after the first spawns and DIR/raw writes: refuse both here, before any spawn or write
+  { [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"
 }
 stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the driver; set DRV_B DRV_A STAGE_SAME DESC_*
   local side dir b x
-  b=$(basename "$STAGE_DRIVER")
-  mkdir -p "$OUT/stage" && mkdir "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
+  b=$(basename -- "$STAGE_DRIVER")
+  mkdir -p -- "$OUT/stage" && mkdir -- "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
     || die "--out: cannot create $OUT/stage/before and $OUT/stage/after"
   for side in before after; do
     dir="$OUT/stage/$side"
@@ -505,9 +523,11 @@ stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the dr
       git -C "$REPO" cat-file blob "$x:$MODULE" >"$dir/$STAGE_NAME" || die "cannot read $MODULE at $x"   # plumbing: no textconv
     else
       if [[ $side == before ]]; then x="$BEFORE_FILE"; else x="$AFTER_FILE"; fi
-      cp "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"   # the copy IS the freeze: later edits to $x cannot leak in
+      cp -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"   # the copy IS the freeze: later edits to $x cannot leak in
     fi
-    cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"
+    cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"
+    # the belt (stage_check refuses every fold it knows): a file system that still maps the two names to one file
+    [[ ! "$dir/$STAGE_NAME" -ef "$dir/$b" ]] || die "the staged module and driver are the same file on this file system (case / Unicode fold: $STAGE_NAME / $b): rename the driver"
   done
   DRV_B="$OUT/stage/before/$b"; DRV_A="$OUT/stage/after/$b"
   if cmp -s "$OUT/stage/before/$STAGE_NAME" "$OUT/stage/after/$STAGE_NAME"; then STAGE_SAME=1; else STAGE_SAME=0; fi
@@ -1067,7 +1087,7 @@ EOF
   # driver.js importing './trace.txt'); the fake node cats ./trace.txt from cwd = OUT/stage/<side>. tg isolates every
   # git call (no editor, no global / system config, no hooks, no signing, the six GIT_* vars stage_check refuses
   # unset) and sspawn runs this script with those six unset too, so the rows also run from inside a git hook. With no
-  # git on PATH, or a failed repo set-up, the 18 rows (S1-S4, R1-R14) are ONE FAIL line ---
+  # git on PATH, or a failed repo set-up, the 21 rows (S1-S4, R1-R17) are ONE FAIL line ---
   local g="$d/st" R="$d/st/R" frz="$d/st/frz/trace.txt" top="" sr=0
   local -a RR
   tg() { env -u GIT_EDITOR -u EDITOR -u VISUAL -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
@@ -1085,7 +1105,7 @@ EOF
       && ln "$R/m/trace.txt" "$g/hl/trace.txt" && top=$(tg -C "$R" rev-parse --show-toplevel); } >"$g/git.log" 2>&1 || sr=$?
   fi
   if ! command -v git >/dev/null 2>&1; then
-    check "ref / file modes: git on PATH (the 18 staged rows S1-S4, R1-R14 need git; no git fails closed)" "git not found on PATH" "git found"
+    check "ref / file modes: git on PATH (the 21 staged rows S1-S4, R1-R17 need git; no git fails closed)" "git not found on PATH" "git found"
   elif [[ $sr != 0 ]]; then
     check "ref / file modes: temp git repo set up (init, commits r1 r2, tags r1 r2)" "git exited $sr: $(tail -n 1 "$g/git.log")" "ok"
   else
@@ -1153,6 +1173,25 @@ EOF
     mkdir -p "$g/r14"; printf 'x\n' >"$g/r14/stage"
     srf "R14: OUT/stage a regular file" "--out: $g/r14/stage exists and is not a directory" \
       "$g/r14" - --out "$g/r14" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+    # D1: d1/L -> d1/real/sub, so d1/L/../driver.js is d1/real/driver.js to the kernel (imports ./trace.txt) and the
+    # DECOY d1/driver.js to bash's logical cd, which stage_write would copy
+    mkdir -p "$g/d1/real/sub"; ln -s "$g/d1/real/sub" "$g/d1/L"
+    printf '%s\n' "import './trace.txt';" >"$g/d1/real/driver.js"; printf '%s\n' '// DECOY' >"$g/d1/driver.js"
+    srf "R15: a decoy --driver (DIR/L/../driver.js, L a symlink to DIR/real/sub)" \
+      "--driver: cannot resolve the directory of $g/d1/L/../driver.js (a symlink before '..'?)" \
+      "$g/r15" - --out "$g/r15" --fn add --before-ref r1 --after-ref r2 --module m/trace.txt --driver "$g/d1/L/../driver.js" --repo "$R"
+    # D6: a case-insensitive file system would stage the module TRACE.TXT and the driver trace.txt as one file
+    mkdir -p "$g/d6/drv"; printf '%s\n' "$T_DEOPT" >"$g/d6/TRACE.TXT"; printf '%s\n' "import './TRACE.TXT';" >"$g/d6/drv/trace.txt"
+    srf "R16: --after TRACE.TXT with --driver trace.txt (the same file name up to case)" \
+      "the module and --driver have the same file name up to case (TRACE.TXT / trace.txt): rename the driver" \
+      "$g/r16" - --out "$g/r16" --fn add --before "$frz" --after "$g/d6/TRACE.TXT" --driver "$g/d6/drv/trace.txt"
+    # Q-DD6a (i): APFS folds Unicode case and NFC / NFD, so an NFC-named module and an NFD-named driver would stage as
+    # one file: a byte outside printable ASCII in either name is refused (both names built from printf octal escapes)
+    local nfc nfd; nfc="tr$(printf '\303\251')ce.txt"; nfd="tre$(printf '\314\201')ce.txt"
+    mkdir -p "$g/du/drv"; printf '%s\n' "$T_DEOPT" >"$g/du/$nfc"; printf '%s\n' "import './$nfc';" >"$g/du/drv/$nfd"
+    srf "R17: --after an NFC-named module with an NFD-named --driver (non-ASCII file names)" \
+      "the module or --driver file name has a non-ASCII byte ($nfc / $nfd): rename it" \
+      "$g/r17" - --out "$g/r17" --fn add --before "$frz" --after "$g/du/$nfc" --driver "$g/du/drv/$nfd"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four dd): --out DIR whose raw/ is a symlink, or whose report.txt has another hard link ---

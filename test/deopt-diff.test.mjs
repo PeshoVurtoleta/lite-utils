@@ -17,9 +17,9 @@ import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk
 import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 92;   // every `check` call in self_test(): 53 driver-mode rows + 18 ref/file rows (S1-S4, R1-R14) + 13 tier rows (T1-T13)
-                     // + 5 B-four dd refusal rows (checks 85-89: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
-                     // allowlist rows (checks 90-92: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
+const CHECKS = 95;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
+                     // + 5 B-four dd refusal rows (checks 88-92: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
+                     // allowlist rows (checks 93-95: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
                      // PLAN-md46 G2 TASK 3); a new check moves this literal.
                      // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
 // P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows
@@ -258,7 +258,7 @@ const OUT_MUTANTS = [
 ];
 // The MD-46 G2 mutant table (PLAN-md46 G2 TASK 4, ASSERTIONS A1 / A2): M-v8fl-off deletes the call (no --v8-options read:
 // the refused token runs, FAKE_V8O_RC is never seen, every spawn pin reads 7); M-v8fl-late moves it below the --out mkdir
-// block (the refusals still exit 2 after 2 spawns, but OUT now exists). Designed rows = checks 91 (b) and 92 (c).
+// block (the refusals still exit 2 after 2 spawns, but OUT now exists). Designed rows = checks 94 (b) and 95 (c).
 const V8B = 'MD-50 refused after the --v8-options read';
 const V8C = 'MD-56 a failing node --v8-options';
 const V8FL_MUTANTS = [

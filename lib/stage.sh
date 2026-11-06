@@ -1,7 +1,8 @@
 #: lib/stage.sh -- stage_check, stage_write: the ref / file modes of a diff (ONE module file per side + one driver).
 #: Reads BEFORE_REF AFTER_REF BEFORE_FILE AFTER_FILE MODULE DRIVER REPO OUT POS; uses die sha8 refuse_live (lib/common.sh).
 #: stage_check (every refusal, before any disk write) sets STAGE_MODE (ref|file) STAGE_NAME STAGE_DRIVER STAGE_ABS_B
-#: STAGE_ABS_A (file mode) STAGE_SHA_B STAGE_SHA_A (ref mode: full commit shas) and REPO (ref mode: its toplevel).
+#: STAGE_ABS_A (file mode) STAGE_SHA_B STAGE_SHA_A (ref mode: full commit shas) and REPO (ref mode: its toplevel); it rewrites a
+#: BEFORE_FILE AFTER_FILE DRIVER that starts with '-' as ./<value> (a name, never an option).
 #: stage_write (after OUT exists) writes OUT/stage/before and OUT/stage/after; sets DRV_B DRV_A STAGE_SAME DESC_B
 #: DESC_A DESC_D. Generic (no module or package names); bash 3.2, set -u safe.
 # ---------------------------------------------------------------------------------------------
@@ -9,7 +10,7 @@
 # ---------------------------------------------------------------------------------------------
 STAGE_MODE=""; STAGE_NAME=""; STAGE_DRIVER=""; STAGE_ABS_B=""; STAGE_ABS_A=""; STAGE_SHA_B=""; STAGE_SHA_A=""
 stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE_* inputs of stage_write
-  local side ref sha x t=""
+  local side ref sha x t="" b m
   [[ -z "$BEFORE_REF$AFTER_REF" || -z "$BEFORE_FILE$AFTER_FILE" ]] \
     || die "--before-ref/--after-ref (ref mode) and --before/--after (file mode) are exclusive: give one pair"
   if [[ -n "$BEFORE_REF$AFTER_REF" ]]; then
@@ -23,6 +24,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
     [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
   done
+  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename, grep and cp read ./-NAME
+  [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"
   [[ -n "$DRIVER" ]] || die "$STAGE_MODE mode needs --driver FILE (a driver that imports the module as './<name>')"
   [[ -f "$DRIVER" && -r "$DRIVER" ]] || die "--driver not found (or not a readable file): $DRIVER"
@@ -43,9 +46,13 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
       [[ "$ref" != -* ]] || die "--$side-ref must not start with '-', got '$ref'"
       sha=$(git -C "$REPO" rev-parse --verify --quiet "$ref^{commit}") || die "--$side-ref: '$ref' is not a commit in $REPO (git fetch?)"
       [[ "$(git -C "$REPO" cat-file -t "$sha:$MODULE" 2>/dev/null)" == blob ]] || die "--$side-ref: $ref ($sha) has no file $MODULE"
+      # the tree mode, not only the type: a tracked symlink (120000) is a blob too, and its staged text is the link target's path
+      m=$(git --literal-pathspecs -C "$REPO" ls-tree "$sha" -- "$MODULE" 2>/dev/null) || m=""
+      case "$m" in *$'\n'*) ;; "100644 blob "*|"100755 blob "*) m=ok ;; esac
+      [[ "$m" == ok ]] || { m=${m%%[[:space:]]*}; die "--$side-ref: $MODULE at $ref is not a regular file in git (mode ${m:-none}): its staged text would not be the module"; }
       if [[ $side == before ]]; then STAGE_SHA_B="$sha"; else STAGE_SHA_A="$sha"; fi
     done
-    STAGE_NAME=$(basename "$MODULE")
+    STAGE_NAME=$(basename -- "$MODULE")
   else
     [[ -z "$MODULE" ]] || die "file mode takes no --module (the module name is --after's file name)"
     for side in before after; do
@@ -54,19 +61,30 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
     done
     refuse_live "$BEFORE_FILE" --before
     [[ ! "$BEFORE_FILE" -ef "$AFTER_FILE" ]] || die "--before and --after are the same file (hard link / symlink): --before must be a FROZEN copy"
-    STAGE_NAME=$(basename "$AFTER_FILE")
-    STAGE_ABS_B=$(cd "$(dirname "$BEFORE_FILE")" && pwd)/$(basename "$BEFORE_FILE")
-    STAGE_ABS_A=$(cd "$(dirname "$AFTER_FILE")" && pwd)/$(basename "$AFTER_FILE")
+    STAGE_NAME=$(basename -- "$AFTER_FILE")
+    STAGE_ABS_B=$(cd -- "$(dirname -- "$BEFORE_FILE")" && pwd)/$(basename -- "$BEFORE_FILE")
+    STAGE_ABS_A=$(cd -- "$(dirname -- "$AFTER_FILE")" && pwd)/$(basename -- "$AFTER_FILE")
   fi
-  [[ "$STAGE_NAME" != "$(basename "$DRIVER")" ]] || die "the module and --driver have the same file name ($STAGE_NAME): rename the driver"
-  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
-  STAGE_DRIVER=$(cd "$(dirname "$DRIVER")" && pwd)/$(basename "$DRIVER")
-  [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"
+  b=$(basename -- "$DRIVER")
+  [[ "$STAGE_NAME" != "$b" ]] || die "the module and --driver have the same file name ($STAGE_NAME): rename the driver"
+  # a case-insensitive file system (macOS, Windows) stages both under one name: refuse a pair equal up to ASCII case, on every host
+  [[ "$(printf '%s' "$STAGE_NAME" | LC_ALL=C tr 'A-Z' 'a-z')" != "$(printf '%s' "$b" | LC_ALL=C tr 'A-Z' 'a-z')" ]] || die "the module and --driver have the same file name up to case ($STAGE_NAME / $b): rename the driver"
+  # a non-ASCII or control byte (LC_ALL=C: [:print:] is 0x20-0x7E) can fold too (APFS: Unicode case, NFC / NFD): refuse it
+  [[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"
+  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" -- "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
+  STAGE_DRIVER=$(cd -- "$(dirname -- "$DRIVER")" && pwd)/$(basename -- "$DRIVER")
+  # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
+  # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one
+  [[ "$STAGE_DRIVER" -ef "$DRIVER" ]] || die "--driver: cannot resolve the directory of $DRIVER (a symlink before '..'?)"
+  [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"
+  # an unreadable or unsearchable DIR/stage reads as empty to ls -A (its error is hidden), and an unwritable one fails only
+  # in stage_write, after the first spawns and DIR/raw writes: refuse both here, before any spawn or write
+  { [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"
 }
 stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the driver; set DRV_B DRV_A STAGE_SAME DESC_*
   local side dir b x
-  b=$(basename "$STAGE_DRIVER")
-  mkdir -p "$OUT/stage" && mkdir "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
+  b=$(basename -- "$STAGE_DRIVER")
+  mkdir -p -- "$OUT/stage" && mkdir -- "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
     || die "--out: cannot create $OUT/stage/before and $OUT/stage/after"
   for side in before after; do
     dir="$OUT/stage/$side"
@@ -75,9 +93,11 @@ stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the dr
       git -C "$REPO" cat-file blob "$x:$MODULE" >"$dir/$STAGE_NAME" || die "cannot read $MODULE at $x"   # plumbing: no textconv
     else
       if [[ $side == before ]]; then x="$BEFORE_FILE"; else x="$AFTER_FILE"; fi
-      cp "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"   # the copy IS the freeze: later edits to $x cannot leak in
+      cp -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"   # the copy IS the freeze: later edits to $x cannot leak in
     fi
-    cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"
+    cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"
+    # the belt (stage_check refuses every fold it knows): a file system that still maps the two names to one file
+    [[ ! "$dir/$STAGE_NAME" -ef "$dir/$b" ]] || die "the staged module and driver are the same file on this file system (case / Unicode fold: $STAGE_NAME / $b): rename the driver"
   done
   DRV_B="$OUT/stage/before/$b"; DRV_A="$OUT/stage/after/$b"
   if cmp -s "$OUT/stage/before/$STAGE_NAME" "$OUT/stage/after/$STAGE_NAME"; then STAGE_SAME=1; else STAGE_SAME=0; fi

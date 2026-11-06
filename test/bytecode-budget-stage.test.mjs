@@ -280,6 +280,42 @@ const CS_STAGE = {
 };
 row('A3 refusal: OUT holding stage/junk and a 4-byte report.txt -> exit 2, 0 spawns, report.txt still 4 bytes, no raw/', CS_STAGE);
 
+// G-STAGE (PLAN-b42-gstage A1). D1: --driver DIR/L/../driver.mjs with L -> DIR/real/sub. The kernel reads DIR/real/driver.mjs
+// (it imports ./mod.js); bash's logical cd would stage the decoy DIR/driver.mjs. Refused in both modes; the frozen 943bed4
+// root stages the decoy and runs (exit 1 DIFF), so the row is red there (revert log: evidence/b44-gstage-b3/).
+const DECOY = "import './mod.js';\n// decoy\n";
+const d1Prep = (c) => {
+    mkdirSync(join(c.dir, 'real', 'sub'), { recursive: true }); symlinkSync(join(c.dir, 'real', 'sub'), join(c.dir, 'L'));
+    writeFileSync(join(c.dir, 'real', 'driver.mjs'), "import './mod.js';\n"); writeFileSync(join(c.dir, 'driver.mjs'), DECOY);
+};
+const d1Drv = (c) => join(c.dir, 'L') + '/../driver.mjs';   // path.join would resolve the '..' lexically
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const onceIn = (s, needle) => s.split(needle).length - 1;
+function refusesOnce(rx, needle) {   // refuses(rx) + the die line exactly once + TMPDIR left empty
+    const base = refuses(rx);
+    return (c, r) => { base(c, r); assert.equal(onceIn(r.stderr, needle), 1, msg(r)); assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries'); };
+}
+const D1_RX = (c) => new RegExp(`^bytecode-budget: --driver: cannot resolve the directory of ${reEsc(d1Drv(c))} \\(a symlink before '\\.\\.'\\?\\)$`, 'm');
+const d1Row = (mode) => ({ prep: d1Prep, args: (c) => (mode === 'ref' ? refO(c, { '--driver': d1Drv(c) }) : fileO(c, { '--driver': d1Drv(c) })),
+    check: (c, r) => refusesOnce(D1_RX(c), 'cannot resolve the directory')(c, r) });
+const CS_D1_REF = d1Row('ref'), CS_D1_FILE = d1Row('file');
+row('A3 refusal: G-STAGE D1 ref mode --driver DIR/L/../driver.mjs (L a symlink to DIR/real/sub; decoy DIR/driver.mjs) -> exit 2 "cannot resolve the directory" once, 0 spawns, no OUT, TMPDIR empty', CS_D1_REF);
+row('A3 refusal: G-STAGE D1 file mode, same decoy layout -> exit 2 "cannot resolve the directory" once, 0 spawns, no OUT, TMPDIR empty', CS_D1_FILE);
+// D6: a module and a driver equal up to ASCII case (one file on a case-insensitive FS) are refused on every host
+const D6_RX = (m, d) => new RegExp(`^bytecode-budget: the module and --driver have the same file name up to case \\(${reEsc(m)} / ${reEsc(d)}\\): rename the driver$`, 'm');
+const CS_D6_REF = { prep: (c) => { mkdirSync(join(c.dir, 'dk')); writeFileSync(join(c.dir, 'dk', 'Mod.js'), "import './mod.js';\n"); },
+    args: (c) => refO(c, { '--driver': join(c.dir, 'dk', 'Mod.js') }), check: (c, r) => refusesOnce(D6_RX('mod.js', 'Mod.js'), 'up to case')(c, r) };
+const CS_D6_FILE = {
+    prep: (c) => {
+        for (const d of ['fz', 'up', 'dl']) mkdirSync(join(c.dir, d));
+        writeFileSync(join(c.dir, 'fz', 'MID.TXT'), '211\n'); writeFileSync(join(c.dir, 'up', 'MID.TXT'), '212\n'); writeFileSync(join(c.dir, 'dl', 'mid.txt'), "import './MID.TXT';\n");
+    },
+    args: (c) => fileO(c, { '--before': join(c.dir, 'fz', 'MID.TXT'), '--after': join(c.dir, 'up', 'MID.TXT'), '--driver': join(c.dir, 'dl', 'mid.txt') }),
+    check: (c, r) => refusesOnce(D6_RX('MID.TXT', 'mid.txt'), 'up to case')(c, r),
+};
+row('A3 refusal: G-STAGE D6 ref mode module mod.js with --driver Mod.js -> exit 2 "same file name up to case (mod.js / Mod.js)" once, 0 spawns, no OUT', CS_D6_REF);
+row('A3 refusal: G-STAGE D6 file mode --after MID.TXT with --driver mid.txt -> exit 2 "same file name up to case (MID.TXT / mid.txt)" once, 0 spawns, no OUT', CS_D6_FILE);
+
 // the -h / CHANGELOG claim "a module with relative imports of its own fails closed (its driver exits non-zero: NO-VERDICT)".
 // The fake node emulates module resolution against its cwd (the staged dir), so a sibling that was not staged is ERR_MODULE_NOT_FOUND.
 const IMP_MOD = "import './helper.js';\n211\n";
@@ -323,7 +359,7 @@ function mutant(name, anchorDesc, edits, cs, observe) {
 }
 mutant('M7', 'before staged from AFTER_REF: x="$STAGE_SHA_B" -> x="$STAGE_SHA_A"', [['x="$STAGE_SHA_B"', 'x="$STAGE_SHA_A"']], R_DIFF,
     (c, r) => { assert.equal(r.status, 0, msg(r)); assert.ok(!r.stdout.includes(CNT_B), msg(r)); });
-mutant('M8', 'staged copy is a symlink: cp "$x" -> ln -s "$x"', [['cp "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"', 'ln -s "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"']], F_LIVE,
+mutant('M8', 'staged copy is a symlink: cp -- "$x" -> ln -s -- "$x"', [['cp -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"', 'ln -s -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"']], F_LIVE,
     (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stdout, /after: null control/, msg(r)); });
 mutant('M9', 'driver import check turned into a comment', [['|| die "--driver must import', '|| : #']], CS_NOIMP,
     (c, r) => { assert.notEqual(r.status, 2, msg(r)); assert.doesNotMatch(r.stderr, /--driver must import/); });
@@ -331,16 +367,27 @@ mutant('M10', 'refuse_live "$BEFORE_FILE" --before deleted', [['refuse_live "$BE
     (c, r) => { assert.equal(r.status, 1, msg(r)); assert.doesNotMatch(r.stderr, /git-tracked/); });
 mutant('M11', 'the -ef same-file check deleted', [['[[ ! "$BEFORE_FILE" -ef "$AFTER_FILE" ]] || die "--before and --after are the same file', ': || die "--before and --after are the same file']], CS_HLINK,
     (c, r) => { assert.equal(r.status, 0, msg(r)); assert.doesNotMatch(r.stderr, /same file/); });
-mutant('M-relimport-sibling-staged', 'stage_write also copies helper.js from the driver dir', [['cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"', 'cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"; cp "$(dirname "$STAGE_DRIVER")/helper.js" "$dir/" 2>/dev/null || true']], CS_RELIMP_REF,
+// G-STAGE A1 mutants: M-ef-off (the D1 -ef refusal off: the decoy driver is staged), M-nocase (the D6 fold refusal off)
+const M_EF_OFF = [['[[ "$STAGE_DRIVER" -ef "$DRIVER" ]] || die "--driver: cannot resolve', 'true || die "--driver: cannot resolve']];
+mutant('M-ef-off', 'the D1 -ef refusal -> true', M_EF_OFF, CS_D1_REF,
+    (c, r) => { assert.doesNotMatch(r.stderr, /cannot resolve/, msg(r)); assert.equal(readFileSync(join(c.out, 'stage', 'before', 'driver.mjs'), 'utf8'), DECOY, 'the decoy was not staged'); });
+mutant('M-ef-off-file', 'the D1 -ef refusal -> true', M_EF_OFF, CS_D1_FILE,
+    (c, r) => { assert.doesNotMatch(r.stderr, /cannot resolve/, msg(r)); assert.equal(readFileSync(join(c.out, 'stage', 'after', 'driver.mjs'), 'utf8'), DECOY, 'the decoy was not staged'); });
+const M_NOCASE = [['|| die "the module and --driver have the same file name up to case', '|| : "the module and --driver have the same file name up to case']];
+// on a case-folding FS the (ii) belt in stage_write still stops the pair (exit 2, its own line); elsewhere the run goes on
+mutant('M-nocase', 'the D6 case-fold refusal -> a no-op', M_NOCASE, CS_D6_REF, (c, r) => { assert.doesNotMatch(r.stderr, /up to case/, msg(r)); });
+mutant('M-nocase-file', 'the D6 case-fold refusal -> a no-op', M_NOCASE, CS_D6_FILE, (c, r) => { assert.doesNotMatch(r.stderr, /up to case/, msg(r)); });
+mutant('M-relimport-sibling-staged', 'stage_write also copies helper.js from the driver dir', [['cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"', 'cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"; cp "$(dirname "$STAGE_DRIVER")/helper.js" "$dir/" 2>/dev/null || true']], CS_RELIMP_REF,
     (c, r) => { assert.notEqual(r.status, 2, msg(r)); assert.ok(existsSync(join(c.out, 'stage', 'before', 'helper.js'))); });
-mutant('M-relimport-sibling-staged-file', 'same edit, file mode', [['cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"', 'cp "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"; cp "$(dirname "$STAGE_DRIVER")/helper.js" "$dir/" 2>/dev/null || true']], CS_RELIMP_FILE,
+mutant('M-relimport-sibling-staged-file', 'same edit, file mode', [['cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"', 'cp -- "$STAGE_DRIVER" "$dir/$b" || die "cannot copy $STAGE_DRIVER"; cp "$(dirname "$STAGE_DRIVER")/helper.js" "$dir/" 2>/dev/null || true']], CS_RELIMP_FILE,
     (c, r) => { assert.notEqual(r.status, 2, msg(r)); assert.ok(existsSync(join(c.out, 'stage', 'before', 'helper.js'))); });
 const ENV_ALL = '[[ -z "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_COMMON_DIR+x}${GIT_CEILING_DIRECTORIES+x}" ]] ||';
 mutant('M12', 'the whole GIT_* env refusal deleted', [[ENV_ALL, 'true ||']], CS_GITDIR,
     (c, r) => { assert.equal(r.status, 1, msg(r)); assert.doesNotMatch(r.stderr, /GIT_DIR/); });   // tracked before read as untracked
 mutant('M13', 'the "needs --out" refusal deleted', [['[[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR', 'true || die "$STAGE_MODE mode needs --out DIR']], CS_NOOUT,
     (c, r) => { assert.doesNotMatch(r.stderr, /needs --out/, msg(r)); });
-const STAGE_CHK = '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
+// G-STAGE G3 (A1): the stage check also refuses an unreadable / unwritable / unsearchable OUT/stage (one line, lib/stage.sh)
+const STAGE_CHK = '{ [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
 mutant('M-stage-order', 'the stage-not-empty check moved back after the --out block', [
     [STAGE_CHK, ':'],
     ['if [[ $STAGED == 1 ]]; then\n  stage_write', `if [[ $STAGED == 1 ]]; then\n  ${STAGE_CHK}\n  stage_write`],
@@ -406,14 +453,18 @@ test('bytecode-budget stage A4 control MUTANT A4-stage-in-tmpdir (stage root $TM
 });
 
 // =====================================================================================================
-// A5 self-test (B2: N = 4 new checks; --self-test = 49 ok, --fixtures 73; ext-audit B-four bb + 5: 54 / 78; MD-46 G3 + 3: 57 / 81; the totals are asserted in
-// bytecode-budget.test.mjs, not duplicated here). The four staged check names below are the contract.
+// A5 self-test (B2: N = 4 new checks; --self-test = 49 ok, --fixtures 73; ext-audit B-four bb + 5: 54 / 78; MD-46 G3 + 3: 57 / 81;
+// G-STAGE b44 + 3 (D7 D1, D7 D6, D7 Q-DD6a i): 60 / 84; the totals are also asserted in bytecode-budget.test.mjs C).
+// The seven staged check names below are the contract (all need git).
 // =====================================================================================================
 const ST_NAMES = [
     'ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 7 spawns, before=1 after=0  211',
     'ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the null-control NOTE',
     'file mode: --before a FROZEN copy (r1, 211) --after the live tracked m/mid.txt (212) -> exit 1 DIFF; OUT holds 9 files (report.txt, raw 2 + 2, stage 2 + 2)',
     'ref / file refusals before any spawn (exit 2, 0 spawns, no OUT dir): ',
+    'D7 (D1) ref mode refused before any spawn: ',
+    'D7 (D6) file mode refused before any spawn: ',
+    'D7 (Q-DD6a i) file mode refused before any spawn: ',
 ];
 const NOGIT_NAME = 'ref / file modes: git on PATH (their rows need git; MD-7: no git fails closed)';
 const okLines = (o) => o.split('\n').filter((l) => l.startsWith('ok   '));
@@ -421,14 +472,14 @@ const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
 const stRun = (script, env = cleanEnv()) => capSync('bash', [script, '--self-test'], { encoding: 'utf8', env }, 240000, 'bytecode-budget.sh --self-test');
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok   ' + name)).length;
 
-test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 4 staged checks present exactly once, 57 ok', { skip }, () => {
+test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 7 staged checks present exactly once, 60 ok', { skip }, () => {
     const r = stRun(SCRIPT);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, `check "${n}"`);
-    assert.equal(okLines(r.stdout).length, 57);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist); also pinned by bytecode-budget.test.mjs C
+    assert.equal(okLines(r.stdout).length, 60);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist) + 3 (G-STAGE D7 D1 / D6 / Q-DD6a i); also pinned by bytecode-budget.test.mjs C
 });
-test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 4 staged checks (and 45 ok)', { skip: baseSkip }, () => {
+test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 7 staged checks (and 45 ok)', { skip: baseSkip }, () => {
     histGate(haveBase);
     const r = stRun(BASE);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);
@@ -462,16 +513,16 @@ test('bytecode-budget stage A5 (d): a PATH without git -> exit 1, exactly one FA
     t.diagnostic(`no-git: rc=${r.status} FAIL lines=${JSON.stringify(f)} ok=${okLines(r.stdout).length}`);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(f.length, 1, f.join('\n'));
-    assert.equal(okLines(r.stdout).length, 53);   // 57 - the 4 staged rows (they need git); the 5 B-four bb rows and the 3 MD-46 G3 rows need none
+    assert.equal(okLines(r.stdout).length, 53);   // 60 - the 7 staged rows (they need git); the 5 B-four bb rows and the 3 MD-46 G3 rows need none
     assert.ok(f[0].startsWith('FAIL ' + NOGIT_NAME), f[0]);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);   // the staged rows do not run without git
 });
-test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 57 ok, exit 0 (hook safety)', { skip }, () => {
+test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 60 ok, exit 0 (hook safety)', { skip }, () => {
     const env = { ...cleanEnv() };
     for (const k of GITVARS) env[k] = join(ROOT, 'no-such-' + k);
     const r = stRun(SCRIPT, env);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
-    assert.equal(okLines(r.stdout).length, 57);
+    assert.equal(okLines(r.stdout).length, 60);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, n);
 });

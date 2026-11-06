@@ -139,7 +139,7 @@ function shimDir(dir) {   // a logging mktemp first on PATH (macOS mktemp ignore
 
 // ---- one case = one fresh dir: fake node (logs "$PWD|argv"), tmp, cwd, live file, OUT path; removed in finally ----
 // Fake node: --version prints v26.8.2; --v8-options prints two flag entries (--allow-natives-syntax bool,
-// --max-inlined-bytecode-size int default 460) and exits 0; neither probe bumps ./calls. Else cats ./trace.txt
+// --max-inlined-bytecode-size int default 460) and exits 0; neither probe bumps ./calls. Else cats ./trace.txt (or ./$FAKE_MOD)
 // (cwd = OUT/stage/<side>), on the after side also cats
 // $FAKE_AFTER_EXTRA; at driver call $FAKE_HANG_AT it touches $FAKE_READY and sleeps (the SIGTERM row).
 function mkCase() {
@@ -150,7 +150,7 @@ echo "$PWD|$*" >> ${JSON.stringify(log)}
 case "$1" in --version) echo v26.8.2; exit 0 ;; --v8-options) echo "  --allow-natives-syntax (allow natives syntax)"; echo "        type: bool  default: --no-allow-natives-syntax"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; esac
 n=$(( $(cat ${JSON.stringify(calls)} 2>/dev/null || echo 0) + 1 )); echo "$n" > ${JSON.stringify(calls)}
 if [ -n "\${FAKE_HANG_AT:-}" ] && [ "$n" = "$FAKE_HANG_AT" ]; then : > "$FAKE_READY"; sleep 60; fi
-if [ -f ./trace.txt ]; then cat ./trace.txt; fi
+m="\${FAKE_MOD:-trace.txt}"; if [ -f "./$m" ]; then cat "./$m"; fi
 case "$PWD" in */after) if [ -n "\${FAKE_AFTER_EXTRA:-}" ]; then cat "$FAKE_AFTER_EXTRA"; fi ;; esac
 exit 0
 `);
@@ -202,6 +202,7 @@ const ROWS = [];   // registered inside one describe (bounded concurrency 4)
 function row(name, cs) { ROWS.push({ kind: 'row', name, cs }); return cs; }
 function parityRow(name, cs) { ROWS.push({ kind: 'parity', name, cs }); return cs; }
 function mutant(name, desc, edits, cs, observe) { ROWS.push({ kind: 'mutant', name, desc, edits, cs, observe }); }
+function carrier(name, desc, edits, cs) { ROWS.push({ kind: 'carrier', name, desc, edits, cs }); }   // the row PASSES on an exact-once edited copy
 
 // =====================================================================================================
 // 1. --runs at its bounds in staged mode: 2 and 20 (N and N of the [2, 20] range) -> 2 + 2R spawns, sides
@@ -442,12 +443,21 @@ row('9 /bin/bash 3.2 runs ref r1 | r2 -> exit 1 DIFF, 8 spawns, the before=0 aft
 });
 
 // =====================================================================================================
-// 10. OUT/stage edge cases (lib/stage.sh + MD-17). a (dangling symlink) is FIXED: MD-17 refuses it; b and c are KNOWN
-// GAPs in the -h "Not detected" list
+// 10. OUT/stage edge cases (lib/stage.sh + MD-17), all FIXED: a (dangling symlink) MD-17 refuses; b (mode 000) the G3
+// guard refuses before any spawn or write (PLAN-b42-gstage A1); c (a symlink to a dir) the G2 `! -L` line refuses
 // =====================================================================================================
 const snapL = (d) => walkL(d).sort().map(([p, k]) => `${k} ${p}`).join('|');
 const MD17 = '[[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]]';   // the built MD-17 test (dangling-aware)
 const MD17_OLD = '[[ -z $OUT || ! -e $OUT/stage || -d $OUT/stage ]]';
+const G2_LINE = '  [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"\n';
+const outRefused = (c, r, text) => {   // exit 2, the die line once, NO-VERDICT once, 0 node spawns, OUT holds only its stage entry
+    const die = lines(r.stderr).filter((l) => l.startsWith('deopt-diff: '));
+    assert.equal(r.status, 2, msg(r));
+    assert.deepEqual(die, [`deopt-diff: --out: ${c.out}/stage ${text}`], msg(r));
+    assert.equal(lines(r.stderr).filter((l) => l === 'VERDICT NO-VERDICT').length, 1, msg(r));
+    assert.equal(c.spawns(), 0, c.log().join('\n'));
+    assert.deepEqual(readdirSync(c.out), ['stage'], 'OUT changed (raw/ or report.txt written)');
+};
 const CS_DANG = row("10a OUT/stage a DANGLING symlink -> exit 2 with MD-17's 'exists and is not a directory' line (once), 0 spawns, OUT unchanged", {
     prep: (c) => { mkdirSync(c.out); symlinkSync(join(c.dir, 'nowhere'), join(c.out, 'stage')); c.snap = snapL(c.out); },
     args: (c) => refO(c),
@@ -459,38 +469,154 @@ const CS_DANG = row("10a OUT/stage a DANGLING symlink -> exit 2 with MD-17's 'ex
         assert.equal(snapL(c.out), c.snap, 'OUT changed');
     },
 });
+// MD-17 reverted: the dangling link passes it (! -e), and the lib's G2 `! -L` line answers instead
 mutant('M-dangling-revert', 'MD-17 reverted to the pre-fix test (no ! -L): the lib answers instead', [[MD17, MD17_OLD]], CS_DANG,
-    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stderr, /stage is not empty \(give a new or empty DIR\)/, msg(r)); });
+    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.match(r.stderr, /stage is a symlink \(refused: the writes would follow it\)/, msg(r)); assert.equal(c.spawns(), 0); });
 const uid0 = typeof process.getuid === 'function' && process.getuid() === 0;
-const CS_000 = row('10b KNOWN GAP (-h): OUT/stage mode 000 holding a file -> 2 spawns (--version, --v8-options), OUT/raw/before + raw/after + an empty report.txt written, then "cannot create"', {
+const CS_000 = row('10b G3: OUT/stage mode 000 holding a file -> exit 2 "--out: <OUT>/stage is not empty" (once) before any spawn or write: 0 spawns, no raw/, no report.txt', {
     rowSkip: skip || (uid0 ? 'root ignores mode 000' : false),
     prep: (c) => { mkdirSync(join(c.out, 'stage'), { recursive: true }); writeFileSync(join(c.out, 'stage', 'f'), 'x\n'); chmodSync(join(c.out, 'stage'), 0o000); },
     args: (c) => refO(c),
-    check: (c, r) => {
-        const die = lines(r.stderr).filter((l) => l.startsWith('deopt-diff: '));
-        assert.equal(r.status, 2, msg(r));
-        assert.deepEqual(die, [`deopt-diff: --out: cannot create ${c.out}/stage/before and ${c.out}/stage/after`], msg(r));
-        assert.deepEqual(c.log().map((l) => l.split('|')[1]), ['--version', '--v8-options']);
-        assert.ok(statSync(join(c.out, 'raw', 'before')).isDirectory() && statSync(join(c.out, 'raw', 'after')).isDirectory());
-        assert.equal(statSync(join(c.out, 'report.txt')).size, 0);
-    },
+    check: (c, r) => outRefused(c, r, 'is not empty (give a new or empty DIR)'),
 });
-const STAGE_CHK = '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
-mutant('M-stage-readable', 'the emptiness test also needs a readable + searchable OUT/stage', [[STAGE_CHK,
-    '{ [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"']],
-CS_000, (c, r) => { assert.equal(c.spawns(), 0); assert.match(r.stderr, /stage is not empty/, msg(r)); });
-const CS_LINK = row('10c KNOWN GAP (-h): OUT/stage a symlink to an EMPTY dir -> exit 1 DIFF; the 4 staged files land in the link target, outside OUT', {
+// revert twin (PLAN-b42-gstage A1): the G3 guard put back to the HEAD (943bed4) emptiness test -> the old gap: 2 spawns,
+// raw/ + report.txt written, then "cannot create"
+const STAGE_CHK = '{ [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
+const STAGE_CHK_HEAD = '[[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]] || die "--out: $OUT/stage is not empty (give a new or empty DIR)"';
+mutant('M-stage-readable', 'revert twin: the G3 guard back to the HEAD ls -A test', [[STAGE_CHK, STAGE_CHK_HEAD]], CS_000, (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    assert.deepEqual(lines(r.stderr).filter((l) => l.startsWith('deopt-diff: ')), [`deopt-diff: --out: cannot create ${c.out}/stage/before and ${c.out}/stage/after`], msg(r));
+    assert.deepEqual(c.log().map((l) => l.split('|')[1]), ['--version', '--v8-options']);
+    assert.ok(statSync(join(c.out, 'raw', 'before')).isDirectory() && statSync(join(c.out, 'raw', 'after')).isDirectory());
+    assert.equal(statSync(join(c.out, 'report.txt')).size, 0);
+});
+const CS_LINK = row('10c G2: OUT/stage a symlink to an EMPTY dir -> exit 2 "--out: <OUT>/stage is a symlink" (once), 0 spawns, nothing lands in the link target, OUT unchanged', {
     prep: (c) => { mkdirSync(join(c.dir, 'elsewhere')); mkdirSync(c.out); symlinkSync(join(c.dir, 'elsewhere'), join(c.out, 'stage')); },
     args: (c) => refO(c),
     check: (c, r) => {
-        verdict(r, 1, 'DIFF');
-        assert.deepEqual(files(join(c.dir, 'elsewhere')), ['after/driver.js', 'after/trace.txt', 'before/driver.js', 'before/trace.txt']);
+        outRefused(c, r, 'is a symlink (refused: the writes would follow it)');
         assert.ok(lstatSync(join(c.out, 'stage')).isSymbolicLink());
-        assert.deepEqual(files(c.out), outFiles.filter((f) => !f.startsWith('stage/')));
+        assert.deepEqual(readdirSync(join(c.dir, 'elsewhere')), [], 'files landed in the link target');
     },
 });
-mutant('M-stage-link-md17', 'MD-17 refuses any symlinked OUT/stage', [[MD17, '[[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || ( -d $OUT/stage && ! -L $OUT/stage ) ]]']], CS_LINK,
-    (c, r) => { assert.equal(r.status, 2, msg(r)); assert.deepEqual(readdirSync(join(c.dir, 'elsewhere')), []); });
+// M-stage-link-off (replaces the hollow M-stage-link-md17, PLAN-b42-gstage A5 (2)): the G2 line removed -> the writes follow
+// the link: exit 1 DIFF, the 4 staged files in elsewhere/, outside OUT
+mutant('M-stage-link-off', 'the G2 `! -L` line removed', [[G2_LINE, '']], CS_LINK, (c, r) => {
+    verdict(r, 1, 'DIFF');
+    assert.deepEqual(files(join(c.dir, 'elsewhere')), ['after/driver.js', 'after/trace.txt', 'before/driver.js', 'before/trace.txt']);
+    assert.deepEqual(files(c.out), outFiles.filter((f) => !f.startsWith('stage/')));
+});
+
+// =====================================================================================================
+// 13. G-STAGE (PLAN-b42-gstage TASK 6 + A2 + A6): B4 (a tracked symlink --module), A6 blocker 2 (a --module name that is
+// pathspec magic), G1 (dash-led file names) and Q-DD6a: (i) a non-ASCII module / driver name is refused before any spawn
+// or write; (ii) the stage_write -ef belt, pinned on a carrier root with (i) removed. Non-ASCII names are built from \u
+// escapes (the source stays ASCII). XREPO (tags x1, x2; x2 = an empty commit on x1): m/trace.txt, m/link.txt -> trace.txt
+// (a tracked symlink), x.js (regular), :x.js -> other.js (a tracked symlink), m/<U1M>, m/<U2M>
+// =====================================================================================================
+const U1M = '\u00C9t.txt', U1D = '\u00E9t.txt';           // E-acute / e-acute: a Unicode case pair
+const U2M = 'tr\u00E9ce.txt', U2D = 'tre\u0301ce.txt';     // NFC / NFD: one name to APFS
+const XREPO = join(ROOT, 'xrepo'), XD = join(ROOT, 'xdrv');
+const XDRV = { link: join(XD, 'link', 'driver.js'), colon: join(XD, 'colon', 'driver.js'), u1: join(XD, 'u1', U1D), u2: join(XD, 'u2', U2D), u3: join(XD, 'u3', 'driver.js'), asc: join(XD, 'asc', 'drv.js') };
+let FOLDS = false;
+if (!skip) try {
+    mkdirSync(join(XREPO, 'm'), { recursive: true });
+    git(XREPO, 'init', '-q');
+    writeFileSync(join(XREPO, 'm', 'trace.txt'), T_R1); symlinkSync('trace.txt', join(XREPO, 'm', 'link.txt'));
+    writeFileSync(join(XREPO, 'x.js'), T_R1); writeFileSync(join(XREPO, 'other.js'), T_R2); symlinkSync('other.js', join(XREPO, ':x.js'));
+    writeFileSync(join(XREPO, 'm', U1M), T_R1); writeFileSync(join(XREPO, 'm', U2M), T_R1);
+    git(XREPO, 'add', '-A'); git(XREPO, 'commit', '-q', '-m', 'x1'); git(XREPO, 'tag', 'x1');
+    git(XREPO, 'commit', '-q', '--allow-empty', '-m', 'x2'); git(XREPO, 'tag', 'x2');
+    const imp = { link: 'link.txt', colon: ':x.js', u1: U1M, u2: U2M, u3: U2M, asc: 'Mod.txt' };
+    for (const k of Object.keys(XDRV)) { mkdirSync(dirname(XDRV[k]), { recursive: true }); writeFileSync(XDRV[k], `import './${imp[k]}';\n`); }
+    const fp = join(ROOT, 'foldprobe');   // the belt row needs a file system that maps U1M and U1D to one file
+    mkdirSync(fp); writeFileSync(join(fp, U1M), 'a\n'); writeFileSync(join(fp, U1D), 'b\n');
+    FOLDS = readdirSync(fp).length === 1;
+} catch (e) { rmSync(ROOT, { recursive: true, force: true }); throw e; }
+const foldSkip = skip || (FOLDS ? false : 'this file system keeps E-acute.txt and e-acute.txt apart (no Unicode case fold): the (ii) belt row is not checked, never passed');
+const xrefO = (c, over = {}) => [...flat({ '--before-ref': 'x1', '--after-ref': 'x2', '--module': 'm/link.txt', '--driver': XDRV.link, '--repo': XREPO, '--out': c.out, ...over }), ...TAIL(c)];
+const refusesT = (text) => (c, r) => { refuses(text)(c, r); assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries'); };
+const notReg = (mod) => `--before-ref: ${mod} at x1 is not a regular file in git (mode 120000): its staged text would not be the module`;
+
+// B4: the tree mode, not only the object type (a tracked symlink is a blob whose text is its target's path)
+const CS_B4 = row('13 B4: --module m/link.txt (a tracked symlink -> trace.txt, mode 120000) -> exit 2 "is not a regular file in git (mode 120000)" once, 0 spawns, TMPDIR empty, no OUT', {
+    args: (c) => xrefO(c), env: () => ({ FAKE_MOD: 'link.txt' }), check: refusesT(notReg('m/link.txt')),
+});
+mutant('M-lstree-off', 'the ls-tree mode test never refuses', [['[[ "$m" == ok ]] || {', 'true || {']], CS_B4, (c, r) => assert.equal(c.spawns(), 8, msg(r)));
+// A6 blocker 2: without --literal-pathspecs git reads ':x.js' as pathspec magic (= the regular top-level x.js), the mode
+// test passes on x.js's line, and cat-file stages the symlink's text
+const CS_LIT = row("13 A6 blocker 2: --module ':x.js' (a tracked symlink -> other.js beside a regular x.js) -> exit 2 'mode 120000' once, 0 spawns, TMPDIR empty, no OUT", {
+    args: (c) => xrefO(c, { '--module': ':x.js', '--driver': XDRV.colon }), env: () => ({ FAKE_MOD: ':x.js' }), check: refusesT(notReg(':x.js')),
+});
+mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C', 'git -C']], CS_LIT, (c, r) => assert.equal(c.spawns(), 8, msg(r)));
+// G1: a dash-led --before / --after / --driver is a name, never an option (read as ./NAME)
+const G1_LINE = '  [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"\n';
+const CS_G1 = row('13 G1: --before -b.txt --after -trace.txt --driver -drv.js (cwd-relative, dash-led) -> exit 1 DIFF, 8 spawns, empty stderr, staged as -trace.txt + -drv.js', {
+    prep: (c) => {
+        c.dash = join(c.dir, 'dash'); mkdirSync(c.dash);
+        writeFileSync(join(c.dash, '-b.txt'), T_R1); writeFileSync(join(c.dash, '-trace.txt'), T_R2); writeFileSync(join(c.dash, '-drv.js'), "import './-trace.txt';\n");
+    },
+    cwd: (c) => c.dash,
+    args: (c) => [...flat({ '--before': '-b.txt', '--after': '-trace.txt', '--driver': '-drv.js', '--out': c.out }), ...TAIL(c)],
+    env: () => ({ FAKE_MOD: '-trace.txt' }),
+    check: (c, r) => {
+        verdict(r, 1, 'DIFF');
+        assert.equal(c.spawns(), 8, c.log().join('\n'));
+        assert.equal(r.stderr, '', msg(r));
+        assert.equal(has(r, '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)'), 1, msg(r));
+        assert.deepEqual(files(join(c.out, 'stage')), ['after/-drv.js', 'after/-trace.txt', 'before/-drv.js', 'before/-trace.txt']);
+    },
+});
+mutant('M-dash-revert', 'the G1 ./ line removed', [[G1_LINE, '']], CS_G1, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.equal(c.spawns(), 0, msg(r)); });
+
+// Q-DD6a (i): U1 / U2 in file and ref mode, U3 (non-ASCII module + ASCII driver), U2 under a UTF-8 locale (the root's
+// LC_ALL=C still decides [:print:]), and an ASCII control that runs
+const nonAscii = (m, d) => `the module or --driver file name has a non-ASCII byte (${m} / ${d}): rename it`;
+const uPrep = (mod) => (c) => { mkdirSync(join(c.dir, 'u')); writeFileSync(join(c.dir, 'u', mod), T_R2); };
+const uFileO = (mod, drv) => (c) => fileO(c, { '--after': join(c.dir, 'u', mod), '--driver': drv });
+row('13 Q-DD6a U1 file: --after E-acute.txt, --driver e-acute.txt -> exit 2 the non-ASCII die line once, 0 spawns, TMPDIR empty, no OUT', {
+    prep: uPrep(U1M), args: uFileO(U1M, XDRV.u1), env: () => ({ FAKE_MOD: U1M }), check: refusesT(nonAscii(U1M, U1D)) });
+row('13 Q-DD6a U1 ref: --module m/E-acute.txt, --driver e-acute.txt -> exit 2 the non-ASCII die line once, 0 spawns, TMPDIR empty, no OUT', {
+    args: (c) => xrefO(c, { '--module': 'm/' + U1M, '--driver': XDRV.u1 }), env: () => ({ FAKE_MOD: U1M }), check: refusesT(nonAscii(U1M, U1D)) });
+const CS_U2F = {
+    prep: uPrep(U2M), args: uFileO(U2M, XDRV.u2), env: () => ({ FAKE_MOD: U2M }), check: refusesT(nonAscii(U2M, U2D)) };
+row('13 Q-DD6a U2 file: --after an NFC name, --driver its NFD twin -> exit 2 the non-ASCII die line once, 0 spawns, TMPDIR empty, no OUT', CS_U2F);
+row('13 Q-DD6a U2 ref: --module m/<NFC name>, --driver its NFD twin -> exit 2 the non-ASCII die line once, 0 spawns, TMPDIR empty, no OUT', {
+    args: (c) => xrefO(c, { '--module': 'm/' + U2M, '--driver': XDRV.u2 }), env: () => ({ FAKE_MOD: U2M }), check: refusesT(nonAscii(U2M, U2D)) });
+row('13 Q-DD6a U3 file: --after an NFC (non-ASCII) name, --driver driver.js (ASCII) -> exit 2 the non-ASCII die line once, 0 spawns, TMPDIR empty, no OUT', {
+    prep: uPrep(U2M), args: uFileO(U2M, XDRV.u3), env: () => ({ FAKE_MOD: U2M }), check: refusesT(nonAscii(U2M, 'driver.js')) });
+row('13 Q-DD6a U2 file under LANG / LC_ALL=en_US.UTF-8 -> refused all the same (exit 2, the die line once, 0 spawns, TMPDIR empty, no OUT)', {
+    ...CS_U2F, env: () => ({ FAKE_MOD: U2M, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' }) });
+row('13 Q-DD6a ASCII control: --after Mod.txt, --driver drv.js -> exit 1 DIFF, 8 spawns, staged as Mod.txt + drv.js', {
+    prep: uPrep('Mod.txt'), args: uFileO('Mod.txt', XDRV.asc), env: () => ({ FAKE_MOD: 'Mod.txt' }),
+    check: (c, r) => {
+        verdict(r, 1, 'DIFF');
+        assert.equal(c.spawns(), 8, c.log().join('\n'));
+        assert.deepEqual(files(join(c.out, 'stage')), ['after/Mod.txt', 'after/drv.js', 'before/Mod.txt', 'before/drv.js']);
+    },
+});
+// Q-DD6a (ii), the belt: on a carrier root with (i) removed the U1 fold reaches stage_write, where the -ef line refuses after
+// the before side's copies (2 spawns: --version, --v8-options; no driver run). Twin M-ef-belt-off ((i) and (ii) removed):
+// the fold stages ONE file and the run goes on (8 spawns, no belt line). A file system that does not fold U1M / U1D: SKIP.
+const I_LINE = '  [[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"\n';
+const II_LINE = '    [[ ! "$dir/$STAGE_NAME" -ef "$dir/$b" ]] || die "the staged module and driver are the same file on this file system (case / Unicode fold: $STAGE_NAME / $b): rename the driver"\n';
+const CS_BELT = {
+    rowSkip: foldSkip, prep: uPrep(U1M), args: uFileO(U1M, XDRV.u1), env: () => ({ FAKE_MOD: U1M }),
+    check: (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.deepEqual(lines(r.stderr).filter((l) => l.startsWith('deopt-diff: ')),
+            [`deopt-diff: the staged module and driver are the same file on this file system (case / Unicode fold: ${U1M} / ${U1D}): rename the driver`], msg(r));
+        assert.equal(lines(r.stderr).filter((l) => l === 'VERDICT NO-VERDICT').length, 1, msg(r));
+        assert.deepEqual(c.log().map((l) => l.split('|')[1]), ['--version', '--v8-options']);
+        assert.equal(readdirSync(join(c.out, 'stage', 'before')).length, 1, 'the fold did not map the two names to one file');
+        assert.deepEqual(readdirSync(join(c.out, 'stage', 'after')), []);
+    },
+};
+carrier('M-ascii-off', 'Q-DD6a (i) removed: the (ii) belt refuses the U1 fold', [[I_LINE, '']], CS_BELT);
+mutant('M-ef-belt-off', 'Q-DD6a (i) and (ii) removed', [[I_LINE, ''], [II_LINE, '']], CS_BELT, (c, r) => {
+    assert.equal(lines(r.stderr).filter((l) => l.includes('the staged module and driver are the same file')).length, 0, msg(r));
+    assert.equal(c.spawns(), 8, msg(r));
+});
 
 // =====================================================================================================
 // register: rows (+ twins on 221ff2ec), parity rows (pass on both builds), mutants -- bounded concurrency 4
@@ -513,6 +639,8 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
                 histGate(haveBase);
                 return withCase(BASE, x.cs, (c, r) => x.cs.check(c, r));
             });
+        } else if (x.kind === 'carrier') {
+            test(`stage boundary CARRIER ${x.name} (${x.desc}): the row passes on the carrier root`, { skip: sk }, () => withCase(variant(x.name, x.edits), x.cs, (c, r) => x.cs.check(c, r)));
         } else {
             test(`stage boundary MUTANT ${x.name} (${x.desc}): its row goes red`, { skip: sk }, (t) => withCase(variant(x.name, x.edits), x.cs, (c, r) => {
                 t.diagnostic(`${x.name}: rc=${r.status} stderr=${JSON.stringify(r.stderr.trim().slice(0, 200))}`);

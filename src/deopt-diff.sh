@@ -151,17 +151,18 @@
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
 #   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js or <top>/<same name>; and a git error while checking (e.g. safe.directory "dubious ownership")
-#   reads as untracked, so a tracked --before behind such an error is not refused. Known gaps, as in
-#   bytecode-budget: a TRACKED SYMLINK --module is a blob (mode 120000), so ref mode stages its target TEXT as the
-#   module (the driver then fails: NO-VERDICT, never a verdict on the link target); refs/replace swaps the staged
-#   blob (a `git replace` of a ref's blob stages the replacement, and the head's sha256/8 is the replacement's); a
-#   path value starting with '-' (e.g. --before -b.js) is read as an option by dirname / basename / stat and exits 2
-#   only through the EXIT trap ("unexpected error (exit 1)", 0 spawns, nothing written). The stage checks
-#   (lib/stage.sh): an unreadable (mode 000) DIR/stage passes the emptiness test, even when it is not empty, so the
-#   run spends its --version and --v8-options spawns and writes DIR/raw/before, DIR/raw/after and an empty
-#   DIR/report.txt before it dies "--out: cannot create DIR/stage/before and DIR/stage/after"; a DIR/stage that is a
-#   symlink to an empty directory gets the staged copies written through it, outside DIR (as a DIR/raw symlink already
-#   gets the raw files in driver mode).
+#   reads as untracked, so a tracked --before behind such an error is not refused. Known gap, as in
+#   bytecode-budget: refs/replace swaps the staged blob (a `git replace` of a ref's blob stages the replacement, and
+#   the head's sha256/8 is the replacement's).
+# Refused (ref / file mode, lib/stage.sh; exit 2 before any spawn or write, as in bytecode-budget): a --module that
+#   is not a regular file in git at a ref (a TRACKED SYMLINK is mode 120000: "is not a regular file in git (mode
+#   120000)"); a module and --driver whose file names are equal up to ASCII case (one file on a case-insensitive
+#   file system); a module or --driver file name with a non-ASCII byte (a Unicode case or NFC / NFD fold); a
+#   --driver whose directory bash's cd resolves to another file than the one read (a symlink before '..': a decoy
+#   driver would be staged); a DIR/stage that is a symlink ("is a symlink"; a dangling one is "exists and is not a
+#   directory"); and an unreadable, unsearchable or unwritable DIR/stage, refused as "is not empty" even when it is
+#   empty. A --before, --after or --driver value that starts with '-' is read as the file ./<value>, never as an
+#   option.
 # Tier section: read from run 1 of each side, printed after the fn lines (and the byte-identical NO-VERDICT line)
 #   in every report that reaches VERDICT. Every line starts "tier    " and none holds " -- " (a " -- " in a reason
 #   or file name prints as " - - "): "tier    REPORTED: run 1 of each side, never part of the verdict", then per
@@ -875,7 +876,7 @@ EOF
   # driver.js importing './trace.txt'); the fake node cats ./trace.txt from cwd = OUT/stage/<side>. tg isolates every
   # git call (no editor, no global / system config, no hooks, no signing, the six GIT_* vars stage_check refuses
   # unset) and sspawn runs this script with those six unset too, so the rows also run from inside a git hook. With no
-  # git on PATH, or a failed repo set-up, the 18 rows (S1-S4, R1-R14) are ONE FAIL line ---
+  # git on PATH, or a failed repo set-up, the 21 rows (S1-S4, R1-R17) are ONE FAIL line ---
   local g="$d/st" R="$d/st/R" frz="$d/st/frz/trace.txt" top="" sr=0
   local -a RR
   tg() { env -u GIT_EDITOR -u EDITOR -u VISUAL -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
@@ -893,7 +894,7 @@ EOF
       && ln "$R/m/trace.txt" "$g/hl/trace.txt" && top=$(tg -C "$R" rev-parse --show-toplevel); } >"$g/git.log" 2>&1 || sr=$?
   fi
   if ! command -v git >/dev/null 2>&1; then
-    check "ref / file modes: git on PATH (the 18 staged rows S1-S4, R1-R14 need git; no git fails closed)" "git not found on PATH" "git found"
+    check "ref / file modes: git on PATH (the 21 staged rows S1-S4, R1-R17 need git; no git fails closed)" "git not found on PATH" "git found"
   elif [[ $sr != 0 ]]; then
     check "ref / file modes: temp git repo set up (init, commits r1 r2, tags r1 r2)" "git exited $sr: $(tail -n 1 "$g/git.log")" "ok"
   else
@@ -961,6 +962,25 @@ EOF
     mkdir -p "$g/r14"; printf 'x\n' >"$g/r14/stage"
     srf "R14: OUT/stage a regular file" "--out: $g/r14/stage exists and is not a directory" \
       "$g/r14" - --out "$g/r14" --fn add --before-ref r1 --after-ref r2 "${RR[@]}"
+    # D1: d1/L -> d1/real/sub, so d1/L/../driver.js is d1/real/driver.js to the kernel (imports ./trace.txt) and the
+    # DECOY d1/driver.js to bash's logical cd, which stage_write would copy
+    mkdir -p "$g/d1/real/sub"; ln -s "$g/d1/real/sub" "$g/d1/L"
+    printf '%s\n' "import './trace.txt';" >"$g/d1/real/driver.js"; printf '%s\n' '// DECOY' >"$g/d1/driver.js"
+    srf "R15: a decoy --driver (DIR/L/../driver.js, L a symlink to DIR/real/sub)" \
+      "--driver: cannot resolve the directory of $g/d1/L/../driver.js (a symlink before '..'?)" \
+      "$g/r15" - --out "$g/r15" --fn add --before-ref r1 --after-ref r2 --module m/trace.txt --driver "$g/d1/L/../driver.js" --repo "$R"
+    # D6: a case-insensitive file system would stage the module TRACE.TXT and the driver trace.txt as one file
+    mkdir -p "$g/d6/drv"; printf '%s\n' "$T_DEOPT" >"$g/d6/TRACE.TXT"; printf '%s\n' "import './TRACE.TXT';" >"$g/d6/drv/trace.txt"
+    srf "R16: --after TRACE.TXT with --driver trace.txt (the same file name up to case)" \
+      "the module and --driver have the same file name up to case (TRACE.TXT / trace.txt): rename the driver" \
+      "$g/r16" - --out "$g/r16" --fn add --before "$frz" --after "$g/d6/TRACE.TXT" --driver "$g/d6/drv/trace.txt"
+    # Q-DD6a (i): APFS folds Unicode case and NFC / NFD, so an NFC-named module and an NFD-named driver would stage as
+    # one file: a byte outside printable ASCII in either name is refused (both names built from printf octal escapes)
+    local nfc nfd; nfc="tr$(printf '\303\251')ce.txt"; nfd="tre$(printf '\314\201')ce.txt"
+    mkdir -p "$g/du/drv"; printf '%s\n' "$T_DEOPT" >"$g/du/$nfc"; printf '%s\n' "import './$nfc';" >"$g/du/drv/$nfd"
+    srf "R17: --after an NFC-named module with an NFD-named --driver (non-ASCII file names)" \
+      "the module or --driver file name has a non-ASCII byte ($nfc / $nfd): rename it" \
+      "$g/r17" - --out "$g/r17" --fn add --before "$frz" --after "$g/du/$nfc" --driver "$g/du/drv/$nfd"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four dd): --out DIR whose raw/ is a symlink, or whose report.txt has another hard link ---

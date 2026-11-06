@@ -136,6 +136,11 @@
 #   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
 #   The mode line says "diff (ref)" or "diff (file)". Spawns, lines and verdict as in diff mode; DIR holds report.txt,
 #   raw/ and stage/. Every ref / file refusal exits 2 before any spawn and before anything is written to DIR.
+#   Refused too: a --module that is not a regular file in git at a ref (a tracked symlink is mode 120000), a module
+#   and --driver whose file names are equal up to ASCII case, a module or --driver file name with a non-ASCII byte
+#   (a Unicode case or NFC / NFD fold), a --driver whose directory bash's cd resolves to another file than the one
+#   read (a symlink before '..'), a DIR/stage that is a symlink, and an unreadable or unwritable DIR/stage ("is not
+#   empty"); a --before, --after or --driver value that starts with '-' is read as ./<value>.
 # Frozen "before" (file mode): --before must be a FROZEN copy. It is refused with NO-VERDICT when it, or the end of
 #   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js or
 #   <top>/<same name>, <top> = the repo around the current directory, around --after, around --before and its link
@@ -513,6 +518,25 @@ self_test() {
     check "ref / file refusals before any spawn (exit 2, 0 spawns, no OUT dir): --before-ref alone, no --diff, no --out (+1: its line says 'needs --out'), a driver without './mid.txt', a bad ref, a '..' --module, ref + file pairs, a tracked --before, --before a hard link of --after, GIT_DIR / GIT_INDEX_FILE set + a tracked --before, a non-empty OUT/stage (left as it was)" \
       "$got|$(find "$d" -maxdepth 1 -name 'rf*' | wc -l | tr -d ' ')|$(ls -A "$d/sne")" \
       "2:0+1 2:0+1 2:0+1 2:0 2:0 2:0+1 2:0 2:0 2:0 2:0 2:0 2:0 |0|stage"
+    # D7 (D1): d1/L -> d1/real/sub, so d1/L/../driver.mjs is d1/real/driver.mjs to the kernel (imports ./mid.txt) and
+    # the DECOY d1/driver.mjs to bash's logical cd, which stage_write would copy
+    mkdir -p "$d/d1/real/sub"; ln -s "$d/d1/real/sub" "$d/d1/L"
+    printf '%s\n' "import './mid.txt';" >"$d/d1/real/driver.mjs"; printf '%s\n' '// DECOY' >"$d/d1/driver.mjs"
+    check "D7 (D1) ref mode refused before any spawn: --driver DIR/L/../driver.mjs, L a symlink to DIR/real/sub (bash's cd would stage the decoy DIR/driver.mjs) -> exit 2, 0 spawns, 'cannot resolve the directory' once, no OUT" \
+      "$(sspawn - --out "$d/sd1" --diff --fn mid --before-ref r1 --after-ref r2 --module m/mid.txt --driver "$d/d1/L/../driver.mjs" --repo "$R")|$(grep -c -F -x -e "bytecode-budget: --driver: cannot resolve the directory of $d/d1/L/../driver.mjs (a symlink before '..'?)" "$d/sp.out" || true)|$(grep -c -e '^bytecode-budget: ' "$d/sp.out" || true)|$([[ -e "$d/sd1" ]] && echo OUT || echo no OUT)" \
+      "2|VERDICT NO-VERDICT|0|1|1|no OUT"
+    # D7 (D6): a case-insensitive file system would stage the module MID.TXT and the driver mid.txt as one file
+    mkdir -p "$d/d6/drv"; cp "$R/m/mid.txt" "$d/d6/MID.TXT"; printf '%s\n' "import './MID.TXT';" >"$d/d6/drv/mid.txt"
+    check "D7 (D6) file mode refused before any spawn: --after MID.TXT with --driver mid.txt (the same file name up to case) -> exit 2, 0 spawns, 'same file name up to case' once, no OUT" \
+      "$(sspawn - --out "$d/sd6" --diff --fn mid --before "$frz" --after "$d/d6/MID.TXT" --driver "$d/d6/drv/mid.txt")|$(grep -c -F -x -e 'bytecode-budget: the module and --driver have the same file name up to case (MID.TXT / mid.txt): rename the driver' "$d/sp.out" || true)|$(grep -c -e '^bytecode-budget: ' "$d/sp.out" || true)|$([[ -e "$d/sd6" ]] && echo OUT || echo no OUT)" \
+      "2|VERDICT NO-VERDICT|0|1|1|no OUT"
+    # D7 (Q-DD6a i): APFS folds Unicode case and NFC / NFD, so an NFC-named module and an NFD-named driver would stage as
+    # one file: a byte outside printable ASCII in either name is refused (both names built from printf octal escapes)
+    local nfc nfd; nfc="m$(printf '\303\251')d.txt"; nfd="me$(printf '\314\201')d.txt"
+    mkdir -p "$d/du/drv"; cp "$R/m/mid.txt" "$d/du/$nfc"; printf '%s\n' "import './$nfc';" >"$d/du/drv/$nfd"
+    check "D7 (Q-DD6a i) file mode refused before any spawn: --after m<NFC e-acute>d.txt with --driver m<NFD e + U+0301>d.txt (non-ASCII file names) -> exit 2, 0 spawns, 'has a non-ASCII byte' once, no OUT" \
+      "$(sspawn - --out "$d/sdu" --diff --fn mid --before "$frz" --after "$d/du/$nfc" --driver "$d/du/drv/$nfd")|$(grep -c -F -x -e "bytecode-budget: the module or --driver file name has a non-ASCII byte ($nfc / $nfd): rename it" "$d/sp.out" || true)|$(grep -c -e '^bytecode-budget: ' "$d/sp.out" || true)|$([[ -e "$d/sdu" ]] && echo OUT || echo no OUT)" \
+      "2|VERDICT NO-VERDICT|0|1|1|no OUT"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four): a symlinked raw/, a report.txt with another hard link -- refused before any write ---
