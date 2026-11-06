@@ -101,7 +101,7 @@ test('must-fail control: the same SIGTERM run with spec-only flags has no FILE D
 const HOOK = 'beforeEach(() => new Promise((r) => setImmediate(r)));';
 const SYNC_FILES = ['ext-audit.test.mjs', 'build.test.mjs', 'bytecode-budget.test.mjs', 'bytecode-budget-stage.test.mjs',
   'bytecode-budget-diff-boundary.test.mjs', 'inlining-budget-diff.test.mjs', 'death-signature.test.mjs',
-  'ext-audit-alloc.test.mjs', 'deopt-diff-live.test.mjs', 'bytecode-budget-order.test.mjs'];
+  'ext-audit-alloc.test.mjs', 'deopt-diff-live.test.mjs', 'bytecode-budget-order.test.mjs', 'env-strip.test.mjs'];
 
 test('hook row: every all-sync test file and every death fixture has the beforeEach flush hook exactly once', () => {
   const files = SYNC_FILES.map((f) => 'test/' + f).concat(readdirSync(join(ROOT, FIX)).sort().map((f) => FIX + f));
