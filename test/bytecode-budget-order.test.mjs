@@ -230,7 +230,7 @@ for (const m of ['ref', 'file']) {
 // =====================================================================================================
 // A2 (b): the staged-mismatch stdout, pinned whole (head, mode, out, the NO-VERDICT lines), empty stderr, exit 2.
 // Twin M-head-guard-off: without bb_head's staged-line guard the mismatch reads an unset DESC_B; under bash 3.2 that
-// unbound variable exits 0 (FINDING 2, lib/prologue.sh) -- the row must be red there.
+// unbound variable exits 2 via the G-FINAL trap (Q-F2a; "unexpected error" on stderr) -- the row goes red on its stdout / stderr pins.
 // =====================================================================================================
 for (const m of ['ref', 'file']) {
     row(`A2 (b) ${m}: the staged mismatch prints exactly head / mode / out + the NO-VERDICT lines, empty stderr, exit 2`, m, { check: (c, script, t) => {

@@ -582,12 +582,28 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 }
 
 // =====================================================================================================================
-// A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show bd1f283:<file>` (sha256/8 pinned)
+// A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show bd1f283:<file>` (sha256/8 pinned),
+// hunk-scoped since G-FINAL (Q-F2a, b45): the live root with its G-FINAL prologue block put back to the pre-G-FINAL
+// block (an exact-once, count-checked swap) must equal both references byte for byte
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
 // bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
 const PARITY = [['inlining-budget-diff.sh', '740da13b']];
+// the prologue block of the inlining-budget-diff.sh root: G-FINAL (live) and pre-G-FINAL (bd1f283 / p3g1)
+const GF_LIVE = '# Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2\n' +
+    '# set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.\n' +
+    'FINAL=""\n' +
+    String.raw`trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "inlining-budget-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
+const GF_OLD = '# Fail closed: an exit that is not a planned verdict (FINAL=1), a die / usage (2) or 0 becomes 2 NO-VERDICT,\n' +
+    '# so a command that fails under set -e can never pose as exit 1 DIFF. Subshells do not inherit this trap.\n' +
+    'FINAL=""\n' +
+    String.raw`trap 'rc=$?; if [[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]; then printf "inlining-budget-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
+function putBack(live) {   // Buffer -> Buffer: the G-FINAL block (exactly once) swapped for the pre-G-FINAL one
+    const s = live.toString('latin1'), n = s.split(GF_LIVE).length - 1;
+    assert.equal(n, 1, `the G-FINAL prologue block must match exactly once, matched ${n}`);
+    return Buffer.from(s.replace(GF_LIVE, () => GF_OLD), 'latin1');
+}
 function gitShow(rev, file) {
     const r = capSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26 }, 30000, 'git show');
     return r.status === 0 ? r.stdout : null;
@@ -607,18 +623,24 @@ for (const [file, want] of PARITY) {
     const frozen = join(FROZEN, file);
     test(`A4: ${file} sha256/8 ${want} and cmp-equal to .handoff/frozen/p3g1/${file}`,
         { skip: skip || (existsSync(frozen) ? false : 'frozen copy absent (.handoff/ is gitignored): not checked, never passed') }, () => {
-            assertParity(readFileSync(join(ROOT, file)), readFileSync(frozen), want);
+            assertParity(putBack(readFileSync(join(ROOT, file))), readFileSync(frozen), want);
         });
     test(`A4: ${file} cmp-equal to git show bd1f283:${file}`,
         { skip: skip || histSkip(hasGit) }, () => {
             histGate(hasGit);
             const ref = gitShow('bd1f283', file);
             assert.ok(ref, 'git show failed');
-            assertParity(readFileSync(join(ROOT, file)), ref, want);
+            assertParity(putBack(readFileSync(join(ROOT, file))), ref, want);
         });
     test(`A4 teeth: ${file} parity is red on a one-byte edit of the live bytes`, { skip }, () => {
-        const live = readFileSync(join(ROOT, file));
+        const live = putBack(readFileSync(join(ROOT, file)));
+        assertParity(live, live, want);   // control: the unedited bytes pass
         const m = Buffer.from(live); m[m.length - 2] ^= 1;
         assert.throws(() => assertParity(m, live, want), assert.AssertionError);
+    });
+    test(`A4 teeth: ${file} hunk-scoped parity is red on a one-byte edit inside the G-FINAL block`, { skip }, () => {
+        const live = readFileSync(join(ROOT, file));
+        const m = Buffer.from(live); m[live.indexOf('set +e;')] ^= 1;
+        assert.throws(() => putBack(m), assert.AssertionError);
     });
 }

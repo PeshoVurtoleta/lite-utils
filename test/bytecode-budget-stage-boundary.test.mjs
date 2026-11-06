@@ -349,7 +349,7 @@ row('4 --after -mod.js (driver imports ./-mod.js) -> read as ./-mod.js: exit 1 D
 const G1_LINE = '[[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"';
 mutant('M-dash-revert', 'the G1 ./ rewrite line removed', [[G1_LINE, ':']], CS_DASH_B, dashOld);
 // re-carried (PLAN A5 (2): M-trap-off was HOLLOW once G1 made row 4 a clean run): G1 removed AND the EXIT trap off -> rc 1 escapes
-mutant('M-trap-off', 'G1 line removed + EXIT trap condition -> false (rc 1 escapes)', [[G1_LINE, ':'], ['[[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]', 'false']], CS_DASH_B,
+mutant('M-trap-off', 'G1 line removed + EXIT trap condition -> false (rc 1 escapes)', [[G1_LINE, ':'], ['[[ -z $FINAL ]]', 'false']], CS_DASH_B,
     (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); assert.equal(c.spawns().length, 0, c.spawns().join('\n')); });
 // ext-audit (B1e): a dash-led --out is a supported DIR name (read as ./-o9, never as an option), so this is a clean run
 row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 7 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {

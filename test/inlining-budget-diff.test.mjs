@@ -72,7 +72,7 @@ const MUTANTS = [
         'an unexpected failure exits 2, never 1'],
     ['no-watch-refusal', 'if [[ -f "$(dirname "$BEFORE_FILE")/Watch.js" ]]; then refuse_live', 'if false; then refuse_live',
         'a symlinked Watch.js beside --before is refused'],
-    ['trap-ignores-final', '[[ -z $FINAL && $rc -ne 0', '[[ $rc -ne 0',
+    ['trap-ignores-final', '[[ -z $FINAL ]]', 'true',
         'a real DIFF exits 1'],
     ['no-final-before-verdict', 'FINAL=1\ncase "$VERDICT"', 'case "$VERDICT"',
         'a real DIFF exits 1'],
