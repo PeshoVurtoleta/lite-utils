@@ -19,15 +19,21 @@ import { fileURLToPath } from 'node:url';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 75;   // self-test ok lines at MD-46 G4 B1 ic (src de09b3e3 / root 7c0d3dbf, PLAN-md46 G4 TASK 5); a new check moves this literal
+const C = 76;   // self-test ok lines at b43 G-ENV B7 ic (src ed76aa62 / root 5c5a85d6, PLAN-b42-genv TASK 7: row 76 Q-ENV); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
-// the host environment never reaches the script (NODE_OPTIONS / NODE_COMPILE_CACHE would make the fake nodes exit 7;
-// NODE would pick another node; editor vars are git's)
+// the host environment never reaches the script (NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE /
+// NODE_REDIRECT_WARNINGS would make the fake nodes exit 7, so a mutant that drops a strip would be killed by the host
+// leak, not by its row: `node --test --experimental-test-coverage` sets NODE_V8_COVERAGE; NODE would pick another
+// node; editor vars are git's)
 const ENV = { ...process.env };
-for (const k of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE', 'GIT_EDITOR',
+    'EDITOR', 'VISUAL']) delete ENV[k];
+// node's child_process re-adds NODE_V8_COVERAGE to a spawn env that lacks the KEY (coverage always propagates), so
+// the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
+ENV.NODE_V8_COVERAGE = undefined;
 
-// The 75 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 76 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -104,6 +110,7 @@ const ROW = [null,
     /* 73 */ 'MD-46 allowlist (with --out):',
     /* 74 */ 'MD-56: a --v8-options list',
     /* 75 */ 'K3 second call: the hashed',
+    /* 76 */ 'Q-ENV: NODE_OPTIONS,',
 ];
 
 function selfTest(path) {
@@ -113,6 +120,9 @@ function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')
 function rowLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL ')); }
 
 // A copy of the script in DIR, with exact-once edits (each anchor must match exactly once, else the row is invalid).
+// b43 G-ENV (PLAN-b42-genv TASK 7 / 8): the Q-ENV top unset, a whole line. A mutant that drops a per-spawn env strip
+// (M22, M-v8fl-env, trace-env) also deletes it, else the top unset hides the drop (EQUIVALENT; census b43-env-ic).
+const ENV_TOP = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: once, before any spawn; no probe, allowlist read or trace run inherits them (the per-spawn strips stay)\n';
 function variant(dir, name, edits) {
     let src = readFileSync(SCRIPT, 'utf8');
     for (const [from, to] of edits) {
@@ -285,9 +295,11 @@ const B2 = [
     ["M23", [35], "--no-node-snapshot on the --version probe",
         [["GOT_VER=$(\"${PROBE_ENV[@]}\" \"$NODE_RES\" --version 2>/dev/null)",
           "GOT_VER=$(\"${PROBE_ENV[@]}\" \"$NODE_RES\" --version --no-node-snapshot 2>/dev/null)"]]],
+    // b43 G-ENV census: + the Q-ENV top-unset delete (else EQUIVALENT: the top unset hides the dropped strip)
     ["M22", [36], "env strip dropped from the --version probe",
         [["GOT_VER=$(\"${PROBE_ENV[@]}\" \"$NODE_RES\" --version 2>/dev/null)",
-          "GOT_VER=$(\"$NODE_RES\" --version 2>/dev/null)"]]],
+          "GOT_VER=$(\"$NODE_RES\" --version 2>/dev/null)"],
+         [ENV_TOP, ""]]],
     ["M24", [75], "--v8-options exit ignored",
         [["[[ \"$V8O_RC\" == 0 ]] || die \"cannot run $NODE_RES --v8-options\"",
           "true"]]],
@@ -430,13 +442,18 @@ const NEW = [
     ['M-v8fl-late', [54, 73, 74, 75], 'v8fl_check moved after the OUT / mktemp block (accepted runs unchanged)',
         [['\nv8fl_check "$NODE_RES"\n', '\n'],
          ['  RUNROOT="$IC_TMP"\nfi\n', '  RUNROOT="$IC_TMP"\nfi\nv8fl_check "$NODE_RES"\n']]],
-    ['M-v8fl-env', [36], 'v8fl_read env strip dropped (NODE_OPTIONS / NODE_COMPILE_CACHE reach the allowlist read)',
+    ['M-v8fl-env', [36], 'v8fl_read env strip dropped (NODE_OPTIONS / NODE_COMPILE_CACHE reach the allowlist read; the Q-ENV top unset deleted too)',
         [['  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?\n',
-          '  raw=$("$1" --v8-options 2>/dev/null) || rc=$?\n']]],
+          '  raw=$("$1" --v8-options 2>/dev/null) || rc=$?\n'],
+         [ENV_TOP, '']]],
     ['M-v8fl-afterhash', [73, 74], 'v8fl_check moved after the hashed --v8-options probe, before the INT / TERM trap',
         [['\nv8fl_check "$NODE_RES"\n', '\n'],
          ['\n[[ "$V8O_SHA" =~ ^[0-9a-f]{8}$ ]] || die "cannot hash the $NODE_RES --v8-options output"\n',
           '\n[[ "$V8O_SHA" =~ ^[0-9a-f]{8}$ ]] || die "cannot hash the $NODE_RES --v8-options output"\nv8fl_check "$NODE_RES"\n']]],
+    // b43 G-ENV TASK 8 (PLAN-b42-genv A1): the Q-ENV top unset deleted -> row 76 only (NODE_V8_COVERAGE /
+    // NODE_REDIRECT_WARNINGS reach the fake node at --version; NODE_OPTIONS / NODE_COMPILE_CACHE stay stripped per spawn)
+    ['M-env-off', [76], 'Q-ENV top unset deleted (NODE_V8_COVERAGE / NODE_REDIRECT_WARNINGS reach every spawn)',
+        [[ENV_TOP, '']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -525,7 +542,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 74 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 75 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -831,7 +848,7 @@ const A4 = [
         // teeth: a --version probe per trace run (B2 M21); the env strip dropped from the trace spawns (fake exits 7);
         // --no-node-snapshot dropped (M12); the mktemp moved into run_side (one per run)
         [['M21', [['  if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi\n', '  if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi\n  "${PROBE_ENV[@]}" "$NODE_RES" --version >/dev/null 2>&1\n']]],
-         ['trace-env', [['exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA', 'exec "$NODE_RES" ${V8_EXTRA']]],
+         ['trace-env', [['exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA', 'exec "$NODE_RES" ${V8_EXTRA'], [ENV_TOP, '']]],
          ['M12', [['TRACE_FLAGS=(--log-ic --no-concurrent-recompilation --no-node-snapshot)', 'TRACE_FLAGS=(--log-ic --no-concurrent-recompilation)']]],
          ['mktemp-per-run', [['  local -a LF\n', '  local -a LF\n  if [[ -z "$OUT" ]]; then rmdir "$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX")"; fi\n']]]]],
     ['A4 --out: 0 mktemp, exactly 13 files (report.txt + raw/<side>/run.<k>.{log,out}), report holds the verdict', a4Out,

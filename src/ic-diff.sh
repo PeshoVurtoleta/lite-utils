@@ -61,6 +61,8 @@
 #   exits 2 before anything is written. Probe die lines: `ic-diff: cannot run <node> --version`, `ic-diff: cannot run
 #   <node> --v8-options`, `ic-diff: <node> --v8-options printed nothing`, `ic-diff: <node> --v8-options lists no V8
 #   flag`, `ic-diff: cannot hash the <node> --v8-options output`.
+#   Before the first spawn the script unsets NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE and
+#   NODE_REDIRECT_WARNINGS, so no spawn inherits a preload, a coverage dir, a compile cache or a warning file.
 # Log files: V8 writes isolate-0x<addr>-<pid>-run.log in the run dir (DIR/raw/<side>, else <private dir>/<side>);
 #   exactly one such file per run is renamed run.<k>.log. Without --out: ONE
 #   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit; an INT / TERM ->
@@ -112,7 +114,8 @@
 #   every IC site of '<fn>' is X (no feedback) in run 1: try --v8-flags=--no-lazy-feedback-allocation
 #   Else the run-1 multisets V = `fn<TAB>kind<TAB>key<TAB>final[ mod]` of the two sides are compared (line:col is a
 #   label, never compared): SAME, or DIFF with one `  before=<a> after=<b>  <V>` line per differing V.
-# Report: `ic-diff  node <ver>  <abs node>  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)`; `v8-opts sha256/8 <x>` =
+# Report: `ic-diff  node <ver>  <abs node>  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE,
+#   NODE_REDIRECT_WARNINGS stripped)`; `v8-opts sha256/8 <x>` =
 #   the sha256/8 of the --v8-options byte stream (env -u NODE_OPTIONS <node> --v8-options | shasum -a 256), REPORTED,
 #   never part of the verdict; `before  <abs driver>  sha256/8 <x>`; `after   ...`; `mode    diff  runs <N>  v8 flags
 #   ...`; `out     <DIR>` (--out); then per fn `  <fn>: SAME -- identical IC multiset (before <n> | after <m>
@@ -131,6 +134,7 @@
 #   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: once, before any spawn; no probe, allowlist read or trace run inherits them (the per-spawn strips stay)
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
@@ -457,8 +461,9 @@ EOF
     "$FV|$(tr '\t\n' '|;' <"$d/df.out")" \
     "DIFF|  get: DIFF -- IC multiset differs (before 2 | after 2 site(s));  before=1 after=0  get|LoadIC|x|1;  before=1 after=2  get|LoadIC|x|P;"
 
-  # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log, exits 7 if NODE_OPTIONS or
-  # NODE_COMPILE_CACHE reached it; --version prints v26.8.2 (FAKE_VER_RC: that exit); --v8-options cats ./v8opts.txt
+  # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log, exits 7 if NODE_OPTIONS,
+  # NODE_V8_COVERAGE, NODE_COMPILE_CACHE or NODE_REDIRECT_WARNINGS reached it; --version prints v26.8.2 (FAKE_VER_RC:
+  # that exit); --v8-options cats ./v8opts.txt
   # (FAKE_OPTS_RC: that exit; FAKE_OPTS_EMPTY: prints nothing; both only on the FAKE_OPTS_AT-th --v8-options call, default
   # 1, counted in <its dir>/opts.n); else a trace run: exit 9 on a driver argument starting
   # with - (as node: "bad option"), copy ./ic.<n>.log or ./ic.log (n = its run count in that dir) to
@@ -469,6 +474,7 @@ EOF
   mkdir -p "$fk" "$mk" "$dr" "$d/cwd" "$d/tmp" "$d/cc"
   printf '%s\n' "#!$BASH" 'd=$(dirname "$0")' 'printf "%s\n" "$*" >>"$d/log"' \
     'if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_COMPILE_CACHE+x}" ]; then echo "env leaked"; exit 7; fi' \
+    'if [ -n "${NODE_OPTIONS+x}${NODE_V8_COVERAGE+x}${NODE_COMPILE_CACHE+x}${NODE_REDIRECT_WARNINGS+x}" ]; then echo "env leaked"; exit 7; fi' \
     'case "$1" in' \
     '  --version) if [ -n "${FAKE_VER_RC:-}" ]; then exit "$FAKE_VER_RC"; fi; echo v26.8.2; exit 0 ;;' \
     '  --v8-options) k=$(( $(cat "$d/opts.n" 2>/dev/null || echo 0) + 1 )); echo "$k" >"$d/opts.n"' \
@@ -523,7 +529,7 @@ EOF
   has() { grep -c -F -x -e "$1" "$d/sp.out" || true; }
   ents() { find "$d/tmp" "$d/cwd" "$dr/mono" "$dr/poly" "$dr/rc3" "$dr/term" -mindepth 1 | wc -l | tr -d ' '; }
   check "A3 / A7 R-a e2e: mono vs poly (R=3) -> exit 1 DIFF, 9 spawns (log lines 1-3 --version, --v8-options, --v8-options, then 6 trace runs), 1 mktemp, the before=0 after=1 line" \
-    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "  before=0 after=1  get${TB}LoadIC${TB}x${TB}P")|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")+$(sed -n 3p "$fk/log")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
+    "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "  before=0 after=1  get${TB}LoadIC${TB}x${TB}P")|$(sed -n 1p "$fk/log")+$(sed -n 2p "$fk/log")+$(sed -n 3p "$fk/log")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
     "1|VERDICT DIFF|9|1|1|--version+--v8-options+--v8-options|1"
   check "A3 e2e: mono vs mono2 (every address and the script path changed) -> exit 0 SAME; TMPDIR and cwd keep no new entry" \
     "$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(has '  get: SAME -- identical IC multiset (before 1 | after 1 site(s))')|$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" \
@@ -590,7 +596,7 @@ EOF
   mkd rpb "$MONO"; mkd rpa "$POLY"
   got=$(spawn PATH="nm:$mk:$PATH" -- --fn get "$dr/rpb/driver.js" "$dr/rpa/driver.js")
   check "A9 relative PATH (PATH=nm:...): all 3 + 2R spawns run the ONE binary resolved from the caller's cwd, named absolute in the header" \
-    "${got%|*|*|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "ic-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)")" \
+    "${got%|*|*|*}|$(wc -l <"$d/cwd/nm/log" | tr -d ' ')|$(cat "$dr/rpb/nm/log" "$dr/rpa/nm/log" 2>/dev/null | wc -l | tr -d ' ')|$(has "ic-diff  node v26.8.2  $d/cwd/nm/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
     "1|9|0|1"
   rm -rf "$d/cwd/nm"
   # A4 retention: 3 cycles of SAME / DIFF / NO-VERDICT and 1 SIGTERM mid-run leave TMPDIR, cwd and the driver dirs as they were
@@ -682,6 +688,9 @@ EOF
   check "K3 second call: the hashed --v8-options probe exits 1 (FAKE_OPTS_AT=2, with --out) -> exit 2, 3 spawns, 0 mktemp, the die line once, no OUT dir; prints nothing -> exit 2, 3 spawns, die once" \
     "$(spawn FAKE_OPTS_AT=2 FAKE_OPTS_RC=1 -- "$NO" --out "$d/o75" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: cannot run $fk/node --v8-options")|$([[ -e "$d/o75" ]] && echo exists || echo absent)#$(spawn FAKE_OPTS_AT=2 FAKE_OPTS_EMPTY=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has "ic-diff: $fk/node --v8-options printed nothing")" \
     "2|VERDICT NO-VERDICT|3|0|1|absent#2|VERDICT NO-VERDICT|3|0|1"
+  check "Q-ENV: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS set in the environment never reach any spawn (unset at the top; mono vs mono2 -> SAME, 9 spawns, 1 mktemp), the head line names all four" \
+    "$(spawn NODE_OPTIONS=--st-probe NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
+    "0|VERDICT SAME|9|1|1"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -825,7 +834,7 @@ else
   mkdir "$IC_TMP/before" "$IC_TMP/after" || die "cannot create the private log dirs in $IC_TMP"
   RUNROOT="$IC_TMP"
 fi
-say "ic-diff  node $GOT_VER  $NODE_RES  (NODE_OPTIONS, NODE_COMPILE_CACHE stripped)"
+say "ic-diff  node $GOT_VER  $NODE_RES  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
 say "v8-opts sha256/8 $V8O_SHA"
 say "before  $DESC_B"
 say "after   $DESC_A"
