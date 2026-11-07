@@ -188,6 +188,13 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   maintainer rules between the surviving proposals (Q-ids); the winner goes through the normal
   pipeline (coder -> reviewer), and its reproduction becomes a test row that fails on the audited
   build. Re-audit only what changed.
+- Q-AUDIT-RUBRIC (maintainer 2026-11-07, addendum): "Rubric by consequence". Decide by what happens when it
+  triggers, not how rare it is. (1) A finding that gives a
+  wrong verdict is FIXED, unless the fix costs a new design: then refuse cheaply and document. (2) A finding
+  that fails closed but is awkward is DOCUMENTED as a known limit. (3) A finding that needs a hostile setup
+  is DOCUMENTED under "not a security boundary", and fixed only if a one-line refusal does it. Documented
+  findings go to LEDGER section F and the README "Known limits" with their reproduction.
+  The reviewer argues each finding's class; the maintainer rules the disputed ones.
 
 ### Post-1.0 research leads (maintainer 2026-11-03: "Yes, please, add them")
 - These are LEADS, not plans. Each would start with a TASK 0 probe on the node of that day (a flag

@@ -992,9 +992,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   b5c4990c). Tier: DETERMINISTIC. Tests: new `test/final-trap.test.mjs` (63 rows: trap anchor, A1 per root
   with old-trap twins, A2 bash 3.2 lane + host row, stderr-closed rows, A3 exit-0 lint with must-fail
   rows, A5), re-anchored bb-sb M-trap-off and ibd trap-ignores-final, the dd-boundary ibd parity row now
-  hunk-scoped, `test/death-signature.test.mjs` SYNC_FILES gains the new file. Bash 5 (Linux CI) has not yet
-  been observed for the stderr-closed twin: pending CI. Reviews: B1
+  hunk-scoped, `test/death-signature.test.mjs` SYNC_FILES gains the new file. Bash 5 (Linux CI): the
+  stderr-closed twin was observed green on CI run 42301178926 (4 ubuntu-latest legs, bash 5.3.9). Reviews: B1
   .handoff/evidence/b45-gfinal/REVIEW-r1.md REJECTED (1 LITERAL test-comment blocker, folded into B2; the
   code hunks clean), then .handoff/evidence/b45-gfinal-b2/REVIEW-r1.md APPROVED;
   report .handoff/evidence/b45-gfinal/REPORT.md
   (local, untracked).
+
+- G-SHLIB (Q-SHLIB-A2 "Copied classifier"; dd audit argon 2026-11-07, A1a / A1b / A2; CLASS 1 = FIX under
+  Q-AUDIT-RUBRIC), bytecode-budget + deopt-diff file mode (b48): three shared-lib fail-opens closed. A1a: a
+  `--before` reached through a symlink before `..` (`ext/L/../trace.txt`) read as untracked because `is_tracked`
+  took its directory logically; it now uses `cd -P` + `pwd -P` (lib/tracked.sh). `STAGE_ABS_B` and `STAGE_ABS_A`
+  must now also be `-ef` the given file; else exit 2 "--before: cannot resolve the directory of FILE (a symlink
+  before '..'?)" (same for `--after`; the header would name a decoy path). A1b: a relative link inside a symlinked
+  directory (argon: `frz -> a/b`, `a/b/F -> ../m/F`) escaped the repo; `resolve_links` now joins it onto the
+  physical directory (lib/common.sh). A2: `live_tops` ran each `git rev-parse --show-toplevel` as `2>/dev/null ||
+  true`, so a git error read as "no top" (a broken repo around cwd / --after passed, exit 0 SAME). New `top_of`
+  (lib/common.sh) copies `is_tracked`'s classifier word for word (outside a repo = rc != 0 with a "(or any " first
+  line, or "false"; only "true" goes on to `--show-toplevel`); any other git answer dies in the MAIN shell: exit 2
+  "--before: git failed while checking whether FILE is tracked (<git's first line>)". New refusals, all exit 2
+  before any node spawn or write (bb / dd): the two "cannot resolve the directory of" lines, and that git line for
+  the work tree around the current directory, `--after` or `--before`. Behaviour change: a broken repo
+  (safe.directory "dubious ownership", a bad config, a corrupt index) around cwd, `--after` or `--before` now
+  refuses EVERY bb / dd file-mode run; a `--repo` git cannot read still exits 2 earlier with "--repo is not a git
+  work tree: DIR". Spawn budget: refuse_live 6 git spawns when cwd, `--before` and `--after` are all outside a repo,
+  +1 per in-repo dir; top_of 1 git outside a work tree, 2 inside (ref mode and the hot path unchanged; 14 golden
+  vectors byte-identical before / after). Coverage: bb and dd fixed; inlining-budget-diff gets A1b and A2 through
+  `lib/modes.sh` `refuse_live` (its `resolve_links` and `live_tops`), its A1a stays OPEN (its own logical
+  `is_tracked`; D-4a lead); ic / alloc never call `refuse_live`. `-h` of bb and dd: the git-error clause names the
+  work tree around cwd / `--after` / `--before` and the `--repo` exception; the Refused list gains the
+  symlink-before-`..` line. Roots: deopt-diff ea79be87 -> 08281215, bytecode-budget 03f88d58 -> c24c851b; ic-diff
+  d111a75a -> e921bfb1, allocation-diff 27366cf9 -> e7ae2068 and inlining-budget-diff (b5c4990c -> a9bf15d3) differ
+  only in lib text; inlining-budget-diff.sh keeps its parity pin 740da13b (hunk-scoped putBack, no re-pin). Tests:
+  `test/deopt-diff-stage.test.mjs` +22, `test/bytecode-budget-stage.test.mjs` +22 (rows R1-R6 on both tools, each
+  red with exit 0 SAME on the 5e570f0 root, and controls (a) / (b) that pass on both roots; mutants drop-P, drop-P +
+  resolve_links, drop `--before` / `--after` -ef, top_of die -> return 1, live_tops wrapped in a subshell), new
+  `test/shlib.test.mjs` (14 tests: drift gate for the copied classifier, ibd A1b + A2 rows, a resolve_links mutant,
+  spawn count and retention), `test/deopt-diff-boundary.test.mjs` +1 G-SHLIB putBack teeth row (A4 parity rows now
+  put back the 6 G-SHLIB hunks too), `test/inlining-budget-diff.test.mjs` 2 mutant anchors retargeted (no-after-top,
+  rel-link-unresolved; same check names). Argon (audit/2026-11-07-deopt-diff): "3 RED / 3 GREEN" on the new dd (A1a,
+  A1b, A2 green; A3, A4, A5 remain, out of scope); 6 RED on the 5e570f0 dd. `npm test`: 1980 tests, 1978 pass, 0
+  fail, 2 skipped, stderr empty (final tree, private copy with .git, node v26.8.2). Proven on macOS bash 3.2.57 /
+  git 2.54 only; Linux CI: pending (next push). Tier: DETERMINISTIC. Reviews:
+  .handoff/evidence/b48-shlib/REVIEW-X-r1.md REJECTED (1 LITERAL: the new `-h` clause was false for `--repo`), r2
+  (appended in REVIEW-X-r1.md) APPROVED; REVIEW-Y-r1.md (tests) APPROVED (local, untracked).
+
+- G-M3HOST (tests), `test/tracked.test.mjs`: M3's expected kills are measured from the host git's first line.
+  CI run 42301178926 (on 5e570f0) was red on all 8 legs from one row, "A3 mutant M3": "M3 killed rows: none": the
+  `missing` fixture (a .git file `gitdir: /nonexistent/...`) prints "fatal: not a git repository: (null)" on
+  local git 2.54 but another first line on CI's git, so M3 (drops "(or any " from the no-repo match) killed
+  nothing there. The live roots still died on `missing` (fail-closed): a host-text test bug, not a code bug. New
+  ERR case `gitdir` (GIT_DIR=/nonexistent/trk-gt-nowhere -> "fatal: not a git repository: '<path>'"), in
+  ERR_CASES, so every A1 row of the 4 roots and the ibd known-gap rows cover it; `firstLine(c)` measures each ERR
+  case's rev-parse rc + first line with the harness env, M3's expected kills are computed from those lines, every
+  line is a `t.diagnostic`, and the teeth floor requires gitdir in M3's target set. Every A3 row: killed-rows
+  diagnostic, then the unmutated-root loop, then the deepEqual. A PATH-first git wrapper that rewrites the
+  `missing` line reproduces CI locally (old test red "killed rows: none"; new test 73 / 73). Tier:
+  DETERMINISTIC. Reviews: b48-m3 r1 REJECTED (1 LITERAL stale count), r2 APPROVED. Local `npm test` 1921 tests,
+  1919 pass, 0 fail, 2 skip; pending CI (next push, 8 / 8).
