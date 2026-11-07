@@ -1,10 +1,10 @@
 // test/tracked.test.mjs -- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md ASSERTIONS A1, A3 mutants, A5).
 // Oracle: the PLAN assertions, not the implementation. The LAST `is_tracked()` defined in each of the bb / dd / ic /
 // alloc roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die` stub with
-// what=--before. Expected values come from the spec: 5 git error states -> exit 2 + a line starting
+// what=--before. Expected values come from the spec: the spec's 5 git error states plus gitdir (GIT_DIR to a missing dir, b48) -> exit 2 + a line starting
 // "--before: git failed while checking whether"; the controls (tracked 0, untracked in the repo 1, outside a repo 1,
 // inside .git/ 1, git off PATH 1) pass on the old and the new code. ibd keeps its single old definition: it returns 1 on
-// all 5 errors (a KNOWN GAP, logged for D-4a). The fixtures need no commit: `git add` alone makes a file tracked.
+// all 6 errors (a KNOWN GAP, logged for D-4a). The fixtures need no commit: `git add` alone makes a file tracked.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
@@ -112,7 +112,7 @@ function fx() {
 }
 
 // case table: path + env + expectation ('err' = exit 2 + die line; a number = harness prints rc=<n>)
-const ERR_CASES = ['gitfile', 'missing', 'config', 'index', 'dubious'];
+const ERR_CASES = ['gitfile', 'missing', 'config', 'index', 'dubious', 'gitdir'];
 function cases() {
     const f = fx();
     return {
@@ -121,12 +121,24 @@ function cases() {
         config: { kind: 'err', path: join(f.config, 't.txt'), env: {} },
         index: { kind: 'err', path: join(f.index, 't.txt'), env: {} },
         dubious: { kind: 'err', path: join(f.R, 't.txt'), env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' }, skip: DUBIOUS_SKIP },
+        // GIT_DIR to a missing dir: git's setup_explicit_git_dir prints "fatal: not a git repository: '<dir>'" (rc 128) on every git
+        gitdir: { kind: 'err', path: join(f.R, 't.txt'), env: { GIT_DIR: '/nonexistent/trk-gt-nowhere' } },
         tracked: { kind: 'rc', rc: 0, path: join(f.R, 't.txt'), env: {} },
         untracked: { kind: 'rc', rc: 1, path: join(f.R, 'u.txt'), env: {} },
         outside: { kind: 'rc', rc: 1, path: join(f.out, 'f.txt'), env: {} },
         dotgit: { kind: 'rc', rc: 1, path: join(f.R, '.git', 'HEAD'), env: {} },
         nogit: { kind: 'rc', rc: 1, path: join(f.R, 't.txt'), env: { PATH: f.nogitBin } },
     };
+}
+// measured rc + first output line of the rev-parse is_tracked runs for case c (stdout+stderr, as its `2>&1` sees it)
+function firstLine(c) {
+    const r = capSync('git', ['-C', dirname(c.path), 'rev-parse', '--is-inside-work-tree'],
+        { encoding: 'utf8', env: { ...ENV, GIT_CEILING_DIRECTORIES: fx().top, LC_ALL: 'C', ...c.env } }, 30000, 'git rev-parse (firstLine)');
+    return { rc: r.status, line: ((r.stdout || '') + (r.stderr || '')).split('\n')[0] };
+}
+// M3 kills a case iff git failed and its first line starts "fatal: not a git repository" without "(or any " (host text, measured)
+function m3Kills(fl) {
+    return fl.rc !== 0 && fl.line.startsWith('fatal: not a git repository') && !fl.line.startsWith('fatal: not a git repository (or any ');
 }
 function litVerdict(rootsDir, file) { // null, or why not: ":x.js" tracked -> 0; untracked "*" beside tracked files -> 1
     const f = fx();
@@ -174,7 +186,7 @@ function verdict(c, r, ibd = false) {
     }
     if (ibd && !(c.kind === 'rc' && c.rc === 0)) {
         // ibd's old definition is `rev-parse && ls-files` with all output discarded: every non-tracked state reads as
-        // "not tracked" (nonzero; git's own 1 / 128 / 127 passes through) and nothing dies. For the 5 errors that is the
+        // "not tracked" (nonzero; git's own 1 / 128 / 127 passes through) and nothing dies. For the 6 errors that is the
         // KNOWN GAP (D-4a). The spec said "returns 1"; the exact value is git's, so only "nonzero, no die" is asserted.
         const m = /^rc=(\d+)\n$/.exec(r.stdout);
         if (r.status !== 0 || m === null || Number(m[1]) === 0 || r.stderr !== '') return `want a nonzero rc and no die, got exit ${r.status} stdout ${JSON.stringify(r.stdout)} stderr ${JSON.stringify(r.stderr)}`;
@@ -210,7 +222,7 @@ for (const file of FOUR) {
     });
 }
 
-// ---- A1: ibd keeps exactly one definition; it still returns 1 on all 5 errors (KNOWN GAP, logged for D-4a) ----
+// ---- A1: ibd keeps exactly one definition; it still returns 1 on all 6 errors (KNOWN GAP, logged for D-4a) ----
 test(`A1 ${IBD}: exactly 1 is_tracked() definition`, { skip }, () => {
     assert.equal(defCount(readFileSync(join(ROOT, IBD), 'utf8')), 1);
 });
@@ -279,10 +291,11 @@ const ANCHOR_GUARD = '  command -v git >/dev/null 2>&1 || return 1\n';
 const MUTANTS = [
     // M1: ls-files back to a plain exit test (any failure reads as untracked) -> the truncated-index row dies
     { id: 'M1', from: '    [[ $rc -ne 0 ]] || return 0\n', to: '    [[ $rc -ne 0 ]] || return 0\n    return 1\n', exact: ['index'], kills: ['index'] },
-    // M2: any rev-parse failure returns 1 -> broken gitfile, bad config, dubious ownership (and missing dir) are no longer refused
-    { id: 'M2', from: '    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac\n', to: '    return 1\n', exact: ['gitfile', 'missing', 'config', 'dubious'], kills: ['gitfile', 'config', 'dubious'] },
-    // M3: the "(or any " part of the no-repo match dropped -> "fatal: not a git repository: <path>" (gitfile to a missing dir) reads as no repo
-    { id: 'M3', from: '"fatal: not a git repository (or any "*)', to: '"fatal: not a git repository"*)', exact: ['missing'], kills: ['missing'] },
+    // M2: any rev-parse failure returns 1 -> broken gitfile, bad config, dubious ownership, GIT_DIR to a missing dir (and a .git file to a missing dir) are no longer refused
+    { id: 'M2', from: '    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac\n', to: '    return 1\n', exact: ['gitfile', 'missing', 'config', 'dubious', 'gitdir'], kills: ['gitfile', 'config', 'dubious', 'gitdir'] },
+    // M3: the "(or any " part of the no-repo match dropped -> "fatal: not a git repository: '<path>'" (GIT_DIR to a missing dir) reads as no repo.
+    // exact is computed per host from the measured first lines (git's text for a .git file to a missing dir differs by host); see the M3 row
+    { id: 'M3', from: '"fatal: not a git repository (or any "*)', to: '"fatal: not a git repository"*)', exact: null, kills: ['gitdir'] },
     // M4: the `false` arm removed -> inside .git/ is no longer "not tracked"
     { id: 'M4', from: '  elif [[ "$out" == false ]]; then\n    return 1\n', to: '', exact: ['dotgit'], kills: ['dotgit'] },
     // M5: the `command -v` guard removed -> git off PATH is no longer "not tracked"
@@ -304,10 +317,17 @@ for (const m of MUTANTS) {
         }
         for (const file of FOUR) { const msg = litVerdict(out, file); if (msg !== null) killed.set(`${file}:lit`, msg); }
         t.diagnostic(`${m.id} killed rows: ${[...killed.keys()].join(', ') || 'none'}`);
-        const want = [];
-        for (const file of FOUR) for (const n of m.exact) if (!(n === 'dubious' && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
-        assert.deepEqual([...killed.keys()].sort(), want.sort(), `${m.id}: killed rows must be exactly the mutant's targets`);
-        // the unmutated live roots pass every one of these rows (so each kill above is the mutation's, not the fixtures')
+        const measured = new Map();
+        for (const n of ERR_CASES) if (!(n === 'dubious' && DUBIOUS_SKIP)) { const fl = firstLine(cs[n]); measured.set(n, fl); t.diagnostic(`first line ${n}: rc=${fl.rc} ${JSON.stringify(fl.line)}`); }
+        const exact = m.exact !== null ? m.exact : [...measured.keys()].filter((n) => m3Kills(measured.get(n)));
+        if (m.exact === null) {
+            t.diagnostic(`${m.id} measured target set: ${exact.join(', ') || 'none'}`);
+            assert.ok(exact.includes('gitdir'), `${m.id}: teeth floor: the gitdir case must be a target on this host, measured ${JSON.stringify(measured.get('gitdir'))}`);
+        }
+        // the unmutated live roots pass every one of these rows (so each kill below is the mutation's, not the fixtures')
         for (const file of FOUR) for (const n of names) assert.equal(verdict(cs[n], run(ROOT, file, cs[n])), null, `${file}:${n} on the unmutated root`);
+        const want = [];
+        for (const file of FOUR) for (const n of exact) if (!(n === 'dubious' && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
+        assert.deepEqual([...killed.keys()].sort(), want.sort(), `${m.id}: killed rows must be exactly the mutant's targets`);
     });
 }
