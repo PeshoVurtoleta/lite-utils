@@ -1,10 +1,11 @@
 // test/tracked.test.mjs -- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md ASSERTIONS A1, A3 mutants, A5).
 // Oracle: the PLAN assertions, not the implementation. The LAST `is_tracked()` defined in each of the bb / dd / ic /
 // alloc roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die` stub with
-// what=--before. Expected values come from the spec: the spec's 5 git error states plus gitdir (GIT_DIR to a missing dir, b48) -> exit 2 + a line starting
-// "--before: git failed while checking whether"; the controls (tracked 0, untracked in the repo 1, outside a repo 1,
-// inside .git/ 1, git off PATH 1) pass on the old and the new code. ibd keeps its single old definition: it returns 1 on
-// all 6 errors (a KNOWN GAP, logged for D-4a). The fixtures need no commit: `git add` alone makes a file tracked.
+// what=--before. Expected values come from the spec: its 5 git error states plus gitdir (GIT_DIR to a missing dir,
+// b48) -> exit 2 + a line starting "--before: git failed while checking whether"; the controls (tracked 0,
+// untracked in the repo 1, outside a repo 1, inside .git/ 1, git off PATH 1) pass on the old and the new code. ibd
+// keeps its single old definition: it returns nonzero (no die) on all 6 errors (a KNOWN GAP, logged for D-4a). The
+// fixtures need no commit: `git add` alone makes a file tracked.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
@@ -222,7 +223,8 @@ for (const file of FOUR) {
     });
 }
 
-// ---- A1: ibd keeps exactly one definition; it still returns 1 on all 6 errors (KNOWN GAP, logged for D-4a) ----
+// ---- A1: ibd keeps exactly one definition; it still returns nonzero (no die) on all 6 errors ----
+// (KNOWN GAP, logged for D-4a)
 test(`A1 ${IBD}: exactly 1 is_tracked() definition`, { skip }, () => {
     assert.equal(defCount(readFileSync(join(ROOT, IBD), 'utf8')), 1);
 });

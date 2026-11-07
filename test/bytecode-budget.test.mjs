@@ -146,7 +146,8 @@ const MUTANTS = [
     ['cap-off', ' && length($3) <= 9 {', ' {', 'a length has 1..9 digits'],
     ['cap-8', 'length($3) <= 9', 'length($3) <= 8', 'a length has 1..9 digits'],
     ['cap-10', 'length($3) <= 9', 'length($3) <= 10', 'a length has 1..9 digits'],
-    // ext-audit B-four bb (plan TASK 5 / A2): each kills exactly one of self-test checks 50-54, in order
+    // ext-audit B-four bb (plan TASK 5 / A2): each kills exactly one of self-test checks 55 (M36), 56 (M37),
+    // 58 (M40), 59 (M42), 60 (M44), in that order (57 is MD-FIFO, killed by M-fifo-off)
     ['M36-raw-symlink-off', '[[ ! -L "$OUT/raw" ]]', 'true', 'MD-36 refused before any spawn', true],
     ['M37-report-hardlink-off', '[[ ! -f "$OUT/report.txt" ]]', 'true', 'MD-37 refused before any spawn', true],
     // G-FIFO b46: the self-test row holds the FIFO open read-write, so this mutant fails the row (spawns, raw/) instead of hanging

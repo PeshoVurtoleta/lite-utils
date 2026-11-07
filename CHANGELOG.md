@@ -33,15 +33,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--fixtures DIR`, an empty separate value for any value option (`--fixtures ''`, `--out ''`), an
   empty `--opt=` value (`--fn=`, `--runs=`), `--self-test` / `--help` with `=value`, and a `--v8-flags`
   of only blanks (`' '`, a tab). The node version must match exactly (v26.8.2-pre is not v26.8.2).
-  `--self-test` (54 canned checks, 57 after MD-46, 64 after G-FIFO; the 4 ref / file rows need git: with no git on PATH they are one
-  FAIL line and `--self-test` exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
+  `--self-test` (54 canned checks, 57 after MD-46, 60 after G-STAGE, 61 after G-ENV, 63 after G-TRACKED, 64 after
+  G-FIFO; the 9 staged ref / file rows need git: with no git on PATH they are one FAIL line and `--self-test`
+  exits 1) and `--self-test --fixtures DIR` (+24 checks on node v26.8.2
   captures in `test/fixtures/bytecode-budget/node-26.8.2/`).
   DETERMINISTIC (gated in `npm test` via `test/bytecode-budget.test.mjs`, 152 tests; 161 after MD-46, 162 after
-  Q-H1, 166 after G-FIFO): the exact self-test counts (54 and 54+24; 57 and 81 after MD-46; 64 and 88 after G-FIFO), 24 self-test mutant rows, 25 after G-FIFO (17 report/gate, 18 after G-FIFO with M-fifo-off,
-  3 of them on the length cap and 5 on the B-four refusals, + 7 diff) plus a NODE_OPTIONS-leak and a version-prefix
-  mutant that must each be caught, gate rows on a fake node, 48 refusal rows with 0 node spawns (41 report/gate + 7
-  diff), the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs; 9 after MD-46), and a live pair on
-  node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must exit 2 with a version-mismatch
+  Q-H1, 163 after G-ENV, 166 after G-FIFO): the exact self-test counts (54 and 54+24; 57 and 81 after MD-46; 60 and
+  84 after G-STAGE; 61 and 85 after G-ENV; 63 and 87 after G-TRACKED; 64 and 88 after G-FIFO), 24 self-test mutant
+  rows, 25 after G-FIFO (17 report/gate, 18 after G-FIFO with M-fifo-off, 3 of them on the length cap and 5 on the
+  B-four refusals, + 7 diff: the 6 DIFF_MUTANTS plus the --diff / --max exclusion mutant) plus a NODE_OPTIONS-leak
+  and a version-prefix mutant that must each be caught, gate rows on a fake node, 48 refusal rows with 0 node spawns
+  (41 report/gate + 7 diff), the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs; 9 after
+  MD-46), and a live pair on node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must exit
+  2 with a version-mismatch
   NO-VERDICT). REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
   distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
   load1 2.31 before / 2.49 after, 4 other node processes before / 8 after, none >= 10% CPU before,
@@ -755,8 +759,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   both survived before); 224 -> 226 tests in the file. Revert check on the 6fde4a26 root: the G-FIFO row is red by
   its 30 s SIGKILL cap, the self-test counts C / C+F are red (63 / 87), M-fifo-off and the twin are red (anchor 0),
   bb N10 (wrong message) and bb N12 (raw/ left behind) are red. Tier: DETERMINISTIC. Review:
-  .handoff/evidence/b47-fifo/REVIEW-r1.md APPROVED (no blockers; three NITs: the bb gates for the two clause arms, the
-  two refusal changes above, and a stale `checks 50-54` comment at test/bytecode-budget.test.mjs:149 (still open)) (local, untracked).
+  .handoff/evidence/b47-fifo/REVIEW-r1.md APPROVED (no blockers; three NITs: the bb gates for the two clause arms,
+  the two refusal changes above, and a stale `checks 50-54` comment at test/bytecode-budget.test.mjs:149 (fixed in
+  b49)) (local, untracked).
 
 ### Changed
 
@@ -1033,7 +1038,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rel-link-unresolved; same check names). Argon (audit/2026-11-07-deopt-diff): "3 RED / 3 GREEN" on the new dd (A1a,
   A1b, A2 green; A3, A4, A5 remain, out of scope); 6 RED on the 5e570f0 dd. `npm test`: 1980 tests, 1978 pass, 0
   fail, 2 skipped, stderr empty (final tree, private copy with .git, node v26.8.2). Proven on macOS bash 3.2.57 /
-  git 2.54 only; Linux CI: pending (next push). Tier: DETERMINISTIC. Reviews:
+  git 2.54 locally; Linux CI: observed green on CI run 42332588363 (ubuntu, bash 5). Tier: DETERMINISTIC. Reviews:
   .handoff/evidence/b48-shlib/REVIEW-X-r1.md REJECTED (1 LITERAL: the new `-h` clause was false for `--repo`), r2
   (appended in REVIEW-X-r1.md) APPROVED; REVIEW-Y-r1.md (tests) APPROVED (local, untracked).
 
@@ -1049,4 +1054,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   diagnostic, then the unmutated-root loop, then the deepEqual. A PATH-first git wrapper that rewrites the
   `missing` line reproduces CI locally (old test red "killed rows: none"; new test 73 / 73). Tier:
   DETERMINISTIC. Reviews: b48-m3 r1 REJECTED (1 LITERAL stale count), r2 APPROVED. Local `npm test` 1921 tests,
-  1919 pass, 0 fail, 2 skip; pending CI (next push, 8 / 8).
+  1919 pass, 0 fail, 2 skip; observed green on CI run 42332588363 (8 / 8); CI git 2.56 prints
+  'fatal: gitfile does not point to a valid repository: <path>' for `missing`.
