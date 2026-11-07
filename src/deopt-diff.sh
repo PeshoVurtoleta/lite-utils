@@ -146,9 +146,10 @@
 #   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 #   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
 #   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
-#   A git error while checking whether --before is tracked (safe.directory "dubious ownership", a broken .git
-#   file, a bad config, a corrupt index) exits 2: "--before: git failed while checking whether FILE is tracked
-#   (<git's first line>)".
+#   A git error while checking whether --before is tracked, or while finding the work tree around the current
+#   directory, --after or --before (safe.directory "dubious ownership", a broken .git file, a bad config, a corrupt
+#   index) exits 2: "--before: git failed while checking whether FILE is tracked (<git's first line>)"; a --repo git
+#   cannot read exits 2 before this check: "--repo is not a git work tree: DIR".
 # Not detected: a deopt of an inlined function counts only for the JSFunction named on the bailout line (its
 #   caller); a dependency invalidation of code that is not on the stack (`[marking dependent code ...]`, no
 #   bailout line) is not a deopt record; a driver that itself prints trace-like text (`[bailout` /
@@ -165,7 +166,9 @@
 #   120000)"); a module and --driver whose file names are equal up to ASCII case (one file on a case-insensitive
 #   file system); a module or --driver file name with a non-ASCII byte (a Unicode case or NFC / NFD fold); a
 #   --driver whose directory bash's cd resolves to another file than the one read (a symlink before '..': a decoy
-#   driver would be staged); a DIR/stage that is a symlink ("is a symlink"; a dangling one is "exists and is not a
+#   driver would be staged); a --before or --after whose directory bash's cd resolves to another file than the one
+#   read (a symlink before '..': "--before: cannot resolve the directory of FILE", the header would name a decoy
+#   path); a DIR/stage that is a symlink ("is a symlink"; a dangling one is "exists and is not a
 #   directory"); and an unreadable, unsearchable or unwritable DIR/stage, refused as "is not empty" even when it is
 #   empty. A --before, --after or --driver value that starts with '-' is read as the file ./<value>, never as an
 #   option.

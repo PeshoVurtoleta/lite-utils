@@ -7,8 +7,8 @@
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
   command -v git >/dev/null 2>&1 || return 1
-  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd) || return 1
-  b=$(basename "$1")
+  d=$(cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1
+  b=$(basename -- "$1")
   out=$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1) || rc=$?
   l=${out%%$'\n'*}
   if [[ $rc -ne 0 ]]; then

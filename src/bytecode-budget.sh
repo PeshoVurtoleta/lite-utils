@@ -146,8 +146,10 @@
 #   Refused too: a --module that is not a regular file in git at a ref (a tracked symlink is mode 120000), a module
 #   and --driver whose file names are equal up to ASCII case, a module or --driver file name with a non-ASCII byte
 #   (a Unicode case or NFC / NFD fold), a --driver whose directory bash's cd resolves to another file than the one
-#   read (a symlink before '..'), a DIR/stage that is a symlink, and an unreadable or unwritable DIR/stage ("is not
-#   empty"); a --before, --after or --driver value that starts with '-' is read as ./<value>.
+#   read (a symlink before '..'), a --before or --after whose directory bash's cd resolves to another file than the
+#   one read (a symlink before '..': "--before: cannot resolve the directory of FILE"), a DIR/stage that is a
+#   symlink, and an unreadable or unwritable DIR/stage ("is not empty"); a --before, --after or --driver value that
+#   starts with '-' is read as ./<value>.
 #   The staging itself runs after --version and the allowlist read (2 spawns): a failed copy, or a file system that
 #   still maps the staged module and driver to one file ("the same file on this file system"), exits 2 with DIR
 #   holding raw/ (raw/before and raw/after empty), an empty report.txt (no head yet) and a partial stage/.
@@ -158,9 +160,10 @@
 #   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 #   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
 #   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
-#   A git error while checking whether --before is tracked (safe.directory "dubious ownership", a broken .git
-#   file, a bad config, a corrupt index) exits 2: "--before: git failed while checking whether FILE is tracked
-#   (<git's first line>)".
+#   A git error while checking whether --before is tracked, or while finding the work tree around the current
+#   directory, --after or --before (safe.directory "dubious ownership", a broken .git file, a bad config, a corrupt
+#   index) exits 2: "--before: git failed while checking whether FILE is tracked (<git's first line>)"; a --repo git
+#   cannot read exits 2 before this check: "--repo is not a git work tree: DIR".
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
 #   self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js or <top>/<same name>; and a .git that git does not recognise as a

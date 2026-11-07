@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync, statSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync, statSync, symlinkSync, realpathSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -531,3 +531,144 @@ test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --
     assert.equal(okLines(r.stdout).length, 64);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, n);
 });
+
+// =====================================================================================================
+// G-SHLIB (PLAN-b48-shlib ASSERTIONS 2-3, written from the ASSERTIONS, not from lib/): file mode, fake node.
+// R1 --before ext/L/../F physically tracked; R2 / R3 --before / --after DIR/L2/../F with an untracked decoy DIR/F;
+// R4 argon A1b (rel symlink inside a symlinked dir); R5 / R6 a bad .git/config around --after / cwd with a tracked
+// hard-linked --before. Every R row: exit 2, the stderr prefix (git's own text is never matched), 0 node spawns,
+// OUT absent. Each R row has a must-fail twin on the frozen b48 BEFORE root (exit 0 VERDICT SAME, row check red).
+// All module bodies are identical, so a root that does not refuse ends in exit 0 SAME.
+// =====================================================================================================
+const SH_NAME = 'mod.js', SH_BODY = '212\n', SH_PFX = 'bytecode-budget', SH_SPAWNS = 7;
+// the b48 BEFORE root = HEAD 5e570f0 (on origin/main; its refuse_live text is the pre-G-SHLIB text), read from git history
+const SH_HAVE = spawnSync('git', ['-C', join(HERE, '..'), 'cat-file', '-e', '5e570f0^{commit}'], { env: cleanEnv() }).status === 0 ? true : 'commit 5e570f0 missing (shallow clone?)';
+let SH_BEFORE_ROOT = null;
+if (!skip && SH_HAVE === true) {
+    const s = spawnSync('git', ['-C', join(HERE, '..'), 'show', '5e570f0:bytecode-budget.sh'], { env: cleanEnv(), maxBuffer: 64 << 20 });
+    if (s.status === 0) { SH_BEFORE_ROOT = join(ROOT, 'b48-before-5e570f0-bytecode-budget.sh'); writeFileSync(SH_BEFORE_ROOT, s.stdout); chmodSync(SH_BEFORE_ROOT, 0o755); }
+}
+const shBeforeSkip = skip || histSkip(SH_BEFORE_ROOT ? true : (SH_HAVE === true ? 'git show 5e570f0:bytecode-budget.sh failed' : SH_HAVE));
+const shEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const shRun = (script, cs, body) => { const { c, r } = runOn(script, cs); return body(c, r); };
+const shPut = (p, body = SH_BODY) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, body); };
+const shD = (c) => { c.d = join(realpathSync(c.dir), 's'); mkdirSync(c.d, { recursive: true }); return c.d; };
+function shRepo(dir, files) { mkdirSync(dir, { recursive: true }); git(dir, 'init', '-q'); for (const f of files) shPut(join(dir, f)); git(dir, 'add', ...files); }
+const shO = (c) => fileO(c, { '--before': c.before, '--after': c.after });
+const shPrefix = (text) => (c) => new RegExp('^' + SH_PFX + ': ' + shEsc(typeof text === 'function' ? text(c) : text), 'm');
+function shRefuses(rxOf) {
+    return (c, r) => {
+        assert.equal(r.status, 2, msg(r));
+        assert.match(r.stderr, rxOf(c), msg(r));
+        assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+        assert.ok(!existsSync(c.out), 'OUT was created');
+    };
+}
+// R1 (argon A1a before): ext/L -> repo/m/sub, so ext/L/../F is repo/m/F (tracked); the decoy ext/F is what bash's logical join names
+const shPrepR1 = (c) => {
+    const d = shD(c); shRepo(join(d, 'repo'), ['m/' + SH_NAME]); mkdirSync(join(d, 'repo', 'm', 'sub')); mkdirSync(join(d, 'ext'));
+    symlinkSync(join(d, 'repo', 'm', 'sub'), join(d, 'ext', 'L')); shPut(join(d, 'ext', SH_NAME)); shPut(join(d, 'after', SH_NAME));
+    c.before = `${d}/ext/L/../${SH_NAME}`; c.after = join(d, 'after', SH_NAME);
+};
+// R2: ext/L2 -> real/sub, so ext/L2/../F is real/F (untracked, outside any repo); decoy ext/F. R3: the same shape on --after
+const shPrepR2 = (c) => {
+    const d = shD(c); mkdirSync(join(d, 'real', 'sub'), { recursive: true }); mkdirSync(join(d, 'ext')); shPut(join(d, 'real', SH_NAME));
+    symlinkSync(join(d, 'real', 'sub'), join(d, 'ext', 'L2')); shPut(join(d, 'ext', SH_NAME)); shPut(join(d, 'after', SH_NAME));
+    c.before = `${d}/ext/L2/../${SH_NAME}`; c.after = join(d, 'after', SH_NAME);
+};
+const shPrepR3 = (c) => {
+    const d = shD(c); mkdirSync(join(d, 'real', 'sub'), { recursive: true }); mkdirSync(join(d, 'ext')); shPut(join(d, 'real', SH_NAME));
+    symlinkSync(join(d, 'real', 'sub'), join(d, 'ext', 'L2')); shPut(join(d, 'ext', SH_NAME)); shPut(join(d, 'frz', SH_NAME));
+    c.before = join(d, 'frz', SH_NAME); c.after = `${d}/ext/L2/../${SH_NAME}`;
+};
+// R4 (argon A1b): a/b/F -> ../m/F (tracked a/m/F), frz -> a/b, decoy d/m/F outside the repo; --before frz/F
+const shPrepR4 = (c) => {
+    const d = shD(c); shRepo(join(d, 'a'), ['m/' + SH_NAME]); mkdirSync(join(d, 'a', 'b')); shPut(join(d, 'm', SH_NAME));
+    symlinkSync('../m/' + SH_NAME, join(d, 'a', 'b', SH_NAME)); symlinkSync(join(d, 'a', 'b'), join(d, 'frz')); shPut(join(d, 'after', SH_NAME));
+    c.before = join(d, 'frz', SH_NAME); c.after = join(d, 'after', SH_NAME);
+};
+// R5 (argon A2): frz/F is a hard link to the tracked repo/F; --after repo/after/F; the repo's .git/config is `[broken`
+const shPrepR5 = (broken) => (c) => {
+    const d = shD(c); shRepo(join(d, 'repo'), [SH_NAME]); shPut(join(d, 'repo', 'after', SH_NAME)); mkdirSync(join(d, 'frz'));
+    linkSync(join(d, 'repo', SH_NAME), join(d, 'frz', SH_NAME));
+    c.before = join(d, 'frz', SH_NAME); c.after = join(d, 'repo', 'after', SH_NAME);
+    if (broken) writeFileSync(join(d, 'repo', '.git', 'config'), '[broken\n');
+};
+// R6: the same around cwd: cwd is the repo holding the tracked F, --after is outside any repo
+const shPrepR6 = (broken) => (c) => {
+    const d = shD(c); shRepo(c.cwd, [SH_NAME]); mkdirSync(join(d, 'frz')); linkSync(join(c.cwd, SH_NAME), join(d, 'frz', SH_NAME));
+    c.before = join(d, 'frz', SH_NAME); c.after = shPut(join(d, 'after', SH_NAME)) || join(d, 'after', SH_NAME);
+    if (broken) writeFileSync(join(c.cwd, '.git', 'config'), '[broken\n');
+};
+const SH_TRACKED = 'before is a git-tracked working-tree file ('.replace('before', '--before');
+const SH_GITFAIL = (c) => `--before: git failed while checking whether ${c.before} is tracked (`;
+const SH_R = [
+    ['R1 --before ext/L/../F (physically tracked repo/m/F)', { prep: shPrepR1, args: shO, check: shRefuses(shPrefix(SH_TRACKED)) }],
+    ['R2 --before ext/L2/../F (untracked, decoy ext/F) -> cannot resolve', { prep: shPrepR2, args: shO, check: shRefuses(shPrefix('--before: cannot resolve the directory of')) }],
+    ['R3 --after ext/L2/../F (decoy ext/F) -> cannot resolve', { prep: shPrepR3, args: shO, check: shRefuses(shPrefix('--after: cannot resolve the directory of')) }],
+    ['R4 argon A1b: --before frz/F, frz -> a/b, a/b/F -> ../m/F (tracked)', { prep: shPrepR4, args: shO, check: shRefuses(shPrefix(SH_TRACKED)) }],
+    ['R5 bad .git/config of the repo around --after + hard-linked tracked --before', { prep: shPrepR5(true), args: shO, check: shRefuses(shPrefix(SH_GITFAIL)) }],
+    ['R6 bad .git/config of the repo around cwd + hard-linked tracked --before', { prep: shPrepR6(true), args: shO, check: shRefuses(shPrefix(SH_GITFAIL)) }],
+];
+const shCs = {}; for (const [n, cs] of SH_R) shCs[n.split(' ')[0]] = cs;
+for (const [name, cs] of SH_R) {
+    test(`bytecode-budget G-SHLIB ${name}: exit 2, prefix, 0 spawns, no OUT`, { skip }, () => shRun(SCRIPT, cs, (c, r) => cs.check(c, r)));
+    test(`bytecode-budget G-SHLIB twin [${name.split(' ')[0]}]: the b48 before root does NOT refuse (exit 0 SAME) and the row check is red there`, { skip: shBeforeSkip }, () => { histGate(SH_BEFORE_ROOT ? true : SH_HAVE); return shRun(SH_BEFORE_ROOT, cs, (c, r) => {
+        assert.equal(r.status, 0, msg(r));
+        assert.match(r.stdout, /^VERDICT SAME$/m, msg(r));
+        assert.throws(() => cs.check(c, r), assert.AssertionError, 'the row check must be red on the b48 before root');
+    }); });
+}
+// controls: (a) the same hard link in a healthy repo is refused (R5 and R6 shapes); (b) everything outside any repo -> exit 0 SAME
+const shHardRx = shPrefix('--before is the same file as the live ');
+const SH_CTL_A = [{ prep: shPrepR5(false), args: shO, check: shRefuses(shHardRx) }, { prep: shPrepR6(false), args: shO, check: shRefuses(shHardRx) }];
+const SH_CTL_B = { prep: (c) => { const d = shD(c); shPut(join(d, 'frz', SH_NAME)); shPut(join(d, 'after', SH_NAME)); c.before = join(d, 'frz', SH_NAME); c.after = join(d, 'after', SH_NAME); }, args: shO, check: (c, r) => {
+    assert.equal(r.status, 0, msg(r));
+    assert.match(r.stdout, /^VERDICT SAME$/m, msg(r));
+    assert.equal(c.spawns().length, SH_SPAWNS, c.spawns().join('\n'));
+} };
+for (const [lbl, root, sk] of [['new root', SCRIPT, skip], ['b48 before root', SH_BEFORE_ROOT, shBeforeSkip]]) {
+    test(`bytecode-budget G-SHLIB control (a) healthy repo: the hard-linked tracked --before is refused ("is the same file as the live"), 0 spawns [${lbl}]`, { skip: sk }, () => {
+        if (root !== SCRIPT) histGate(SH_BEFORE_ROOT ? true : SH_HAVE);
+        for (const cs of SH_CTL_A) shRun(root, cs, (c, r) => cs.check(c, r));
+    });
+    test(`bytecode-budget G-SHLIB control (b) all outside any repo: exit 0 SAME, ${SH_SPAWNS} node spawns [${lbl}]`, { skip: sk }, () => { if (root !== SCRIPT) histGate(SH_BEFORE_ROOT ? true : SH_HAVE); return shRun(root, SH_CTL_B, (c, r) => SH_CTL_B.check(c, r)); });
+}
+
+// mutants: a private copy of build.sh + src + lib, one lib file edited exactly once, built; the named rows must go red
+function shBuild(name, edits) {   // edits: [lib file, from, to]
+    const d = mkdtempSync(join(ROOT, `shm-${name}-`)), top = join(HERE, '..');
+    cpSync(join(top, 'build.sh'), join(d, 'build.sh')); cpSync(join(top, 'src'), join(d, 'src'), { recursive: true }); cpSync(join(top, 'lib'), join(d, 'lib'), { recursive: true });
+    for (const [f, from, to] of edits) {
+        const p = join(d, 'lib', f), t = readFileSync(p, 'utf8'), n = t.split(from).length - 1;
+        assert.equal(n, 1, `mutant ${name}: anchor must match exactly once in lib/${f}, matched ${n}: ${from}`);
+        writeFileSync(p, t.replace(from, () => to));
+    }
+    const out = join(d, 'out'); mkdirSync(out);
+    const r = capSync('bash', ['build.sh', out], { cwd: d, encoding: 'utf8', env: cleanEnv() }, 60000, `bash build.sh (mutant ${name})`);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return join(out, 'bytecode-budget.sh');
+}
+function shMutant(name, edits, kills, exit0) {
+    test(`bytecode-budget G-SHLIB MUTANT ${name}: kills ${kills.join(' + ')}`, { skip }, (t) => {
+        const p = shBuild(name, edits);
+        for (const k of kills) {
+            const cs = shCs[k];
+            shRun(p, cs, (c, r) => {
+                t.diagnostic(`${name} ${k}: rc=${r.status} spawns=${c.spawns().length} stderr=${JSON.stringify(r.stderr.trim().slice(0, 120))}`);
+                assert.throws(() => cs.check(c, r), assert.AssertionError, `${name}: ${k} still passes on the mutant`);
+                if (exit0 && k.startsWith('R5')) { assert.equal(r.status, 0, 'the mutant must fail OPEN (exit 0), not die elsewhere: ' + msg(r)); assert.ok(c.spawns().length > 0); }
+            });
+        }
+    });
+}
+const SH_ISP = 'd=$(cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1';
+const SH_ISP_NOP = 'd=$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd) || return 1';
+const SH_RL = 'CDPATH= cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P';
+const SH_RL_NOP = 'CDPATH= cd -- "$(dirname -- "$p")" 2>/dev/null && pwd';
+shMutant('drop-P-is_tracked', [['tracked.sh', SH_ISP, SH_ISP_NOP]], ['R1']);
+shMutant('drop-P-is_tracked-and-resolve_links', [['tracked.sh', SH_ISP, SH_ISP_NOP], ['common.sh', SH_RL, SH_RL_NOP]], ['R4']);
+shMutant('drop-before-ef', [['stage.sh', '[[ "$STAGE_ABS_B" -ef "$BEFORE_FILE" ]] || die', 'true || die']], ['R2']);
+shMutant('drop-after-ef', [['stage.sh', '[[ "$STAGE_ABS_A" -ef "$AFTER_FILE" ]] || die', 'true || die']], ['R3']);
+shMutant('top_of-die-to-return-1', [['common.sh', '  die "${what:-top_of}: git failed', '  return 1 # die "${what:-top_of}: git failed']], ['R5', 'R6'], true);
+shMutant('live_tops-in-subshell', [['common.sh', '  live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"\n', '  ( live_tops "$f" "$(dirname "$f")" "$(dirname "$p")" ) || :\n']], ['R5'], true);

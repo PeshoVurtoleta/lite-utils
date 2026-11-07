@@ -64,6 +64,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
     STAGE_NAME=$(basename -- "$AFTER_FILE")
     STAGE_ABS_B=$(cd -- "$(dirname -- "$BEFORE_FILE")" && pwd)/$(basename -- "$BEFORE_FILE")
     STAGE_ABS_A=$(cd -- "$(dirname -- "$AFTER_FILE")" && pwd)/$(basename -- "$AFTER_FILE")
+    [[ "$STAGE_ABS_B" -ef "$BEFORE_FILE" ]] || die "--before: cannot resolve the directory of $BEFORE_FILE (a symlink before '..'?)"
+    [[ "$STAGE_ABS_A" -ef "$AFTER_FILE" ]] || die "--after: cannot resolve the directory of $AFTER_FILE (a symlink before '..'?)"
   fi
   b=$(basename -- "$DRIVER")
   [[ "$STAGE_NAME" != "$b" ]] || die "the module and --driver have the same file name ($STAGE_NAME): rename the driver"

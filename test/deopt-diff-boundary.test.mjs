@@ -584,7 +584,8 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 // =====================================================================================================================
 // A4 parity: the Phase 2 scripts in PARITY equal their frozen p3g1 copies and `git show bd1f283:<file>` (sha256/8 pinned),
 // hunk-scoped since G-FINAL (Q-F2a, b45): the live root with its G-FINAL prologue block put back to the pre-G-FINAL
-// block (an exact-once, count-checked swap) must equal both references byte for byte
+// block (an exact-once, count-checked swap) must equal both references byte for byte. Since G-SHLIB (b48, PLAN-b48-shlib
+// ADDENDA A2) each G-SHLIB hunk of lib/common.sh is put back the same way; the pin stays 740da13b (no re-pin)
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'p3g1');
@@ -599,10 +600,89 @@ const GF_OLD = '# Fail closed: an exit that is not a planned verdict (FINAL=1), 
     '# so a command that fails under set -e can never pose as exit 1 DIFF. Subshells do not inherit this trap.\n' +
     'FINAL=""\n' +
     String.raw`trap 'rc=$?; if [[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]; then printf "inlining-budget-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
-function putBack(live) {   // Buffer -> Buffer: the G-FINAL block (exactly once) swapped for the pre-G-FINAL one
-    const s = live.toString('latin1'), n = s.split(GF_LIVE).length - 1;
-    assert.equal(n, 1, `the G-FINAL prologue block must match exactly once, matched ${n}`);
-    return Buffer.from(s.replace(GF_LIVE, () => GF_OLD), 'latin1');
+// the G-SHLIB hunks (lib/common.sh: top_of, live_tops, resolve_links, refuse_live) of the root: [live lines, pre-G-SHLIB
+// lines] per hunk, in file order (git diff -U0 HEAD at 5993514)
+const GS_HUNKS = [
+    [[
+        "top_of() { # dir file: 0 and TOP_OF = the toplevel of the work tree around dir; 1 outside a work tree (or no git); dies",
+        "  # on any other git answer, naming file. The classifier is is_tracked's (lib/tracked.sh), copied word for word.",
+        "  local d=\"$1\" out rc=0 l",
+        "  TOP_OF=\"\"",
+        "  command -v git >/dev/null 2>&1 || return 1",
+        "  out=$(LC_ALL=C git -C \"$d\" rev-parse --is-inside-work-tree 2>&1) || rc=$?",
+        "  l=${out%%$'\\n'*}",
+        "  if [[ $rc -ne 0 ]]; then",
+        "    case \"$l\" in \"fatal: not a git repository (or any \"*) return 1 ;; esac",
+        "  elif [[ \"$out\" == false ]]; then",
+        "    return 1",
+        "  elif [[ \"$out\" == true ]]; then",
+        "    rc=0",
+        "    out=$(LC_ALL=C git -C \"$d\" rev-parse --show-toplevel 2>&1) || rc=$?",
+        "    l=${out%%$'\\n'*}",
+        "    [[ $rc -ne 0 ]] || { TOP_OF=\"$out\"; return 0; }",
+        "  fi",
+        "  die \"${what:-top_of}: git failed while checking whether $2 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref\"",
+    ],
+     [
+        "live_tops() { # dirs...: repo toplevels around cwd, --after, --repo and each given dir",
+        "  { git rev-parse --show-toplevel 2>/dev/null || true",
+        "    [[ -n \"$AFTER_FILE\" ]] && git -C \"$(dirname \"$AFTER_FILE\")\" rev-parse --show-toplevel 2>/dev/null || true",
+        "    [[ -n \"$REPO\" ]] && git -C \"$REPO\" rev-parse --show-toplevel 2>/dev/null || true",
+        "    for x in \"$@\"; do git -C \"$x\" rev-parse --show-toplevel 2>/dev/null || true; done; } | sort -u",
+    ]],
+    [[
+        "live_tops() { # file dirs...: LIVE_TOPS = the repo toplevels around cwd, --after, --repo and each given dir (sort -u, one",
+        "  # per line); a git error dies naming file (top_of). CURRENT shell only: never in $( ), <( ) or a pipe",
+        "  local f=\"$1\" x t=\"\" TOP_OF=\"\"",
+        "  shift",
+        "  LIVE_TOPS=\"\"",
+        "  if top_of . \"$f\"; then t=\"$t$TOP_OF\"$'\\n'; fi",
+        "  if [[ -n \"$AFTER_FILE\" ]] && top_of \"$(dirname -- \"$AFTER_FILE\")\" \"$f\"; then t=\"$t$TOP_OF\"$'\\n'; fi",
+        "  if [[ -n \"$REPO\" ]] && top_of \"$REPO\" \"$f\"; then t=\"$t$TOP_OF\"$'\\n'; fi",
+        "  for x in \"$@\"; do if top_of \"$x\" \"$f\"; then t=\"$t$TOP_OF\"$'\\n'; fi; done",
+        "  [[ -z \"$t\" ]] || LIVE_TOPS=$(printf '%s' \"$t\" | sort -u)",
+        "}",
+        "resolve_links() { # path: follow a symlink chain (at most 40 hops) and print its end. A relative link joins onto the",
+        "  # PHYSICAL directory of the link (a logical join collapses a symlinked dir's '..' onto the wrong parent); dies if",
+        "  # that directory cannot be entered",
+        "  local p=\"$1\" l n=0 d",
+    ],
+     [
+        "resolve_links() { # path: follow a symlink chain (at most 40 hops) and print its end",
+        "  local p=\"$1\" l n=0",
+    ]],
+    [[
+        "    case \"$l\" in /*) p=\"$l\" ;; *) d=$(CDPATH= cd -P -- \"$(dirname -- \"$p\")\" 2>/dev/null && pwd -P) || die \"cannot resolve the directory of $p (a link in the symlink chain of $1)\"; p=\"$d/$l\" ;; esac",
+    ],
+     [
+        "    case \"$l\" in /*) p=\"$l\" ;; *) p=\"$(dirname \"$p\")/$l\" ;; esac",
+    ]],
+    [[
+        "  local f=\"$1\" what=\"$2\" p me top t LIVE_TOPS=\"\"",
+    ],
+     [
+        "  local f=\"$1\" what=\"$2\" p me top t",
+    ]],
+    [[
+        "  live_tops \"$f\" \"$(dirname \"$f\")\" \"$(dirname \"$p\")\"",
+    ],
+     []],
+    [[
+        "  done < <(printf '%s\\n' \"$LIVE_TOPS\")",
+    ],
+     [
+        "  done < <(live_tops \"$(dirname \"$f\")\" \"$(dirname \"$p\")\")",
+    ]],
+].map(([a, b]) => [a.map((l) => l + '\n').join(''), b.map((l) => l + '\n').join('')]);
+function putBack(live) {   // Buffer -> Buffer: the G-FINAL block and each G-SHLIB hunk (each exactly once) swapped back
+    let s = live.toString('latin1');
+    const swaps = [[GF_LIVE, GF_OLD, 'the G-FINAL prologue block'], ...GS_HUNKS.map(([a, b], i) => [a, b, `G-SHLIB hunk ${i + 1}`])];
+    for (const [from, to, what] of swaps) {
+        const n = s.split(from).length - 1;
+        assert.equal(n, 1, `${what} must match exactly once, matched ${n}`);
+        s = s.replace(from, () => to);
+    }
+    return Buffer.from(s, 'latin1');
 }
 function gitShow(rev, file) {
     const r = capSync('git', ['-C', ROOT, 'show', `${rev}:${file}`], { env: ENV, maxBuffer: 1 << 26 }, 30000, 'git show');
@@ -642,5 +722,15 @@ for (const [file, want] of PARITY) {
         const live = readFileSync(join(ROOT, file));
         const m = Buffer.from(live); m[live.indexOf('set +e;')] ^= 1;
         assert.throws(() => putBack(m), assert.AssertionError);
+    });
+    test(`A4 teeth: ${file} hunk-scoped parity is red on a one-byte edit inside each G-SHLIB hunk`, { skip }, () => {
+        const live = readFileSync(join(ROOT, file));
+        assert.equal(sha8(putBack(live)), want, 'control: the unedited live root puts back to the pin');
+        for (const [i, [a]] of GS_HUNKS.entries()) {
+            const at = live.indexOf(Buffer.from(a, 'latin1'));
+            assert.ok(at >= 0, `G-SHLIB hunk ${i + 1} not found in the live root`);
+            const m = Buffer.from(live); m[at + (a.length >> 1)] ^= 1;
+            assert.throws(() => putBack(m), assert.AssertionError, `G-SHLIB hunk ${i + 1}: a one-byte edit inside it is red`);
+        }
     });
 }
