@@ -81,12 +81,15 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"
   # an unreadable or unsearchable DIR/stage reads as empty to ls -A (its error is hidden), and an unwritable one fails only
   # in stage_write, after the first spawns and DIR/raw writes: refuse both here, before any spawn or write
+  # (the same for an existing DIR that is not writable or not searchable: its new DIR/stage fails in stage_write)
   { [[ ! -e "$OUT/stage" ]] || { [[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]] && [[ -z "$(ls -A "$OUT/stage" 2>/dev/null)" ]]; }; } || die "--out: $OUT/stage is not empty (give a new or empty DIR)"
+  [[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" && -x "$OUT" ) ]] \
+    || die "--out: cannot create $OUT/stage ($OUT is not writable)"
 }
 stage_write() { # OUT/stage/<side>: that side's module as STAGE_NAME plus the driver; set DRV_B DRV_A STAGE_SAME DESC_*
   local side dir b x
   b=$(basename -- "$STAGE_DRIVER")
-  mkdir -p -- "$OUT/stage" && mkdir -- "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
+  mkdir -p -- "$OUT/stage" 2>/dev/null && mkdir -- "$OUT/stage/before" "$OUT/stage/after" 2>/dev/null \
     || die "--out: cannot create $OUT/stage/before and $OUT/stage/after"
   for side in before after; do
     dir="$OUT/stage/$side"

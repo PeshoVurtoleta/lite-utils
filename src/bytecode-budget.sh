@@ -93,6 +93,9 @@
 #   not followed by "Bytecode length: N", and every length in input order (duplicates kept; "-" if none).
 #   N has 1..9 digits (< 10^9: exact in awk doubles and bash (( )); real V8 lengths are far smaller), so a longer N
 #   counts as not followed (bad), never as a length.
+#   Two shapes count under "not followed by" too, one more in both <count> and <bad>, for any name: a header found after
+#   column 1 of a line, and a "Bytecode length:" line with no header line right above it. A NUL byte reads as '?' first.
+#   driver output is trusted: a driver that prints V8 header text can forge a result.
 #   No address reaches that line, so run k must equal run 1 as text (null control).
 # Report lines (run 1):
 #   "  <fn>: <count> match(es): <l1,l2,..>"
@@ -119,7 +122,8 @@
 #   null control: run <k> differs from run 1 (run <k>: <line> | run 1: <line>)
 #   no function named '<fn>' in run 1 (not compiled: never called / lazy, or no such name)
 #   <b> of <n> matched header(s) not followed by 'Bytecode length: N' in run 1 (unknown format)
-#     (N of 1..9 digits: a length of 10 or more digits is counted here)
+#     (N of 1..9 digits: a length of 10 or more digits is counted here; so are a header after column 1 of a line and
+#     a length line with no header line right above it)
 # Verdict, over every fn (NO-VERDICT > OVER > WITHIN): exit 0 WITHIN, 1 OVER, 2 NO-VERDICT. Report mode:
 #   exit 0 REPORTED, or 2 NO-VERDICT. A refused argument (Options, DRIVER, fn) exits 2 before any node is
 #   spawned; a --node BIN whose --version fails, a --v8-flags token the allowlist refuses (after --version and
@@ -149,24 +153,30 @@
 #   read (a symlink before '..'), a --before or --after whose directory bash's cd resolves to another file than the
 #   one read (a symlink before '..': "--before: cannot resolve the directory of FILE"), a DIR/stage that is a
 #   symlink, and an unreadable or unwritable DIR/stage ("is not empty"); a --before, --after or --driver value that
-#   starts with '-' is read as ./<value>.
+#   starts with '-' is read as ./<value>. An existing DIR that is not writable or not searchable and has no DIR/stage
+#   is refused too (exit 2, before any spawn or write): "--out: cannot create DIR/stage (DIR is not writable)".
 #   The staging itself runs after --version and the allowlist read (2 spawns): a failed copy, or a file system that
 #   still maps the staged module and driver to one file ("the same file on this file system"), exits 2 with DIR
 #   holding raw/ (raw/before and raw/after empty), an empty report.txt (no head yet) and a partial stage/.
 # Frozen "before" (file mode): --before must be a FROZEN copy. It is refused with NO-VERDICT when it, or the end of
-#   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js or
-#   <top>/<same name>, <top> = the repo around the current directory, around --after, around --before and its link
-#   target, and --repo; or when it is the same file as --after (-ef: a hard link or symlink, anywhere). Ref and file
+#   its symlink chain, is git-tracked, or when it is the same file (device:inode) as a tracked <top>/Signal.js,
+#   <top>/<same name> or <top>/<--after's name>, <top> = the repo around the current directory, around --after
+#   and its link target, around --before and its link target, and --repo; or when it is the same file as --after
+#   (-ef: a hard link or symlink, anywhere). Ref and file
 #   modes need git (file mode for this check). Both refuse a set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 #   GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make a tracked --before read as
 #   untracked): each repo is found from its path. Ref mode is frozen by construction (both sides from git objects).
 #   A git error while checking whether --before is tracked, or while finding the work tree around the current
 #   directory, --after or --before (safe.directory "dubious ownership", a broken .git file, a bad config, a corrupt
 #   index) exits 2: "--before: git failed while checking whether FILE is tracked (<git's first line>)"; a --repo git
-#   cannot read exits 2 before this check: "--repo is not a git work tree: DIR".
+#   cannot read exits 2 before this check: "--repo is not a git work tree: DIR". A chain the kernel followed but the
+#   walk cannot finish (a race) exits 2 too: "--after: cannot resolve its symlink chain: FILE" (--after is a symlink)
+#   and "cannot resolve the directory of P (a link in the symlink chain of ARG)" (ARG = the --before value).
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
 #   self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js or <top>/<same name>; and a .git that git does not recognise as a
+#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
+#   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
+#   checked, not the intermediate hops); and a .git that git does not recognise as a
 #   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
 #   so a tracked --before inside it is not refused.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
@@ -194,14 +204,19 @@ unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" joi
 # @include lib/msdiff.sh
 
 # --print-bytecode output -> "<count> <bad> <lengths>" for the functions named EXACTLY fn (see the header).
+# Two rules count one more bad match, whatever the name: a header found after column 1 of a line (the glued rule, first,
+# so it also sees a second header glued onto a column-1 header line), and a "Bytecode length:" line with no header line
+# right above it (the orphan rule). Either hides a length from the gate, so neither is ever read as a length.
 # shellcheck disable=SC2016
 COUNT_AWK='
+index(substr($0, 2), "[generated bytecode for function: ") { n++; want = 0; hdr = 1; next }
 /^\[generated bytecode for function: / {
   s = $0; sub(/^\[generated bytecode for function: /, "", s); sub(/ \(0x.*$/, "", s)
-  want = (s == fn); n += want; next
+  want = (s == fn); n += want; hdr = 1; next
 }
 want && /^Bytecode length: [0-9]+$/ && length($3) <= 9 { good++; out = out (out == "" ? "" : ",") ($3 + 0) }
-{ want = 0 }
+!hdr && /^Bytecode length:/ { n++ }
+{ want = 0; hdr = 0 }
 END { bad = n - good; print n + 0, bad + 0, (out == "" ? "-" : out) }
 '
 
@@ -320,6 +335,15 @@ self_test() {
   check "count: getter name with a space, anonymous (empty) name" \
     "$(awk -v fn='get value' "$COUNT_AWK" "$d/anon")|$(awk -v fn= "$COUNT_AWK" "$d/anon")" "1 0 8|1 0 400"
   check "count: no match -> 0 0 -" "$(awk -v fn=nosuch "$COUNT_AWK" "$d/dups")|$(awk -v fn=x "$COUNT_AWK" /dev/null)" "0 0 -|0 0 -"
+  { printf 'step '; hdr f 1; echo 'Bytecode length: 500'; } >"$d/glued"
+  check "count: a header glued after column 1 counts bad, its length is never read" "$(awk -v fn=f "$COUNT_AWK" "$d/glued")" "1 1 -"
+  { printf '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]\r'; hdr g 2; echo 'Bytecode length: 6'; } >"$d/gluedcr"
+  check "count: a second header glued onto a column-1 header line counts bad, its length is never read" "$(awk -v fn=f "$COUNT_AWK" "$d/gluedcr")" "1 1 -"
+  { hdr f 1; echo 'Bytecode length: 6'; echo x; echo 'Bytecode length: 1083'; } >"$d/orphan"
+  check "count: a length line with no header line right above it counts bad" "$(awk -v fn=f "$COUNT_AWK" "$d/orphan")" "2 1 6"
+  printf '%s\n' '  --max-inlined-bytecode-size-small (x)' '  --unrelated-flag (x)' '        type: int  default: 999' \
+    '  --max-inlined-bytecode-size (x)' '        type: int  default: 460' >"$d/limreset"
+  check "limits: another flag's header ends a limit header that had no default" "$(awk "$LIMITS_AWK" "$d/limreset" | tr '\n' ' ')" "max-inlined-bytecode-size=460 "
   sed -e 's/0x\([0-9a-f]*\)/0x7ff\1abc/' "$d/dups" >"$d/dups2"
   judge f 999 "0 $(awk -v fn=f "$COUNT_AWK" "$d/dups")" "0 $(awk -v fn=f "$COUNT_AWK" "$d/dups2")"
   check "null control: captures differing only in 0x addresses compare SAME (past the null control)" \
@@ -896,10 +920,11 @@ probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the r
   local rc=0 line
   if [[ -n "$OUT" ]]; then
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" 2>&1) | tee "$OUT/raw/$5" | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      --print-bytecode-filter="$1" "./$4" 2>&1) | tee "$OUT/raw/$5" | tr '\000' '?' \
+      | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   else
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" 2>&1) | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      --print-bytecode-filter="$1" "./$4" 2>&1) | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK") || rc=$?
   fi
   printf '%s %s\n' "$rc" "$line"
 }

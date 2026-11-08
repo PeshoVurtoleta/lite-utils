@@ -11,7 +11,8 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync, symlinkSync, realpathSync, lstatSync, cpSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSync, mkdirSync, existsSync, linkSync,
+    symlinkSync, realpathSync, lstatSync, statSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -132,7 +133,12 @@ function withCase(script, cs, body) {
         // capSync: a run the cap killed fails by name here, before any row / teeth / mutant check reads r
         const r = capSync('bash', [script, ...cs.args(c)], { encoding: 'utf8', cwd: c.cwd, env }, 120000, basename(script));
         return body(c, r);
-    } finally { if (c) rmSync(c.dir, { recursive: true, force: true }); }
+    } finally {
+        if (c) {
+            try { chmodSync(c.out, 0o755); } catch { /* G-SHL3 R9: an OUT locked to 0555 must stay removable */ }
+            rmSync(c.dir, { recursive: true, force: true });
+        }
+    }
 }
 // ordered option sets (key order is argv order: the staged option comes first, so the pre-G2 build dies on it)
 function flat(o) { const a = []; for (const [k, v] of Object.entries(o)) if (v !== null) a.push(k, v); return a; }
@@ -590,18 +596,155 @@ function shMutant(name, edits, kills, exit0) {
             shRun(p, cs, (c, r) => {
                 t.diagnostic(`${name} ${k}: rc=${r.status} spawns=${c.spawns().length} stderr=${JSON.stringify(r.stderr.trim().slice(0, 120))}`);
                 assert.throws(() => cs.check(c, r), assert.AssertionError, `${name}: ${k} still passes on the mutant`);
-                if (exit0 && k.startsWith('R5')) { assert.equal(r.status, 0, 'the mutant must fail OPEN (exit 0), not die elsewhere: ' + msg(r)); assert.ok(c.spawns().length > 0); }
+                if (exit0 && /^R[578]/.test(k)) { assert.equal(r.status, 0,
+                    'the mutant must fail OPEN (exit 0), not die ' +
+                        'elsewhere: ' + msg(r)); assert.ok(c.spawns().length > 0); }
             });
         }
     });
 }
-const SH_ISP = 'd=$(cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1';
-const SH_ISP_NOP = 'd=$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd) || return 1';
-const SH_RL = 'CDPATH= cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P';
-const SH_RL_NOP = 'CDPATH= cd -- "$(dirname -- "$p")" 2>/dev/null && pwd';
+const SH_ISP = 'd=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1';
+const SH_ISP_NOP = 'd=$(cd -- "$d" 2>/dev/null && pwd) || return 1';
+const SH_RL = 'd=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p';
+const SH_RL_NOP = 'd=$(CDPATH= cd -- "$d" 2>/dev/null && pwd) || die "cannot resolve the directory of $p';
 shMutant('drop-P-is_tracked', [['tracked.sh', SH_ISP, SH_ISP_NOP]], ['R1']);
 shMutant('drop-P-is_tracked-and-resolve_links', [['tracked.sh', SH_ISP, SH_ISP_NOP], ['common.sh', SH_RL, SH_RL_NOP]], ['R4']);
 shMutant('drop-before-ef', [['stage.sh', '[[ "$STAGE_ABS_B" -ef "$BEFORE_FILE" ]] || die', 'true || die']], ['R2']);
 shMutant('drop-after-ef', [['stage.sh', '[[ "$STAGE_ABS_A" -ef "$AFTER_FILE" ]] || die', 'true || die']], ['R3']);
 shMutant('top_of-die-to-return-1', [['common.sh', '  die "${what:-top_of}: git failed', '  return 1 # die "${what:-top_of}: git failed']], ['R5', 'R6'], true);
 shMutant('live_tops-in-subshell', [['common.sh', '  live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"\n', '  ( live_tops "$f" "$(dirname "$f")" "$(dirname "$p")" ) || :\n']], ['R5'], true);
+
+// =====================================================================================================
+// G-SHL3 (b50, PLAN-b50-shl3 ASSERTIONS 1, 2, 4; written from the ASSERTIONS, not from lib/): file mode, fake node.
+// R7 (B2b) --after is a symlink into the repo; R8 (B2c) --after is the repo's own file; R9 (B3) an unwritable
+// --out.
+// R7 / R8: exit 2 "is the same file as the live <repo>/F", 0 node spawns, OUT absent. Every row has a must-fail
+// twin on the frozen bd0192f root (git history, not the gitignored .handoff): R7 / R8 exit 0 SAME, R9 truncates
+// report.txt. Mutants: the B2b line deleted / the B2c token dropped -> exit 0 SAME; the B3 pre-check deleted -> the
+// run goes on (report.txt 0 bytes) and the 2>/dev/null hides its mkdir text.
+// =====================================================================================================
+const S3_SHA = 'bd0192f';
+const S3_GIT = ['-C', join(HERE, '..')];
+const S3_HAVE = spawnSync('git', [...S3_GIT, 'cat-file', '-e', `${S3_SHA}^{commit}`],
+    { env: cleanEnv() }).status === 0
+    ? true : `commit ${S3_SHA} missing (shallow clone?)`;
+let S3_ROOT = null;
+if (!skip && S3_HAVE === true) {
+    const s = spawnSync('git', [...S3_GIT, 'show', `${S3_SHA}:deopt-diff.sh`], { env: cleanEnv(),
+        maxBuffer: 64 << 20 });
+    if (s.status === 0) {
+        S3_ROOT = join(ROOT, `b50-before-${S3_SHA}-deopt-diff.sh`);
+        writeFileSync(S3_ROOT, s.stdout); chmodSync(S3_ROOT, 0o755);
+    }
+}
+const s3Skip = skip || histSkip(
+    S3_ROOT ? true : (S3_HAVE === true ? `git show ${S3_SHA}:deopt-diff.sh failed` : S3_HAVE));
+const s3Gate = () => histGate(S3_ROOT ? true : S3_HAVE);
+const s3Same = (c) => new RegExp(
+    '^' + SH_PFX + ': --before is the same file as the live ' + shEsc(join(c.d, 'repo', SH_NAME)) + ' ', 'm');
+const s3Same0 = (c, r) => { assert.equal(r.status, 0, msg(r)); assert.match(r.stdout, /^VERDICT SAME$/m, msg(r)); };
+// R7: repo tracks F and sub/F; frz/F is a hard link of repo/F; work/F -> ../repo/sub/F; cwd (c.cwd) is outside the
+// repo
+const s3PrepR7 = (c) => {
+    const d = shD(c);
+    shRepo(join(d, 'repo'), [SH_NAME, 'sub/' + SH_NAME]); mkdirSync(join(d, 'frz')); mkdirSync(join(d, 'work'));
+    linkSync(join(d, 'repo', SH_NAME), join(d, 'frz', SH_NAME));
+    symlinkSync('../repo/sub/' + SH_NAME, join(d, 'work', SH_NAME));
+    c.before = join(d, 'frz', SH_NAME); c.after = join(d, 'work', SH_NAME);
+};
+// R8: repo tracks F and sub/F; frz/before.js is a hard link of repo/<src>; --after repo/sub/F (only its NAME links
+// them)
+const s3PrepR8 = (src) => (c) => {
+    const d = shD(c);
+    shRepo(join(d, 'repo'), [src, 'sub/' + SH_NAME]); mkdirSync(join(d, 'frz'));
+    linkSync(join(d, 'repo', src), join(d, 'frz', 'before.js'));
+    c.before = join(d, 'frz', 'before.js'); c.after = join(d, 'repo', 'sub', SH_NAME);
+};
+const S3_R = [
+    ['R7 B2b --after work/F -> repo/sub/F, --before frz/F hard link of tracked repo/F',
+        { prep: s3PrepR7, args: shO, check: shRefuses(s3Same) }],
+    ['R8 B2c --after repo/sub/F, --before frz/before.js hard link of tracked repo/F',
+        { prep: s3PrepR8(SH_NAME), args: shO, check: shRefuses(s3Same) }],
+];
+for (const [name, cs] of S3_R) {
+    const id = name.split(' ')[0];
+    shCs[id] = cs;
+    test(`deopt-diff G-SHL3 ${name}: exit 2, "same file as the live repo/F", 0 spawns, no OUT`, { skip }, () => {
+        shRun(SCRIPT, cs, (c, r) => cs.check(c, r));
+    });
+    test(`deopt-diff G-SHL3 twin [${id}]: the frozen ${S3_SHA} root does NOT refuse (exit 0 SAME), row check red`,
+        { skip: s3Skip }, () => {
+            s3Gate();
+            shRun(S3_ROOT, cs, (c, r) => {
+                s3Same0(c, r);
+                assert.throws(() => cs.check(c, r), assert.AssertionError);
+            });
+        });
+}
+// R8 residual, "accepted by design": a hard link to repo/src/F (not repo/F) stays exit 0 on the new and the frozen
+// root
+const S3_RES = { prep: s3PrepR8('src/' + SH_NAME), args: shO, check: s3Same0 };
+for (const [lbl, root, sk] of [['new root', SCRIPT, skip], [`frozen ${S3_SHA} root`, S3_ROOT, s3Skip]]) {
+    test(`deopt-diff G-SHL3 R8 residual (accepted by design): hard link to repo/src/F -> exit 0 SAME [${lbl}]`,
+        { skip: sk }, () => {
+            if (root !== SCRIPT) s3Gate();
+            shRun(root, S3_RES, (c, r) => S3_RES.check(c, r));
+        });
+}
+const S3_B2B = '  if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then\n'
+    + '    r=$(resolve_links "$AFTER_FILE" 2>/dev/null) || die "--after: cannot resolve its symlink chain: $AFTER_FILE"\n'
+    + '    if top_of "$(dirname -- "$r")" "$f"; then t="$t$TOP_OF"$\'\\n\'; fi\n  fi\n';
+const S3_B2C = ' \\\n      ${AFTER_FILE:+"$top/$(basename -- "$AFTER_FILE")"}; do';
+shMutant('b50-B2b-line-deleted', [['common.sh', S3_B2B, '']], ['R7'], true);
+shMutant('b50-B2c-token-dropped', [['common.sh', S3_B2C, '; do']], ['R8'], true);
+
+// R9 (B3, ASSERTION 4): OUT 0555 with raw/ (0755, empty) and report.txt "KEEP\n"; skipped under uid 0 (chmod binds
+// nothing)
+const s3Uid0 = typeof process.getuid === 'function' && process.getuid() === 0
+    ? 'uid 0: a 0555 dir binds nothing' : false;
+const s3PrepR9 = (c) => {
+    mkdirSync(c.out); mkdirSync(join(c.out, 'raw')); chmodSync(join(c.out, 'raw'), 0o755);
+    writeFileSync(join(c.out, 'report.txt'), 'KEEP\n');
+    chmodSync(c.out, 0o555);                 // the row runner restores 0755 in a finally, also when a check throws
+};
+const s3Mkdirs = (r) => r.stderr.split('\n').filter((l) => l.startsWith('mkdir:')).length;
+const S3_DIE = new RegExp('^' + SH_PFX + ': --out: cannot create .*/stage \\(.* is not writable\\)$');
+const s3R9Live = (c, r) => {
+    assert.equal(r.status, 2, msg(r));
+    const el = r.stderr.split('\n').filter(Boolean);
+    assert.equal(el.length, 2, msg(r));
+    assert.match(el[0], S3_DIE, msg(r));
+    assert.equal(el[1], 'VERDICT NO-VERDICT', msg(r));
+    assert.equal(s3Mkdirs(r), 0, msg(r));
+    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+    assert.equal(statSync(join(c.out, 'report.txt')).size, 5, 'report.txt must keep its 5 bytes');
+    assert.deepEqual(readdirSync(join(c.out, 'raw')), [], 'raw/ must stay empty');
+};
+// the run went on: report.txt truncated, raw/before + raw/after made, 2 node spawns, `mkdirs` mkdir: lines on
+// stderr
+const s3R9Went = (mkdirs) => (c, r) => {
+    assert.equal(statSync(join(c.out, 'report.txt')).size, 0, 'report.txt truncated');
+    assert.deepEqual(readdirSync(join(c.out, 'raw')).sort(), ['after', 'before']);
+    assert.equal(c.spawns().length, 2, c.spawns().join('\n'));
+    assert.equal(s3Mkdirs(r), mkdirs, msg(r));
+    assert.throws(() => s3R9Live(c, r), assert.AssertionError, 'the live row check must be red here');
+};
+const S3_PRECHECK = '  [[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" && -x "$OUT" ) ]] \\\n'
+    + '    || die "--out: cannot create $OUT/stage ($OUT is not writable)"\n';
+for (const [mode, args] of [['file', (c) => fileO(c)], ['ref', (c) => refO(c)]]) {
+    const cs = { prep: s3PrepR9, args, check: s3R9Live };
+    test(`deopt-diff G-SHL3 R9 B3 ${mode} mode: unwritable OUT -> exit 2, 2 stderr lines, 0 spawns, OUT kept`,
+        { skip: skip || s3Uid0 }, () => {
+            shRun(SCRIPT, cs, (c, r) => cs.check(c, r));
+        });
+    test(`deopt-diff G-SHL3 twin [R9 ${mode}]: frozen ${S3_SHA} truncates report.txt, makes raw/before + raw/after`,
+        { skip: s3Skip || s3Uid0 }, () => {
+            s3Gate();
+            shRun(S3_ROOT, cs, s3R9Went(1));
+        });
+    test(`deopt-diff G-SHL3 R9 ${mode} MUTANT B3-pre-check-deleted: the run goes on, 0 mkdir: lines (2>/dev/null)`,
+        { skip: skip || s3Uid0 }, () => {
+            const p = shBuild(`b50-B3-pre-check-${mode}`, [['stage.sh', S3_PRECHECK, '']]);
+            shRun(p, cs, s3R9Went(0));
+        });
+}

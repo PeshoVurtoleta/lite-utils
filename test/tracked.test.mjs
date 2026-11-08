@@ -1,11 +1,14 @@
-// test/tracked.test.mjs -- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md ASSERTIONS A1, A3 mutants, A5).
+// test/tracked.test.mjs -- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md ASSERTIONS A1, A3 mutants, A5);
+// b50 G-SHL3 N1 (.handoff/PLAN-b50-shl3.md ASSERTION 3) adds ibd as the fifth root.
 // Oracle: the PLAN assertions, not the implementation. The LAST `is_tracked()` defined in each of the bb / dd / ic /
-// alloc roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die` stub with
-// what=--before. Expected values come from the spec: its 5 git error states plus gitdir (GIT_DIR to a missing dir,
-// b48) -> exit 2 + a line starting "--before: git failed while checking whether"; the controls (tracked 0,
-// untracked in the repo 1, outside a repo 1, inside .git/ 1, git off PATH 1) pass on the old and the new code. ibd
-// keeps its single old definition: it returns nonzero (no die) on all 6 errors (a KNOWN GAP, logged for D-4a). The
-// fixtures need no commit: `git add` alone makes a file tracked.
+// alloc / ibd roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die`
+// stub
+// with what=--before. Expected values come from the spec: its 5 git error states plus gitdir (GIT_DIR to a missing
+// dir, b48) -> exit 2 + a line starting "--before: git failed while checking whether"; the controls (tracked 0,
+// untracked in the repo 1, outside a repo 1, inside .git/ 1, git off PATH 1) pass on the old and the new code.
+// Since
+// b50 ibd includes lib/tracked.sh like the other four (the old single definition returned nonzero, no die, on all 6
+// errors: the D-4a gap). The fixtures need no commit: `git add` alone makes a file tracked.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
@@ -25,8 +28,7 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 // a nested run is marked by TRACKED_NESTED equal to its own TMPDIR (an inherited bare '1' marks nothing)
 const NESTED = process.env.TRACKED_NESTED !== undefined && process.env.TRACKED_NESTED === process.env.TMPDIR;
 const BASH = existsSync('/bin/bash') ? '/bin/bash' : '/usr/bin/bash';
-const FOUR = ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh'];
-const IBD = 'inlining-budget-diff.sh';
+const FIVE = ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh', 'inlining-budget-diff.sh'];
 const PREFIX = 'trk-gt-';
 
 // child env: no inherited git steering, no global / system config, no editor, no V8 coverage dir (node re-adds a deleted one)
@@ -178,19 +180,11 @@ function run(rootsDir, file, c, extraEnv = {}) {
         30000, `is_tracked ${file}`);
 }
 // null when the result matches the spec for this case, else a message (the mutant rows count non-null results as kills)
-function verdict(c, r, ibd = false) {
-    if (c.kind === 'err' && !ibd) {
+function verdict(c, r) {
+    if (c.kind === 'err') {
         if (r.status !== 2) return `exit ${r.status}, want 2 (stdout ${JSON.stringify(r.stdout)})`;
         if (!r.stderr.split('\n').some((l) => l.startsWith('--before: git failed while checking whether'))) return `no "--before: git failed while checking whether" line: ${r.stderr}`;
         if (!r.stderr.includes(`whether ${c.path} is tracked (`)) return `die line must name the path and git's line: ${r.stderr}`;
-        return null;
-    }
-    if (ibd && !(c.kind === 'rc' && c.rc === 0)) {
-        // ibd's old definition is `rev-parse && ls-files` with all output discarded: every non-tracked state reads as
-        // "not tracked" (nonzero; git's own 1 / 128 / 127 passes through) and nothing dies. For the 6 errors that is the
-        // KNOWN GAP (D-4a). The spec said "returns 1"; the exact value is git's, so only "nonzero, no die" is asserted.
-        const m = /^rc=(\d+)\n$/.exec(r.stdout);
-        if (r.status !== 0 || m === null || Number(m[1]) === 0 || r.stderr !== '') return `want a nonzero rc and no die, got exit ${r.status} stdout ${JSON.stringify(r.stdout)} stderr ${JSON.stringify(r.stderr)}`;
         return null;
     }
     const want = c.kind === 'err' ? 1 : c.rc;
@@ -198,8 +192,8 @@ function verdict(c, r, ibd = false) {
     return null;
 }
 
-// ---- A1: the effective definition in each of the four roots ----
-for (const file of FOUR) {
+// ---- A1: the effective definition in each of the five roots ----
+for (const file of FIVE) {
     test(`A1 ${file}: exactly 2 is_tracked() definitions (common.sh's, then the fragment's)`, { skip }, () => {
         assert.equal(defCount(readFileSync(join(ROOT, file), 'utf8')), 2);
     });
@@ -217,29 +211,42 @@ for (const file of FOUR) {
     }
 }
 
-for (const file of FOUR) {
+for (const file of FIVE) {
     test(`A1 literal-pathspecs ${file}: tracked ":x.js" -> 0, untracked "*" beside a tracked file -> 1`, { skip }, () => {
         assert.equal(litVerdict(ROOT, file), null);
     });
 }
 
-// ---- A1: ibd keeps exactly one definition; it still returns nonzero (no die) on all 6 errors ----
-// (KNOWN GAP, logged for D-4a)
-test(`A1 ${IBD}: exactly 1 is_tracked() definition`, { skip }, () => {
-    assert.equal(defCount(readFileSync(join(ROOT, IBD), 'utf8')), 1);
-});
-for (const name of ERR_CASES) {
-    test(`A1 ${IBD}: known gap D-4a -- git error "${name}" stays nonzero, no die`, { skip: skip || (name === 'dubious' && DUBIOUS_SKIP) }, () => {
-        const c = cases()[name];
-        assert.equal(verdict(c, run(ROOT, IBD, c), true), null);
+// ---- b50 N1 must-fail twin: the bd0192f ibd (git history; one old is_tracked, rev-parse && ls-files, all output
+// hidden) ----
+// Its single definition reads every git error as "not tracked" (nonzero rc from git's own 1 / 128 / 127, no die):
+// the six
+// ERR rows are red there. A history row whose commit is missing FAILS under CI=true and skips locally.
+const OLD_SHA = 'bd0192f', IBD = 'inlining-budget-diff.sh';
+const oldHave = capSync('git', ['cat-file', '-e', `${OLD_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8',
+    env: ENV }, 30000, 'git cat-file')
+    .status === 0 ? true : `commit ${OLD_SHA} not available (shallow clone?)`;
+const histSkip = (have) => (have === true || process.env.CI === 'true' ? false : have);
+test(`A1 ${IBD} twin: the ${OLD_SHA} ibd has 1 is_tracked() and all 6 git errors read nonzero with no die (red)`,
+    { skip: skip || histSkip(oldHave) }, () => {
+        if (oldHave !== true) assert.fail(`${oldHave} (CI=true: a history row fails, never skips)`);
+        const g = capSync('git', ['show', `${OLD_SHA}:${IBD}`], { cwd: ROOT, encoding: 'utf8', env: ENV,
+            maxBuffer: 1 << 26 },
+            30000, 'git show ibd');
+        assert.equal(g.status, 0, g.stderr);
+        const dir = mk('hist-old');
+        writeFileSync(join(dir, IBD), g.stdout);
+        assert.equal(defCount(g.stdout), 1);
+        const cs = cases();
+        for (const name of ERR_CASES) {
+            if (name === 'dubious' && DUBIOUS_SKIP) continue;
+            const r = run(dir, IBD, cs[name]);
+            const m = /^rc=(\d+)\n$/.exec(r.stdout);
+            assert.ok(r.status === 0 && m !== null && Number(m[1]) !== 0 && r.stderr === '',
+                `${name}: ${r.status} ${r.stdout} ${r.stderr}`);
+            assert.notEqual(verdict(cs[name], r), null, `${name}: the A1 row must be red on the old ibd`);
+        }
     });
-}
-for (const name of ['tracked', 'untracked']) {
-    test(`A1 ${IBD}: control "${name}"`, { skip }, () => {
-        const c = cases()[name];
-        assert.equal(verdict(c, run(ROOT, IBD, c), true), null);
-    });
-}
 
 // ---- A5: budget and retention ----
 function shimCalls(file, c) {
@@ -251,7 +258,7 @@ function shimCalls(file, c) {
     const n = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter((l) => l !== '').length : 0;
     return { n, left: readdirSync(tmpd) };
 }
-for (const file of FOUR) {
+for (const file of FIVE) {
     test(`A5 ${file}: git spawns per call (2 inside a work tree, 1 outside) and 0 temp files per call`, { skip }, () => {
         const cs = cases();
         for (const [name, want] of [['tracked', 2], ['untracked', 2], ['outside', 1]]) {
@@ -274,7 +281,8 @@ test('A5: after 5 runs of this file, 0 entries are left under its mkdtemp root',
 
 // ---- A3: mutants M1-M6 of lib/tracked.sh; each is built (build.sh) into a private out dir and must fail >= 1 named row ----
 
-function mutantRoots(m) { // build the 4 roots (and ibd) from a private copy of build.sh + src/ + lib/ whose lib/tracked.sh is mutated once
+// build the 5 roots from a private copy of build.sh + src/ + lib/ whose lib/tracked.sh is mutated once
+function mutantRoots(m) {
     const d = mk(`mut-${m.id}`);
     cpSync(join(ROOT, 'build.sh'), join(d, 'build.sh'));
     cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
@@ -308,16 +316,18 @@ const MUTANTS = [
     { id: 'M6', from: '  local d b out rc=0 l\n', to: '  local d b out rc=0 l\n  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (m6): always"\n', exact: ['tracked', 'untracked', 'outside', 'dotgit', 'nogit', 'lit'], kills: ['untracked', 'outside', 'dotgit', 'nogit'] },
 ];
 for (const m of MUTANTS) {
-    test(`A3 mutant ${m.id}: kills ${m.kills.join(' + ')} on every one of the 4 roots; the unmutated build kills none`, { skip: skip || (NESTED ? 'nested retention run: mutants skipped (time)' : false) }, (t) => {
+    test(`A3 mutant ${m.id}: kills ${m.kills.join(' + ')} on every one of the 5 roots; the unmutated build ` +
+        `kills none`, { skip: skip || (NESTED ? 'nested retention run: mutants skipped (time)' : false) }, (t) => {
         const cs = cases();
         const names = [...ERR_CASES, ...CTL_CASES].filter((n) => !(n === 'dubious' && DUBIOUS_SKIP));
         const out = mutantRoots(m);
         const killed = new Map();       // "file:case" -> message
-        for (const file of FOUR) for (const n of names) {
+        for (const file of FIVE) for (const n of names) {
             const msg = verdict(cs[n], run(out, file, cs[n]));
             if (msg !== null) killed.set(`${file}:${n}`, msg);
         }
-        for (const file of FOUR) { const msg = litVerdict(out, file); if (msg !== null) killed.set(`${file}:lit`, msg); }
+        for (const file of FIVE) { const msg = litVerdict(out, file); if (msg !== null) killed.set(`${file}:lit`,
+            msg); }
         t.diagnostic(`${m.id} killed rows: ${[...killed.keys()].join(', ') || 'none'}`);
         const measured = new Map();
         for (const n of ERR_CASES) if (!(n === 'dubious' && DUBIOUS_SKIP)) { const fl = firstLine(cs[n]); measured.set(n, fl); t.diagnostic(`first line ${n}: rc=${fl.rc} ${JSON.stringify(fl.line)}`); }
@@ -327,9 +337,11 @@ for (const m of MUTANTS) {
             assert.ok(exact.includes('gitdir'), `${m.id}: teeth floor: the gitdir case must be a target on this host, measured ${JSON.stringify(measured.get('gitdir'))}`);
         }
         // the unmutated live roots pass every one of these rows (so each kill below is the mutation's, not the fixtures')
-        for (const file of FOUR) for (const n of names) assert.equal(verdict(cs[n], run(ROOT, file, cs[n])), null, `${file}:${n} on the unmutated root`);
+        for (const file of FIVE) for (const n of names) assert.equal(verdict(cs[n], run(ROOT, file, cs[n])), null,
+            `${file}:${n} on the unmutated root`);
         const want = [];
-        for (const file of FOUR) for (const n of exact) if (!(n === 'dubious' && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
+        for (const file of FIVE) for (const n of exact) if (!(n === 'dubious'
+            && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
         assert.deepEqual([...killed.keys()].sort(), want.sort(), `${m.id}: killed rows must be exactly the mutant's targets`);
     });
 }

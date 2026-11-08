@@ -404,7 +404,7 @@ diffRow('exact fn in diff mode: read vs read.set / readAll / Store.read -> only 
 test('bytecode-budget diff QA MUTANT M-prefix-match (a header name that starts with fn counts): the exact-name row goes red', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbq-pfx-'));
     try {
-        const p = variant(dir, 'prefix-match', 'want = (s == fn); n += want; next', 'want = (index(s, fn) == 1); n += want; next');
+        const p = variant(dir, 'prefix-match', 'want = (s == fn); n += want; hdr = 1; next', 'want = (index(s, fn) == 1); n += want; hdr = 1; next');
         const s = diffRun(PREFIX, 'read', p, [], {}, prefixPrep(6));
         assert.equal(s.r.status, 1, s.r.stdout + s.r.stderr); assert.match(s.r.stdout, /^ {2}read: before 3 match\(es\): 6,40,50$/m);
     } finally { rmSync(dir, { recursive: true, force: true }); }

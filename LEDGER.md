@@ -425,3 +425,30 @@ failure when `--after`'s directory is missing (`refuse_live` runs first; fail-cl
 `mkdir -p "$OUT"` (inlining-budget-diff.sh:652) before `refuse_live` (:706), so a refusal leaves OUT behind.
 Evidence: `.handoff/PLAN-b48-shlib.md`, `.handoff/evidence/b48-shlib/`, `.handoff/PLAN-b50-ddawk.md`,
 `.handoff/evidence/b50-ddawk/` (local, untracked).
+
+**#71 G-SHL3 (b50-b52): bb / dd audit B2a / B2b / B2c / B3 / N1 CLOSED or documented; residuals move to ibd U2.**
+CLOSED by G-SHL3 (CHANGELOG "G-SHL3"): B2b (a symlinked `--after`: the repo around the END of its chain is now a
+live toplevel; an unresolvable chain dies exit 2), B2c (widened: `--after`'s name joins the hard-link candidates),
+B3 (an unwritable OUT is refused before any spawn or write; no truncated report), N1 (the fallback `is_tracked`
+is physical; ibd includes lib/tracked.sh). DOCUMENTED (Class 3): B2a = `refuse_live` checks `--before` and the END
+of its symlink chain, not the intermediate hops; B2c residual = a hard link under another name or in a
+subdirectory stays undetected. OPEN until ibd U2 (ruled, Q-SHL3-R3; do not close here): devino `--` (a clean
+`-`-led `--before` on ibd dies in devino's stat as "unexpected error (exit 1)": fail closed, wrong text),
+resolve_links' `readlink || die` (class 3, reachable only by a race), `refuse_live` `dirname "$f"` / `"$p"`
+`--`, ibd `cp "$f"` `--`, F16 entry `./` prefix; U2 also retargets / retires M-dash-revert + M-trap-off.
+Test-gate lessons: (a) r2: a maintainer-ruled code change (A4's devino `--`) voided 3 existing mutants whose
+oracle was the old stat failure, measured only after the fact because the "105+1 SKIP / 120" gate was run before
+the change. (b) r3: a portable oracle validated against a build carrying a later-reverted change (A4) went red under
+bash >= 4.4 emulation (shlib D1t), so a test oracle must be re-validated on the state that ships. Reviews: r1
+REJECTED (DESIGN), r2 REJECTED (DESIGN), r3 APPROVED after one test-only fix. Real-Linux behaviour UNVERIFIED
+locally (emulated; CI will show it).
+Evidence: `.handoff/PLAN-b50-shl3.md` (A2, A3, A5), `.handoff/evidence/b50-shl3/` (local, untracked).
+
+**#72 G-BBAWK (b50-b52): bb audit B1a / B1c / B4a CLOSED; B1b documented.**
+CLOSED by G-BBAWK (CHANGELOG "G-BBAWK"): B1a (COUNT_AWK: a header after column 1 and a `Bytecode length:` line
+with no header above it count bad), B1c (`tr '\000' '?'` on both probe branches, tee before tr), B4a (LIMITS_AWK
+`/^  --/` reset; bb + ibd REPORTED limits). DOCUMENTED: B1b = driver output is trusted; a driver that prints V8
+header text can forge a result. OPEN -> ibd triage: Opus N1 (ibd bytecode probe; to be closed by ibd U1 / U3, rulings
+Q-IBD-2). Test-gate lesson: a plan's "anchors stay" claim checked only one substring; the stop gate caught a
+sibling anchor (M-prefix-match) displaced by the spec's own text.
+Evidence: `.handoff/PLAN-b50-bbawk.md` (A1, A2), `.handoff/evidence/b52-bbawk/` (local, untracked).

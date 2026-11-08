@@ -76,6 +76,7 @@
 # against canned sample text in --self-test, not against a real newer node binary.
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -251,6 +252,7 @@ END {
 '
 
 # @include lib/common.sh
+# @include lib/tracked.sh
 
 # ---------------------------------------------------------------------------------------------
 # --self-test: canned node 26 / newer-V8 text through the same awk programs

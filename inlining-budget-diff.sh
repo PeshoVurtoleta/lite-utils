@@ -76,6 +76,7 @@
 # against canned sample text in --self-test, not against a real newer node binary.
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 
+unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 set -euo pipefail
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
@@ -211,6 +212,7 @@ END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\
 # shellcheck disable=SC2016
 LIMITS_AWK='
 /^  --(max-(maglev-)?(eager-)?inlined-bytecode-size[a-z-]*|reserve-inline-budget-scale-factor) / { k = $1; sub(/^--/, "", k); next }
+/^  --/ { k = "" }
 /default: --(max-(maglev-)?(eager-)?inlined-bytecode-size|reserve-inline-budget-scale-factor)/ {
   s = $0; sub(/.*default: --/, "", s); print s; k = ""; next
 }
@@ -315,11 +317,15 @@ top_of() { # dir file: 0 and TOP_OF = the toplevel of the work tree around dir; 
 }
 live_tops() { # file dirs...: LIVE_TOPS = the repo toplevels around cwd, --after, --repo and each given dir (sort -u, one
   # per line); a git error dies naming file (top_of). CURRENT shell only: never in $( ), <( ) or a pipe
-  local f="$1" x t="" TOP_OF=""
+  local f="$1" x r t="" TOP_OF=""
   shift
   LIVE_TOPS=""
   if top_of . "$f"; then t="$t$TOP_OF"$'\n'; fi
   if [[ -n "$AFTER_FILE" ]] && top_of "$(dirname -- "$AFTER_FILE")" "$f"; then t="$t$TOP_OF"$'\n'; fi
+  if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then
+    r=$(resolve_links "$AFTER_FILE" 2>/dev/null) || die "--after: cannot resolve its symlink chain: $AFTER_FILE"
+    if top_of "$(dirname -- "$r")" "$f"; then t="$t$TOP_OF"$'\n'; fi
+  fi
   if [[ -n "$REPO" ]] && top_of "$REPO" "$f"; then t="$t$TOP_OF"$'\n'; fi
   for x in "$@"; do if top_of "$x" "$f"; then t="$t$TOP_OF"$'\n'; fi; done
   [[ -z "$t" ]] || LIVE_TOPS=$(printf '%s' "$t" | sort -u)
@@ -330,15 +336,17 @@ resolve_links() { # path: follow a symlink chain (at most 40 hops) and print its
   local p="$1" l n=0 d
   while [[ -L "$p" ]]; do
     n=$((n + 1)); [[ $n -le 40 ]] || die "symlink chain too long (or a loop) at $1"
-    l=$(readlink "$p")
-    case "$l" in /*) p="$l" ;; *) d=$(CDPATH= cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p (a link in the symlink chain of $1)"; p="$d/$l" ;; esac
+    l=$(readlink -- "$p")
+    case "$l" in /*) p="$l" ;; *) d=$(dirname -- "$p"); [[ $d != -* ]] || d="./$d"
+      d=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p (a link in the symlink chain of $1)"; p="$d/$l" ;; esac
   done
   printf '%s\n' "$p"
 }
 is_tracked() { # path: 0 iff git tracks it in the work tree around it
   local d b
-  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd) || return 1
-  b=$(basename "$1")
+  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
+  d=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
+  b=$(basename -- "$1")
   git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$d" ls-files --error-unmatch -- "$b" >/dev/null 2>&1
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
@@ -351,7 +359,8 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
   live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"
   while IFS= read -r top; do
     [[ -n "$top" ]] || continue
-    for t in "$top/Signal.js" "$top/$(basename "$f")" "$top/$(basename "$p")"; do
+    for t in "$top/Signal.js" "$top/$(basename "$f")" "$top/$(basename "$p")" \
+      ${AFTER_FILE:+"$top/$(basename -- "$AFTER_FILE")"}; do
       if [[ -e "$t" ]] && [[ "$(devino "$t")" == "$me" ]] && is_tracked "$t"; then
         die "$what is the same file as the live $t (hard link / symlink): use a FROZEN copy or --before-ref"
       fi
@@ -362,6 +371,27 @@ worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
+}
+is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
+  local d b out rc=0 l
+  command -v git >/dev/null 2>&1 || return 1
+  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
+  d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
+  b=$(basename -- "$1")
+  out=$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1) || rc=$?
+  l=${out%%$'\n'*}
+  if [[ $rc -ne 0 ]]; then
+    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac
+  elif [[ "$out" == false ]]; then
+    return 1
+  elif [[ "$out" == true ]]; then
+    rc=0
+    out=$(LC_ALL=C git --literal-pathspecs -C "$d" ls-files --error-unmatch -- "$b" 2>&1) || rc=$?
+    l=${out%%$'\n'*}
+    [[ $rc -ne 0 ]] || return 0
+    if [[ $rc -eq 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
+  fi
+  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref"
 }
 
 # ---------------------------------------------------------------------------------------------

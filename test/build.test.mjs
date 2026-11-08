@@ -352,13 +352,17 @@ test('G1 / G4 T7 controls: ibd src with the marker appended, an ic src copy with
 });
 
 // ---- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md A4): the roster of src files that include lib/tracked.sh ----
-// ORACLE: A4. The srcs that include lib/tracked.sh are exactly {dd, bb, ic, alloc}; ibd never. Each of those four roots
-// holds 2 `is_tracked()` definition lines (common.sh's, then the fragment's), ibd holds 1. The tracked.sh marker line comes
-// AFTER the common.sh marker line (bash keeps the last definition). Must-fail controls: ibd with the marker appended,
-// ic with it removed, bb with it moved above common.sh.
+// ORACLE: A4, as amended by b50 G-SHL3 N1 (.handoff/PLAN-b50-shl3.md ASSERTION 3). The srcs that include
+// lib/tracked.sh
+// are exactly {dd, bb, ic, alloc, ibd}. Each of those five roots holds 2 `is_tracked()` definition lines
+// (common.sh's,
+// then the fragment's). The tracked.sh marker line comes AFTER the common.sh marker line (bash keeps the last
+// definition). Must-fail controls: ibd with the marker removed, ic with it removed, bb with it moved above
+// common.sh.
 const TRK_MARKER = '# @include lib/tracked.sh';
 const COM_MARKER = '# @include lib/common.sh';
-const TRK_ALLOWED = ['allocation-diff', 'bytecode-budget', 'deopt-diff', 'ic-diff'];
+const TRK_ALLOWED = ['allocation-diff', 'bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff'];
+const TRK_FILES = TRK_ALLOWED.map((n) => n + '.sh');
 const trkLines = (t) => t.split('\n');
 function trkRoster(m) { return [...m].filter(([, t]) => trkLines(t).includes(TRK_MARKER)).map(([f]) => f.replace(/\.sh$/, '')).sort(); }
 function trkOrderProblems(m) { // names whose tracked.sh marker is not strictly after exactly one common.sh marker
@@ -373,29 +377,33 @@ function trkOrderProblems(m) { // names whose tracked.sh marker is not strictly 
 }
 function assertTrkRoster(m) {
     assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
-    assert.deepEqual(trkRoster(m), TRK_ALLOWED, 'the lib/tracked.sh roster must equal {dd, bb, ic, alloc}');
+    assert.deepEqual(trkRoster(m), TRK_ALLOWED, 'the lib/tracked.sh roster must equal {dd, bb, ic, alloc, ibd}');
     assert.deepEqual(trkOrderProblems(m), [], 'the lib/tracked.sh marker must come after the lib/common.sh marker');
 }
 const defLines = (t) => t.split('\n').filter((l) => /^is_tracked\(\)/.test(l)).length;
 
-test('G-TRACKED A4 roster: src files including lib/tracked.sh are exactly {dd, bb, ic, alloc}; ibd never', { skip }, () => {
+test('G-TRACKED A4 roster: src files including lib/tracked.sh are exactly {dd, bb, ic, alloc, ibd}', { skip },
+    () => {
     assertTrkRoster(liveSrc());
 });
-test('G-TRACKED A4 order: in each of the four srcs the lib/tracked.sh marker is after the lib/common.sh marker', { skip }, () => {
+test('G-TRACKED A4 order: in each of the five srcs the lib/tracked.sh marker is after the lib/common.sh marker',
+    { skip }, () => {
     const m = liveSrc();
-    for (const f of ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh']) {
+    for (const f of TRK_FILES) {
         const L = trkLines(m.get(f));
         assert.ok(L.indexOf(COM_MARKER) >= 0 && L.indexOf(TRK_MARKER) > L.indexOf(COM_MARKER), `${f}: tracked.sh marker (${L.indexOf(TRK_MARKER)}) must follow common.sh (${L.indexOf(COM_MARKER)})`);
     }
 });
-test('G-TRACKED A4 roots: each of the four built roots has 2 is_tracked() lines, ibd 1', { skip }, () => {
-    for (const f of ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh']) assert.equal(defLines(readFileSync(join(ROOT, f), 'utf8')), 2, f);
-    assert.equal(defLines(readFileSync(join(ROOT, NAME), 'utf8')), 1, NAME);
+test('G-TRACKED A4 roots: each of the five built roots has 2 is_tracked() lines', { skip }, () => {
+    for (const f of TRK_FILES) assert.equal(defLines(readFileSync(join(ROOT, f), 'utf8')), 2, f);
 });
-test('G-TRACKED A4 controls: ibd with the marker appended, ic with it removed, bb with it moved above common.sh each fail (must-fail controls)', { skip }, () => {
+test('G-TRACKED A4 controls: ibd with the marker removed, ic with it removed, bb with it moved above ' +
+    'common.sh each fail (must-fail controls)', { skip }, () => {
     const m = liveSrc();
-    m.set(NAME, m.get(NAME) + '\n' + TRK_MARKER + '\n');
-    assert.ok(trkRoster(m).includes('inlining-budget-diff'));
+    assert.equal(trkLines(m.get(NAME)).filter((l) => l === TRK_MARKER).length, 1,
+        'ibd src holds the marker exactly once');
+    m.set(NAME, trkLines(m.get(NAME)).filter((l) => l !== TRK_MARKER).join('\n'));
+    assert.equal(trkRoster(m).includes('inlining-budget-diff'), false);
     assert.throws(() => assertTrkRoster(m), assert.AssertionError);
     const m2 = liveSrc();
     assert.equal(trkLines(m2.get('ic-diff.sh')).filter((l) => l === TRK_MARKER).length, 1, 'ic src holds the marker exactly once');

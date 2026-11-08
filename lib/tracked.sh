@@ -3,11 +3,13 @@
 #: dynamic scope (refuse_live's local label, e.g. --before; unset -> "is_tracked") for the die text only.
 #: Returns 0 tracked; 1 untracked, ignored, outside a work tree, inside .git/ or a bare repo, no git on PATH, or a dir
 #: that cannot be entered; dies (exit 2) on any other git answer, naming git's first output line.
+#: A `-`-led dirname gets a "./" before the cd (bash reads `cd -- -` as OLDPWD).
 #: Cold path (stage_check, before any spawn). Spawns: 2 git inside a work tree, 1 outside; 0 temp files. bash 3.2 safe.
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
   command -v git >/dev/null 2>&1 || return 1
-  d=$(cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1
+  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
+  d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
   b=$(basename -- "$1")
   out=$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1) || rc=$?
   l=${out%%$'\n'*}

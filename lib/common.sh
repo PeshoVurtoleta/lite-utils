@@ -1,8 +1,12 @@
 #: lib/common.sh -- die say sha8 usage multiset devino top_of live_tops resolve_links is_tracked
-#: refuse_live worst. Reads at call time: REPORT (say), AFTER_FILE and REPO (live_tops), $what (top_of's die text, through
-#: bash dynamic scope: refuse_live's local label), $0 (usage). Sets TOP_OF (top_of; a local of live_tops) and LIVE_TOPS
-#: (live_tops; a local of refuse_live). top_of and live_tops die on a git error: call them in the CURRENT shell, never
-#: in $( ), <( ) or a pipe (a die there exits only the subshell, and the run goes on with no toplevels).
+#: refuse_live worst. Reads at call time: REPORT (say), AFTER_FILE (live_tops: the toplevels around its dir and,
+#: for a symlink, around the dir of its chain's end; refuse_live: its name joins the cand list) and REPO
+#: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage).
+#: Sets TOP_OF (top_of; a local of live_tops) and LIVE_TOPS (live_tops; a local of refuse_live). top_of and
+#: live_tops die on a git error: call them in the CURRENT shell, never in $( ), <( ) or a pipe (a die there exits
+#: only the subshell, and the run goes on with no toplevels). live_tops resolves a symlinked --after in $( ) but
+#: checks that subshell's status and dies in the current shell ("--after: cannot resolve its symlink chain").
+#: resolve_links and is_tracked give a `-`-led dirname a "./" before the cd (bash reads `cd -- -` as OLDPWD).
 #: @SCRIPT@ is the script name (build.sh substitutes it).
 # ---------------------------------------------------------------------------------------------
 # helpers
@@ -36,11 +40,15 @@ top_of() { # dir file: 0 and TOP_OF = the toplevel of the work tree around dir; 
 }
 live_tops() { # file dirs...: LIVE_TOPS = the repo toplevels around cwd, --after, --repo and each given dir (sort -u, one
   # per line); a git error dies naming file (top_of). CURRENT shell only: never in $( ), <( ) or a pipe
-  local f="$1" x t="" TOP_OF=""
+  local f="$1" x r t="" TOP_OF=""
   shift
   LIVE_TOPS=""
   if top_of . "$f"; then t="$t$TOP_OF"$'\n'; fi
   if [[ -n "$AFTER_FILE" ]] && top_of "$(dirname -- "$AFTER_FILE")" "$f"; then t="$t$TOP_OF"$'\n'; fi
+  if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then
+    r=$(resolve_links "$AFTER_FILE" 2>/dev/null) || die "--after: cannot resolve its symlink chain: $AFTER_FILE"
+    if top_of "$(dirname -- "$r")" "$f"; then t="$t$TOP_OF"$'\n'; fi
+  fi
   if [[ -n "$REPO" ]] && top_of "$REPO" "$f"; then t="$t$TOP_OF"$'\n'; fi
   for x in "$@"; do if top_of "$x" "$f"; then t="$t$TOP_OF"$'\n'; fi; done
   [[ -z "$t" ]] || LIVE_TOPS=$(printf '%s' "$t" | sort -u)
@@ -51,15 +59,17 @@ resolve_links() { # path: follow a symlink chain (at most 40 hops) and print its
   local p="$1" l n=0 d
   while [[ -L "$p" ]]; do
     n=$((n + 1)); [[ $n -le 40 ]] || die "symlink chain too long (or a loop) at $1"
-    l=$(readlink "$p")
-    case "$l" in /*) p="$l" ;; *) d=$(CDPATH= cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p (a link in the symlink chain of $1)"; p="$d/$l" ;; esac
+    l=$(readlink -- "$p")
+    case "$l" in /*) p="$l" ;; *) d=$(dirname -- "$p"); [[ $d != -* ]] || d="./$d"
+      d=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p (a link in the symlink chain of $1)"; p="$d/$l" ;; esac
   done
   printf '%s\n' "$p"
 }
 is_tracked() { # path: 0 iff git tracks it in the work tree around it
   local d b
-  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd) || return 1
-  b=$(basename "$1")
+  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
+  d=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
+  b=$(basename -- "$1")
   git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$d" ls-files --error-unmatch -- "$b" >/dev/null 2>&1
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
@@ -72,7 +82,8 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
   live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"
   while IFS= read -r top; do
     [[ -n "$top" ]] || continue
-    for t in "$top/Signal.js" "$top/$(basename "$f")" "$top/$(basename "$p")"; do
+    for t in "$top/Signal.js" "$top/$(basename "$f")" "$top/$(basename "$p")" \
+      ${AFTER_FILE:+"$top/$(basename -- "$AFTER_FILE")"}; do
       if [[ -e "$t" ]] && [[ "$(devino "$t")" == "$me" ]] && is_tracked "$t"; then
         die "$what is the same file as the live $t (hard link / symlink): use a FROZEN copy or --before-ref"
       fi

@@ -5,6 +5,7 @@
 # shellcheck disable=SC2016
 LIMITS_AWK='
 /^  --(max-(maglev-)?(eager-)?inlined-bytecode-size[a-z-]*|reserve-inline-budget-scale-factor) / { k = $1; sub(/^--/, "", k); next }
+/^  --/ { k = "" }
 /default: --(max-(maglev-)?(eager-)?inlined-bytecode-size|reserve-inline-budget-scale-factor)/ {
   s = $0; sub(/.*default: --/, "", s); print s; k = ""; next
 }
