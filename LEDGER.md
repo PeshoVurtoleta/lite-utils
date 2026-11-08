@@ -412,13 +412,16 @@ work; their per-id status lives in the audit chain and the b42 triage / rulings 
 `.handoff/RULINGS-b42-audit.md` rules on the bb and dd findings, plus alloc / ic under Q-ENV (alloc A2 / A6, ic I2 /
 I6) and Q-DD4a (alloc A3 / A5).
 
-**#70 G-SHLIB (b48): dd audit argon 2026-11-07 -- A1a / A1b / A2 CLOSED, A3 / A4 / A5 / A6 OPEN.** Closed by G-SHLIB
-(Q-SHLIB-A2, CHANGELOG "G-SHLIB"): A1a (logical `is_tracked` dir; STAGE_ABS_B / _A decoy, a symlink before `..`) and
-A1b (`resolve_links`: a relative link in a symlinked dir) on bb and dd, A2 (`live_tops` swallowing git errors,
-`2>/dev/null || true`) on bb and dd. OPEN, later bursts: A3, A4, A5, A6 (the
-new dd still shows A3 / A4 / A5 RED in argon; A6 = hygiene (LOW), routed to FILLERS by
-orchestrator/SPOT-CHECK.md:35). Leads for the D-4a inlining-budget-diff group:
+**#70 G-SHLIB (b48), G-DDAWK (b50): dd audit argon 2026-11-07 -- A1a / A1b / A2 / A3 / A4 / A5 CLOSED, A6 OPEN.**
+Closed by G-SHLIB (Q-SHLIB-A2, CHANGELOG "G-SHLIB"): A1a (logical `is_tracked` dir; STAGE_ABS_B / _A decoy, a
+symlink before `..`) and A1b (`resolve_links`: a relative link in a symlinked dir) on bb and dd, A2 (`live_tops`
+swallowing git errors, `2>/dev/null || true`) on bb and dd. Closed by G-DDAWK (b50, CHANGELOG "G-DDAWK"): A3
+(DEOPT_AWK greedy tails, CR / `[` / `]`), A4 (`judge()` early awk `exit` under pipefail, in deopt-diff and
+ic-diff; "consistent with" the Q-NIGHTLY flake, not proven its cause), A5 (TIER_AWK: a `@@LITE-MARK` line taken
+for a position line). OPEN: A6 = hygiene (LOW), routed to FILLERS by orchestrator/SPOT-CHECK.md:35.
+Leads for the D-4a inlining-budget-diff group:
 (1) ibd A1a stays OPEN (its own logical `is_tracked`); (2) ibd's "--after not found" now reads as the `--before` git
 failure when `--after`'s directory is missing (`refuse_live` runs first; fail-closed, wording only); (3) ibd runs
 `mkdir -p "$OUT"` (inlining-budget-diff.sh:652) before `refuse_live` (:706), so a refusal leaves OUT behind.
-Evidence: `.handoff/PLAN-b48-shlib.md`, `.handoff/evidence/b48-shlib/` (local, untracked).
+Evidence: `.handoff/PLAN-b48-shlib.md`, `.handoff/evidence/b48-shlib/`, `.handoff/PLAN-b50-ddawk.md`,
+`.handoff/evidence/b50-ddawk/` (local, untracked).

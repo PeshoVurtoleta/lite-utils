@@ -803,3 +803,114 @@ for (const [label, after, why, teeth] of E_ROWS) {
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
+
+// --- b50 G-DDAWK T1 (PLAN-b50-ddawk.md ASSERTIONS 1, 2, 4). ORACLE: the plan text only, never the script's output.
+// Each row was written BEFORE its fix (todo until G-DDAWK landed). The
+// frozen b50-audit-before-bd0192f build fails every row (exit 0 / 1, or the reason / tier line missing). Teeth: a
+// per-clause revert variant() of the NEW awk line must fail the row that only that clause can catch (rows
+// that also hold a second bad byte, e.g. 'E9 CR D10', carry no variant).
+const dropClause = (cl, tail, k) =>
+    ['if (' + cl.join(' || ') + tail, 'if (' + cl.filter((_, i) => i !== k).join(' || ') + tail];
+const CL1 = ['index(r, "\\r") > 0', 'index(r, "[") > 0', 'index(r, "]") > 0'];   // plan TASK 1 (bailout reason)
+const CL2 = ['substr(s, p, 3) != ">, "', 'index(s, "]") != length(s)', 'index(s, "[") > 0',
+    'index(s, "\\r") > 0'];   // TASK 2
+const CL3 = ['index(r, "]") != length(r)', 'index(r, "[") > 0', 'index(r, "\\r") > 0'];   // TASK 3 (compiled)
+const TL1 = ') { x("bailout: CR or bracket in the reason")';
+const TL2 = ') { x("bailout: after code tier")';
+const TL3 = ') { x("completed compiling: after target")';
+const DE = E9.slice(0, -1);   // E9 without its closing bracket
+const DD = D10.slice(0, -1);
+const RS1 = 'bailout: CR or bracket in the reason';
+const RS2 = 'bailout: after code tier';
+const RS3 = 'completed compiling: after target';
+const reasonD = (to) => `${E9}\n${D10.replace('not a Smi', to)}\n`;
+const A3_ROWS = [
+    // [label, after trace, reason, [[variant name, edits], ...] each failing THIS row]
+    ['A3 E9 CR D10', `${E9}\r${D10}\n`, RS3, []],
+    ['A3 E9 space D10 (no separator)', `${E9} ${D10}\n`, RS3, []],
+    ['A3 E9 minus ] then [x]', `${DE}[x]\n`, RS3, [['A3c-no-bracket-clause', [dropClause(CL3, TL3, 1)]]]],
+    ['A3 E9 minus ] then CR x]', `${DE}\rx]\n`, RS3, [['A3c-no-CR-clause', [dropClause(CL3, TL3, 2)]]]],
+    ['A3 E9 space x]', `${E9} x]\n`, RS3, [['A3c-no-close-clause', [dropClause(CL3, TL3, 0)]]]],
+    ['A3 D10 space D10', `${E9}\n${D10} ${D10}\n`, RS2, []],
+    ['A3 D10 space E9', `${E9}\n${D10} ${E9}\n`, RS2, []],
+    ['A3 D10 minus ] then CR junk]', `${E9}\n${DD}\rjunk]\n`, RS2,
+        [['A3b-no-CR-clause', [dropClause(CL2, TL2, 3)]]]],
+    ['A3 D10 minus ] then [x]', `${E9}\n${DD}[x]\n`, RS2,
+        [['A3b-no-bracket-clause', [dropClause(CL2, TL2, 2)]]]],
+    ['A3 D10 space x]', `${E9}\n${D10} x]\n`, RS2, [['A3b-no-close-clause', [dropClause(CL2, TL2, 1)]]]],
+    ['A3 reason with CR', reasonD('not a Smi\rX'), RS1, [['A3a-no-CR-clause', [dropClause(CL1, TL1, 0)]]]],
+    ['A3 reason with [', reasonD('not a [Smi'), RS1, [['A3a-no-open-clause', [dropClause(CL1, TL1, 1)]]]],
+    ['A3 reason with ]', reasonD('not a Smi]'), RS1, [['A3a-no-close-clause', [dropClause(CL1, TL1, 2)]]]],
+];
+for (const [label, after, why, isos] of A3_ROWS) {
+    test(`deopt-diff e2e G-DDAWK ${label} -> exit 2, NO-VERDICT, '${why}'`, { skip }, () => {
+        assertX(e2e(SCRIPT, after), why);
+    });
+    for (const [vname, edits] of isos) {
+        test(`deopt-diff e2e G-DDAWK ${label}: revert ${vname} (the clause removed fails the row)`,
+            { skip }, () => {
+                const dir = mkdtempSync(join(tmpdir(), 'dd-ea3-'));
+                try {
+                    const r = e2e(variant(dir, vname, edits), after);
+                    noTimeout(r);
+                    assert.throws(() => assertX(r, why), assert.AssertionError);
+                } finally { rmSync(dir, { recursive: true, force: true }); }
+            });
+    }
+}
+
+// A4: a glued '[completed compilingX' record, then 20000 good E lines: judge() must drain its pipe (no SIGPIPE on
+// the printf feeding awk), so the X reason is read and the tier line counts all 20000 compiles. Text: the plan.
+const A4_AFTER = '[completed compilingX' + E9.slice(20) + '\n' + (E9 + '\n').repeat(20000);
+const A4_TIER = 'tier    add  after  compiles MAGLEV 0, MAGLEV-OSR 0, TURBOFAN_JS 20000, TURBOFAN_JS-OSR 0';
+// A4_TIER text confirmed: B1 stop gate (out-a4.txt) / b50 review
+const A4_WHY = 'completed compiling: no space after the prefix';
+const X_NEW = "awk '/^X / && !n++ { print substr($0, 3) }'";
+const X_OLD = "awk '/^X /{ print substr($0, 3); exit }'";   // the frozen early-exit form (SIGPIPE on printf)
+function assertA4(r) {
+    assertX(r, A4_WHY);
+    assert.equal(r.lines.filter((l) => l === REASON(A4_WHY)).length, 1, r.out.slice(0, 4000));
+    const nt = r.lines.filter((l) => l.includes(A4_TIER)).length;
+    assert.equal(nt, 1, `want one "${A4_TIER}"\n${r.out.slice(0, 3000)}`);
+    assert.doesNotMatch(r.out, /Broken pipe|unexpected error/);
+}
+test('deopt-diff e2e G-DDAWK A4 glued record then 20000 E lines -> exit 2, reason once, tier line, no SIGPIPE',
+    { skip }, () => { assertA4(e2e(SCRIPT, A4_AFTER)); });
+test('deopt-diff e2e G-DDAWK A4: revert (judge() with the early exit back fails the row)',
+    { skip }, () => {
+        const dir = mkdtempSync(join(tmpdir(), 'dd-ea4-'));
+        try {
+            const r = e2e(variant(dir, 'A4-exit-back', [[X_NEW, X_OLD]]), A4_AFTER);
+            noTimeout(r);
+            assert.throws(() => assertA4(r), assert.AssertionError);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+// A5: an `@@LITE-MARK op ...` line that also carries `;;; deoptimize at` text is a MARKER line, no deopt position:
+// the bad op line is reported (exit 1 DIFF: after has 1 deopt, before 0), never swallowed as the position.
+const A5_TIER = 'tier    add  after  ops until TURBOFAN_JS: markers unreadable '
+    + '(bad op line: want @@LITE-MARK op <1-15 digits>)';
+const A5_POS = ';;; deoptimize at <file:///work/drv.js:1:31>';
+const A5_G = 'if (PD > 0 && substr($0, 1, 11) != "@@LITE-MARK" && (p = index($0, ";;; deoptimize at ")) > 0)';
+const A5_NOG = 'if (PD > 0 && (p = index($0, ";;; deoptimize at ")) > 0)';
+function assertA5(r) {
+    assert.equal(r.status, 1, r.out);
+    assert.deepEqual(r.lines.filter((l) => l.startsWith('VERDICT ')), ['VERDICT DIFF'], r.out);
+    assert.equal(r.spawns, 8, r.out);
+    assert.equal(r.lines.filter((l) => l.includes(A5_TIER)).length, 1, `want one "${A5_TIER}"\n${r.out}`);
+}
+for (const [label, op] of [['op BOGUS', 'BOGUS'], ['op 7', '7']]) {
+    // the 'op 7' row: the trailing text makes the op line bad (intended; confirmed: b50 review)
+    const after = `${E9}\n${D10}\n@@LITE-MARK op ${op}    ${A5_POS}\n`;
+    test(`deopt-diff e2e G-DDAWK A5 marker line '${label}' + deoptimize text -> exit 1 DIFF, markers unreadable`,
+        { skip }, () => { assertA5(e2e(SCRIPT, after)); });
+    test(`deopt-diff e2e G-DDAWK A5 '${label}': revert (without the @@LITE-MARK guard the row fails)`,
+        { skip }, () => {
+            const dir = mkdtempSync(join(tmpdir(), 'dd-ea5-'));
+            try {
+                const r = e2e(variant(dir, 'A5-no-guard', [[A5_G, A5_NOG]]), after);
+                noTimeout(r);
+                assert.throws(() => assertA5(r), assert.AssertionError);
+            } finally { rmSync(dir, { recursive: true, force: true }); }
+        });
+}

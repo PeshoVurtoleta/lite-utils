@@ -90,7 +90,7 @@
 #   E <fn>@<tier>[-OSR]              one per `[completed compiling ... <JSFunction fn ...> (target T)[ OSR] - took`
 #   D <fn>@<tier><TAB><kind> (<reason>)   one per `[bailout (kind: K, reason: R): begin. deoptimizing ...
 #                                    <JSFunction fn ...>, ... <Code T>, ...]`, K ~ ^deopt-[a-z]+$, T ~ ^[A-Z_]+$,
-#                                    R non-empty, no tab, cut at the first `): begin. deoptimizing `
+#                                    R non-empty, no tab, CR, `[` or `]`, cut at the first `): begin. deoptimizing `
 #   X <why>                          a line naming fn that cannot be read: a `[bailout` or `[completed compiling `
 #                                    line that does not parse (e.g. "bailout: empty reason or a tab"); a line
 #                                    starting `[completed compiling` with no space after it ("completed compiling:
@@ -267,12 +267,13 @@ substr($0, 1, 8) == "[bailout" {
   r = substr(s, 1, p - 1); s = substr(s, p + 23)
   if (k !~ /^deopt-[a-z]+$/) { x("bailout: kind \047" k "\047"); next }
   if (r == "" || index(r, "\t") > 0) { x("bailout: empty reason or a tab"); next }
+  if (index(r, "\r") > 0 || index(r, "[") > 0 || index(r, "]") > 0) { x("bailout: CR or bracket in the reason"); next }
   if (!match(s, /^0x[0-9a-fA-F]+ <JSFunction /) || !head(substr(s, RLENGTH + 1))) { x("bailout: malformed function"); next }
   if (NM != fn) { x("bailout: function name"); next }
   if (!match(REST, /^, 0x[0-9a-fA-F]+ <Code /)) { x("bailout: no code object"); next }
   s = substr(REST, RLENGTH + 1); p = index(s, ">"); t = substr(s, 1, p - 1)
   if (p == 0 || t !~ /^[A-Z_]+$/) { x("bailout: code tier"); next }
-  if (substr(s, p, 3) != ">, " || s !~ /\]$/) { x("bailout: after code tier"); next }
+  if (substr(s, p, 3) != ">, " || index(s, "]") != length(s) || index(s, "[") > 0 || index(s, "\r") > 0) { x("bailout: after code tier"); next }
   print "D " fn "@" t "\t" k " (" r ")"; next
 }
 substr($0, 1, 21) == "[completed compiling " {
@@ -282,6 +283,7 @@ substr($0, 1, 21) == "[completed compiling " {
   if (NM != fn) { x("completed compiling: function name"); next }
   if (!match(REST, /^ \(target [A-Z_]+\)/)) { x("completed compiling: target"); next }
   t = substr(REST, 10, RLENGTH - 10); r = substr(REST, RLENGTH + 1)
+  if (index(r, "]") != length(r) || index(r, "[") > 0 || index(r, "\r") > 0) { x("completed compiling: after target"); next }
   if (r ~ /^ OSR - took .*\]$/) t = t "-OSR"
   else if (r !~ /^ - took .*\]$/) { x("completed compiling: after target"); next }
   print "E " fn "@" t; next
@@ -346,7 +348,7 @@ FILENAME == ARGV[1] {                               # records, in trace order (X
       substr($0, RLENGTH + 1 + length(fn)) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN(_JS)?\)( OSR)? - took .*\]$/) { TF = 1; TA = LM }
     next
   }
-  if (PD > 0 && (p = index($0, ";;; deoptimize at ")) > 0) { PS[PD] = posof(substr($0, p + 18)); PD = 0; next }
+  if (PD > 0 && substr($0, 1, 11) != "@@LITE-MARK" && (p = index($0, ";;; deoptimize at ")) > 0) { PS[PD] = posof(substr($0, p + 18)); PD = 0; next }
   if (substr($0, 1, 14) == "@@LITE-MARK op" && substr($0, 15, 1) !~ /[A-Za-z0-9_-]/) {
     n = substr($0, 16)
     if (substr($0, 15, 1) != " " || n !~ /^[0-9]+$/ || length(n) > 15) bad("bad op line" (NM > 0 ? " after op " LM : "") ": want @@LITE-MARK op <1-15 digits>")
@@ -424,7 +426,7 @@ judge() {
     esac
   done
   for ((i = 0; i < n; i++)); do
-    x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X /{ print substr($0, 3); exit }')
+    x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X / && !n++ { print substr($0, 3) }')
     if [[ -n "$x" ]]; then JWHY="unparseable trace line naming '$fn' in run $((i + 1)): $x"; return 0; fi
   done
   first=$(nc_ms "${JREC[0]}")

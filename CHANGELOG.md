@@ -1056,3 +1056,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   DETERMINISTIC. Reviews: b48-m3 r1 REJECTED (1 LITERAL stale count), r2 APPROVED. Local `npm test` 1921 tests,
   1919 pass, 0 fail, 2 skip; observed green on CI run 42332588363 (8 / 8); CI git 2.56 prints
   'fatal: gitfile does not point to a valid repository: <path>' for `missing`.
+
+- G-DDAWK (dd audit argon 2026-11-07, A3 / A4 / A5; Opus + Fable reviewers; A3 CLASS 1, A4 / A5 CLASS 2: FIX),
+  deopt-diff + ic-diff (b50): three awk defects closed. A3 (DEOPT_AWK): the tails of a trace record were read
+  greedily, so text glued after a record's `]`, or a CR, `[` or `]` inside a bailout reason, could pass as a
+  clean record. The bailout tail after the code tier must now hold exactly one `]`, at the end, and no `[` or CR
+  (else X "bailout: after code tier"); the completed-compiling tail after `(target ...)` must hold exactly one
+  `]`, at the end, and no `[` or CR (else X "completed compiling: after target"); a bailout reason with a CR, `[`
+  or `]` is X "bailout: CR or bracket in the reason". Each X record makes the function NO-VERDICT. The `-h`
+  D-record line now names "no tab, CR, `[` or `]`". A5 (TIER_AWK): a `@@LITE-MARK` line is never taken for the
+  `;;; deoptimize at` position line of a pending deopt (a marker line glued to `;;; deoptimize at` text used to
+  be swallowed as the position). A4 (`judge()`, deopt-diff AND ic-diff): the awk that picks the first X record
+  ended with `exit`; under `pipefail` a record over 64 KiB made `printf` die of SIGPIPE, so the run ended
+  "unexpected error" and the reason and the tier section were lost. The awk now drains its input
+  (`/^X / && !n++ { print substr($0, 3) }`). This is consistent with the Q-NIGHTLY flake; it is NOT proven to be
+  its cause (the race was not reproduced on macOS, 0 / 3000; the deterministic big-input form was). Self-test
+  counts unchanged (dd 99, 116 with fixtures; ic 76). Tests: `test/deopt-diff.test.mjs` +28 end-to-end rows
+  (13 A3 rows and 9 per-clause revert variants, the A4 row and its revert, 2 A5 rows and 2 reverts); new
+  `test/judge-drain.test.mjs` (6 tests: a line-level drain harness for both roots, teeth pinned to
+  `git show bd0192f:`); `test/death-signature.test.mjs` SYNC_FILES += judge-drain. Measured: review r2,
+  `node --test test/deopt-diff.test.mjs` in the head-r2 overlay, 184 / 184 pass, 441 s (load ~34; a
+  deterministic, untimed run, one run). Tier: DETERMINISTIC. Reviews:
+  .handoff/evidence/b50-ddawk/REVIEW-r1.md REJECTED (2 LITERAL doc-truth items, the `-h` line), REVIEW-r2.md
+  APPROVED (local, untracked).

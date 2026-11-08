@@ -255,7 +255,7 @@ judge() {
     if [[ -n "${JLOG[$i]}" ]]; then JWHY="${JLOG[$i]} in run $((i + 1))"; return 0; fi
   done
   for ((i = 0; i < n; i++)); do
-    x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X /{ print substr($0, 3); exit }')
+    x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X / && !n++ { print substr($0, 3) }')
     if [[ -n "$x" ]]; then JWHY="unreadable IC log in run $((i + 1)): $x"; return 0; fi
   done
   first=$(s_ms "${JREC[0]}" "$fn")
