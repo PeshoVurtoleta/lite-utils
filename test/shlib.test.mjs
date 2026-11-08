@@ -399,6 +399,36 @@ test('I8m MUTANT B2c token dropped: the B2c row is not refused (node spawned), t
     assert.equal(refusesSame(IBD, f), null);
 });
 
+// I7e (b52 reviewer gap): a DANGLING --after symlink. Expected from the modes.sh contract, not from a run: refuse_live
+// runs first and must not trip over it (the B2b guard is `-L && -e`), so the run ends at the "--after not found" die
+// (exit 2, 0 node spawns). The mutant without `-e` resolves the dead chain in live_tops and dies elsewhere ("cannot
+// resolve its symlink chain" / a git failure): same exit 2, other text.
+function danglingFixture() {
+    const d = mk('b2b-dangling');
+    mkdirSync(join(d, 'frz')); mkdirSync(join(d, 'work'));
+    writeFileSync(join(d, 'frz', 'Signal.js'), `${E9}\n`);
+    symlinkSync('../nodir/Signal.js', join(d, 'work', 'Signal.js'));
+    return { d, args: ['--node', fakeNode(), '--fn', 'm0', '--out', join(d, 'out'),
+        '--before', join(d, 'frz', 'Signal.js'), '--after', join(d, 'work', 'Signal.js')] };
+}
+function danglingVerdict(script) {   // null iff exit 2, 0 spawns, "--after not found: <path>", no symlink-chain die
+    const f = danglingFixture(), r = runScript(script, f.d, f.args);
+    if (r.rc !== 2 || r.spawns !== 0 || !/--after not found: /.test(r.out) || /symlink chain|git failed/.test(r.out)) {
+        return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+    }
+    return null;
+}
+test('I7e ibd dangling --after symlink: exit 2 "--after not found", 0 spawns (B2b guard has -e)', { skip }, () => {
+    assert.equal(danglingVerdict(IBD), null);
+});
+test('I7em MUTANT B2b guard without -e: the dangling --after dies elsewhere, the row is red; the live build is green',
+    { skip: skip || (NESTED ? 'nested retention run: mutant skipped (time)' : false) }, () => {
+    const out = privBuild('b2b-no-e', [['lib', 'common.sh', 'if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then',
+        'if [[ -L "$AFTER_FILE" ]]; then']]);
+    assert.notEqual(danglingVerdict(join(out, 'inlining-budget-diff.sh')), null, 'mutant survived: -e not needed');
+    assert.equal(danglingVerdict(IBD), null);
+});
+
 // ---------------------------------------------------------------- M: N1 mutant (ASSERTION 3, last)
 test('M common.sh is_tracked back to a logical `cd` (N1 line 1 mutated), in the ibd fallback build: A1a is ' +
     'not refused; the unmutated fallback refuses', { skip: skip

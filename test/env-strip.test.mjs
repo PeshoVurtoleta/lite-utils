@@ -169,6 +169,14 @@ function rootOf(tool, which, d) {
     return p;
 }
 
+// the caps of one tool run (ledger law 8: size to the slowest CI leg). ic real took 27-93 s on hosted macOS node 22 / 24 and
+// past 120 s twice (run 42458559718), against 2-26 s elsewhere; every other tool row stays under 8 s. All-hang bound of the 16
+// tool runs: 2 x 600 s + 14 x 120 s = 48 min, inside the 3600 s per-file limit and the 120 min job cap. SIGKILL because
+// SIGTERM cannot bound a hung foreground step: ic-diff traps TERM and bash runs the trap only after that step ends (with the
+// pipes spawnSync has closed by then, which is why run 42458559718 read "killed by SIGPIPE"). LEDGER #73.
+const TOOL_CAP = 120000;
+const IC_REAL_CAP = 600000;
+
 // one run of a tool; returns what the rows assert on, removes its dir in finally. mode fake | real, which new | old.
 function runTool(tool, mode, which) {
     const T = TOOLS[tool];
@@ -179,8 +187,8 @@ function runTool(tool, mode, which) {
         const root = rootOf(tool, which, d);
         const node = mode === 'fake' ? fakeNode(d) : wrapper(d);
         const { args, cwd } = setup(tool, mode, d, node);
-        const r = capSync('bash', [root, ...args], { encoding: 'utf8', cwd, env: probeEnv(d, mode === 'fake' ? '--st-probe' : '--trace-warnings') },
-            120000, `env-strip ${tool} ${mode} ${which}`);
+        const r = capSync('bash', [root, ...args], { encoding: 'utf8', cwd, killSignal: 'SIGKILL', env: probeEnv(d, mode === 'fake' ? '--st-probe' : '--trace-warnings') },
+            tool === 'ic' && mode === 'real' ? IC_REAL_CAP : TOOL_CAP, `env-strip ${tool} ${mode} ${which}`);
         const out = (r.stdout || '') + (r.stderr || '');
         const logf = join(d, 'fk', 'env.log');
         const log = existsSync(logf) ? readFileSync(logf, 'utf8').split('\n').filter(Boolean) : [];

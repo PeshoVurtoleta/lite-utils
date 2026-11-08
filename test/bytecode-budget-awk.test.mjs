@@ -90,6 +90,18 @@ const SC = {
     E2: H(1) + L(6) + 'x\n' + L(1083),
     E4: H(1) + L(6) + 'x\0' + H(2) + L(1083),
     E3: H(1) + 'Bytecode length: 6\0junk\n',
+    // G0: header, then a glued header, then a length. Hand-derived (COUNT_AWK, fn add): line 1 is a header, want = 1,
+    //   n = 1; line 2 is a glued header (after column 1): n = 2 and want must be CLEARED, so the length line below it
+    //   is no good length -> n = 2, good = 0, bad = 2 -> "2 of 2". Without the clear want stays 1 and 1083 reads good.
+    G0: H(1) + 'step ' + H(2) + L(1083),
+    // O1 / O2 / O3: "x" then an orphan length line that is not "Bytecode length: <digits>" to the end. The orphan
+    //   rule counts any "^Bytecode length:" line with no header above it: n = 2, good = 1 (the 6) -> "1 of 2".
+    O1: H(1) + L(6) + 'x\n' + 'Bytecode length: abc\n',
+    O2: H(1) + L(6) + 'x\n' + 'Bytecode length:\n',
+    O3: H(1) + L(6) + 'x\n' + 'Bytecode length: 12x\n',
+    // E5: a length line ending in a NUL: tr maps the NUL to '?', so the line no longer ends at its digits: bad
+    //   (n = 1, good = 0 -> "1 of 1"). A tr that DELETES the NUL (tr -d) or no tr on a NUL-truncating awk reads 6: exit 0.
+    E5: H(1) + 'Bytecode length: 6\0\n',
 };
 
 // A fake node (sh): --version, --v8-options (fixture excerpt), else cats the trace file. Every call logs its argv.
@@ -197,6 +209,17 @@ for (const withOut of [false, true]) {
     });
 }
 
+// G-BBAWK reviewer gaps (b52 r1 NITS): the glued-header clear, the orphan rule, the NUL form of tr
+for (const [sc, re] of [['G0', REASON(2, 2)], ['O1', REASON(1, 2)], ['O2', REASON(1, 2)], ['O3', REASON(1, 2)],
+    ['E5', REASON(1, 1)]]) {
+    test(`bytecode-budget-awk live ${sc}: exit 2 NO-VERDICT, the bad count named`, { skip }, () => {
+        const g = gate(BB, sc, { env: mutEnv() });
+        assert.equal(g.r.status, 2, g.text);
+        assert.match(g.text, re);
+        assert.match(g.text, /VERDICT NO-VERDICT/);
+    });
+}
+
 // mutants of the live root: each must change the E3 outcome (the anchors exist after the fix only)
 const TEE = '| tee "$OUT/raw/$5" | tr \'\\000\' \'?\'';
 test('bytecode-budget-awk mutant: tr dropped on the --out branch -> E3 --out exits 0 (NUL cut)',
@@ -227,6 +250,38 @@ test('bytecode-budget-awk mutant: tr before tee -> raw/ files hold 0 NUL instead
         const live = gate(BB, 'E3', { withOut: true });
         assert.deepEqual(Object.values(live.out.raw), [1, 1], 'the live root keeps the NUL in raw/');
     } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// each of these mutants lets the scenario through (exit 0 WITHIN: the one good length 6 or 1083 / 6 <= or > max 10)
+// or changes the reason count; a mutant whose anchor does not match once fails (variant asserts it, CI or not)
+const COUNT_G = '{ n++; want = 0; hdr = 1; next }';
+const COUNT_O = '!hdr && /^Bytecode length:/ { n++ }';
+const TR_PLAIN = '2>&1) | tr \'\\000\' \'?\' | awk';
+const GAP_MUT = [
+    ['g-want0-off: the glued-header rule without want = 0', COUNT_G, '{ n++; hdr = 1; next }', 'G0', REASON(1, 2)],
+    ['orphan-digits: the orphan rule needs digits to the end', COUNT_O, '!hdr && /^Bytecode length: [0-9]+$/ { n++ }', 'O1', null],
+    ['orphan-digits: the orphan rule needs a digit after "length: "', COUNT_O, '!hdr && /^Bytecode length: [0-9]/ { n++ }', 'O1', null],
+    ['orphan-digits: no-digit orphan "Bytecode length:" (O2) vs the digit rule', COUNT_O, '!hdr && /^Bytecode length: [0-9]/ { n++ }', 'O2', null],
+    ['orphan-digits: the orphan rule matches a digit prefix', COUNT_O, '!hdr && /^Bytecode length: [0-9]+/ { n++ }', 'O1', null],
+    ['orphan-digits: a digits-to-the-end orphan rule misses 12x', COUNT_O, '!hdr && /^Bytecode length: [0-9]+$/ { n++ }', 'O3', null],
+    ['tr-delete: tr -d NUL on the no-out branch', TR_PLAIN, '2>&1) | tr -d \'\\000\' | awk', 'E5', null],
+    ['tr-off: no tr on the no-out branch', TR_PLAIN, '2>&1) | awk', 'E5', null],
+    ['tr-delete: tr -d NUL on the --out branch', TEE, '| tee "$OUT/raw/$5" | tr -d \'\\000\'', 'E5', 'out'],
+    ['tr-off: no tr on the --out branch', TEE, '| tee "$OUT/raw/$5"', 'E5', 'out'],
+];
+GAP_MUT.forEach(([name, from, to, sc, kind], i) => {
+    test(`bytecode-budget-awk mutant ${name} (${sc}): the live row's outcome changes (exit 0)`, { skip }, () => {
+        const dir = mkdtempSync(join(tmpdir(), 'bbawk-gm-'));
+        try {
+            const p = variant(dir, BB, `gap-${i}`, from, to);
+            const g = gate(p, sc, { withOut: kind === 'out', env: mutEnv() });
+            if (sc === 'G0') {   // the glued rule keeps want: 1083 reads good -> n = 2, bad = 1, still exit 2: the count differs
+                assert.equal(g.r.status, 2, g.text);
+                assert.match(g.text, REASON(1, 2));
+                assert.doesNotMatch(g.text, REASON(2, 2));
+            } else assert.equal(g.r.status, 0, g.text);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
 });
 
 // ---- assertion 3: LIMITS_AWK of both roots ----

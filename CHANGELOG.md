@@ -1131,3 +1131,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   macOS bash 3.2, one run, before the T1 test-only fix). Real-Linux awk / uutils behaviour is UNVERIFIED locally
   (emulated NUL-clean awk; CI will show it). Reviews: .handoff/evidence/b52-bbawk/REVIEW-r1.md REJECTED (2
   test-only LITERAL), re-review APPROVED; engine clean (local, untracked).
+
+- CI (env-strip cap), test/env-strip.test.mjs (b53): the ic real rows of `runTool` get `IC_REAL_CAP` 600000 (the other 14
+  tool runs keep `TOOL_CAP` 120000), and every tool run is capped with `killSignal: 'SIGKILL'`. Run 42458559718 failed `E5 ic
+  real node` at the old cap on hosted macOS node 22 and 24; the row is slow there, not hung (finished ic real rows 27-93 s on
+  those legs, REPORTED, four CI runs; the cause of that slowness is not known). The message's "killed by SIGPIPE" is
+  explained: bash defers ic-diff's TERM trap until its foreground step ends, and the trap then writes to the stderr pipe
+  `spawnSync` has already closed, so SIGTERM could not bound a hung step (LEDGER #73). Test-only, no script changed.
+
+- Tests (b53, test-only): five mutants that reviews of G-BBAWK and G-SHL3 recorded as surviving are now killed.
+  test/bytecode-budget-awk.test.mjs (25 -> 40 rows): a glued header without `want = 0` (scenario G0), orphan `Bytecode
+  length:` lines with no digits (O1 / O2 / O3), and a behaviour row for the probe's `tr '\000' '?'` on a NUL-truncating awk
+  (E5), which only source anchors caught before. test/shlib.test.mjs (+2): the `-e` of the B2b guard, on a dangling
+  --after. test/bytecode-budget-stage.test.mjs (+4): the `-x` of the stage preflight. Tier: DETERMINISTIC. Real Linux
+  bash 5 / uutils unverified locally (NUL-clean awk emulated). Review: approved (local, untracked).

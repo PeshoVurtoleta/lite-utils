@@ -817,3 +817,39 @@ for (const [mode, args] of [['file', (c) => fileO(c)], ['ref', (c) => refO(c)]])
             shRun(p, cs, s3R9Went(0));
         });
 }
+
+// R10 / R11 (b52 reviewer gap, G-SHL3 `-x` in the stage preflight): an existing OUT, or an empty existing OUT/stage,
+// with mode 0666 (readable, writable, NOT searchable) cannot take the stage tree. Expected (stage.sh contract): exit 2,
+// a die naming OUT ("is not writable" / "is not empty"), 0 spawns. A preflight without its `-x` lets the run go on.
+// Skipped under uid 0 (chmod binds nothing). The `-x` of OUT and of OUT/stage each have a mutant (stage.sh).
+const s3Dir0666 = (c) => { mkdirSync(c.out); chmodSync(c.out, 0o666); };
+const s3PrepR11 = (c) => { mkdirSync(c.out); mkdirSync(join(c.out, 'stage')); chmodSync(join(c.out, 'stage'), 0o666); };
+const s3DieX = (rx) => (c, r) => {
+    try { chmodSync(join(c.out, 'stage'), 0o755); } catch { /* R10: OUT itself is 0666, runOn restores it */ }
+    assert.equal(r.status, 2, msg(r));
+    const el = r.stderr.split('\n').filter(Boolean);
+    assert.equal(el.length, 2, msg(r));
+    assert.match(el[0], rx, msg(r));
+    assert.equal(el[1], 'VERDICT NO-VERDICT', msg(r));
+    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
+};
+const S3_X = [
+    ['R10', { prep: s3Dir0666, args: (c) => fileO(c), check: s3DieX(S3_DIE) },
+        '[[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" && -x "$OUT" ) ]]',
+        '[[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" ) ]]'],
+    ['R11', { prep: s3PrepR11, args: (c) => fileO(c),
+        check: s3DieX(new RegExp('^' + SH_PFX + ': --out: .*/stage is not empty')) },
+        '[[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]]',
+        '[[ -r "$OUT/stage" && -w "$OUT/stage" ]]'],
+];
+for (const [id, cs, from, to] of S3_X) {
+    test(`bytecode-budget G-SHL3 ${id} 0666 (no -x) dir: exit 2 die naming OUT, 0 spawns`, { skip: skip || s3Uid0 },
+        () => { shRun(SCRIPT, cs, (c, r) => cs.check(c, r)); });
+    test(`bytecode-budget G-SHL3 ${id} MUTANT -x dropped from the stage preflight: the row check is red`,
+        { skip: skip || s3Uid0 }, () => {
+            const p = shBuild(`b52-x-${id}`, [['stage.sh', from, to]]);
+            shRun(p, cs, (c, r) => {
+                assert.throws(() => cs.check(c, r), assert.AssertionError, `${id}: still passes on the mutant`);
+            });
+        });
+}
