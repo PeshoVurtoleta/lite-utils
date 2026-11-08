@@ -146,9 +146,8 @@ function hist3() {
     return HIST3;
 }
 const HSKIP3 = () => skip || histSkip(haveHist3());
-// a private copy of build.sh + src + lib, built; edits: [kind 'src' | 'lib', file, from, to]; from === null
-// replaces the
-// whole file; every anchor must match exactly once. Returns the out dir (the roots are named as in the repo root).
+// a private copy of build.sh + src + lib, built; edits: [kind 'src' | 'lib', file, from, to]; from === null replaces
+// the whole file; every anchor must match exactly once. Returns the out dir (the roots are named as in the repo root).
 function privBuild(name, edits) {
     const d = mk(`pb-${name}`);
     cpSync(join(ROOT, 'build.sh'), join(d, 'build.sh'));
@@ -298,8 +297,7 @@ function passes(r) {
 test('I6 ibd A1a (N1): --before ext/L/../trace.txt (L -> repo/m/sub) is refused: exit 2, "git-tracked", 0 ' +
     'node spawns', { skip }, () => {
     // ASSERTION 3: ibd includes lib/tracked.sh, whose is_tracked resolves the directory physically (cd -P), so it
-    // inspects
-    // repo/m (tracked), not the decoy ext/. On the bd0192f ibd (I6t) this row is not refused.
+    // inspects repo/m (tracked), not the decoy ext/. On the bd0192f ibd (I6t) this row is not refused.
     assert.equal(a1aVerdict(IBD), null);
 });
 test('I6t twin: the bd0192f (git history) ibd does NOT refuse the A1a row (node spawned, no refusal text)',
@@ -323,8 +321,8 @@ test('I6f fallback: ibd built WITHOUT its tracked.sh include still refuses A1a; 
 // ---------------------------------------------------------------- I7 / I8: B2b and B2c on ibd (ASSERTIONS 1, 2)
 // ibd creates OUT before refusing (modes.sh runs after its mkdir -p), so no row asserts "OUT absent" here.
 function b2bFixture(linked) {  // repo tracks Signal.js + sub/Signal.js; frz/Signal.js hard link of repo/Signal.js;
-    // work/Signal.js -> ../repo/sub/Signal.js; cwd (d) outside the repo. linked=false: frz/Signal.js is an
-    // independent copy
+    // work/Signal.js -> ../repo/sub/Signal.js; cwd (d) outside the repo. linked=false: frz/Signal.js is an independent
+    // copy
     const d = mk(linked ? 'b2b' : 'b2b-ctl');
     for (const p of ['repo/sub', 'frz', 'work']) mkdirSync(join(d, p), { recursive: true });
     for (const p of ['repo/Signal.js', 'repo/sub/Signal.js']) writeFileSync(join(d, p), `${E9}\n`);
@@ -414,7 +412,7 @@ function danglingFixture() {
 function danglingVerdict(script) {   // null iff exit 2, 0 spawns, "--after not found: <path>", no symlink-chain die
     const f = danglingFixture(), r = runScript(script, f.d, f.args);
     if (r.rc !== 2 || r.spawns !== 0 || !/--after not found: /.test(r.out) || /symlink chain|git failed/.test(r.out)) {
-        return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+        return `exit ${r.rc}, spawns ${r.spawns}: ${r.out}`;
     }
     return null;
 }
@@ -425,7 +423,9 @@ test('I7em MUTANT B2b guard without -e: the dangling --after dies elsewhere, the
     { skip: skip || (NESTED ? 'nested retention run: mutant skipped (time)' : false) }, () => {
     const out = privBuild('b2b-no-e', [['lib', 'common.sh', 'if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then',
         'if [[ -L "$AFTER_FILE" ]]; then']]);
-    assert.notEqual(danglingVerdict(join(out, 'inlining-budget-diff.sh')), null, 'mutant survived: -e not needed');
+    const v = danglingVerdict(join(out, 'inlining-budget-diff.sh'));
+    assert.notEqual(v, null, 'mutant survived: -e not needed');
+    assert.match(v, /git failed while checking/, 'the mutant must die at the tracked check, not elsewhere');
     assert.equal(danglingVerdict(IBD), null);
 });
 
@@ -607,8 +607,9 @@ test('L1 A2/A3 ibd: a `-/`-led symlinked --after (relative and absolute target) 
         assert.doesNotMatch(r.out, /symlink chain|cannot resolve the directory of|git failed while checking/, kind);
     }
 });
-test('L1t twin: the r1 build (B2b line in $( ), no `./` prefix and no readlink `--` in resolve_links) prints a stray die and then TWO ' +
-    'VERDICT lines on the same rows', { skip: mskip }, () => {
+test('L1t twin: the r1 build (B2b line in $( ), no `./` prefix and no readlink `--` in resolve_links) is red on the same ' +
+    'rows: bash 3.2 prints a stray die and then TWO VERDICT lines, bash >= 4.4 (OLDPWD kept) a git "cannot change to" decoy ' +
+    'die (or the same two lines)', { skip: mskip }, () => {
     const root = join(mR1(), TOOLS.ibd[0]);
     for (const kind of ['rel', 'abs']) {
         const f = dashAfter('ibd', kind); const r = runScript(root, f.d, f.args, { OLDPWD: decoy() });
@@ -711,8 +712,8 @@ test('D1 A3 ibd before-link: --before -/Signal.js -> ../repo/Signal.js (tracked)
     '0 spawns', { skip }, () => {
     assert.equal(trackedDie(IBD, fxBeforeLink), null);
 });
-test('D1t twin: resolve_links without its `./` prefix (the r2-before build) dies "cannot resolve the directory of"; ' +
-    'a readlink without `--` (A2) is also killed by this row', { skip: mskip }, () => {
+test('D1t twin: resolve_links without its `./` prefix (the r2-before build) dies "cannot resolve the directory of" on ' +
+    'bash 3.2 and "unexpected error (exit N)" on bash >= 4.4; a readlink without `--` (A2) is also killed by this row', { skip: mskip }, () => {
     const f = fxBeforeLink(); const r = runScript(join(mRL(), TOOLS.ibd[0]), f.d, f.args, { OLDPWD: decoy() });
     // Both bash behaviours: bash 3.2 drops an inherited OLDPWD (`cd -` fails: "cannot resolve the directory of"); bash >=
     // 4.4 keeps it when it names a dir (the join lands in the decoy; devino's stat then reads -/Signal.js as an option: "unexpected error (exit N)").

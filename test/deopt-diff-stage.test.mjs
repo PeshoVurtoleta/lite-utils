@@ -28,7 +28,8 @@ const GITC = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', '-
 
 function cleanEnv() {   // the child env: no editor vars, none of the 6 GIT_* location vars, global / system git config off
     const e = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS', 'GIT_CONFIG_PARAMETERS']) delete e[k];
+    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'GIT_CONFIG_PARAMETERS']) delete e[k];
+    e.NODE_V8_COVERAGE = undefined;   // not a delete: node's child_process re-inserts a missing NODE_V8_COVERAGE key
     return e;
 }
 function git(cwd, ...a) {
@@ -310,7 +311,7 @@ function mutant(name, anchorDesc, edits, cs, observe) {
     });
 }
 mutant('M-sha', 'x="$STAGE_SHA_B" -> x="$STAGE_SHA_A"', [['x="$STAGE_SHA_B"', 'x="$STAGE_SHA_A"']], R_DIFF, (c, r) => assert.equal(r.status, 0, msg(r)));
-mutant('M-cwd', 'dirname "$DRV_A" -> "$DRV_B"', [['DRV_A_DIR=$(dirname "$DRV_A")', 'DRV_A_DIR=$(dirname "$DRV_B")']], R_DIFF, (c, r) => assert.equal(r.status, 0, msg(r)));
+mutant('M-cwd', 'dirname "$DRV_A" -> "$DRV_B"', [['DRV_A_DIR=$(dirname -- "$DRV_A")', 'DRV_A_DIR=$(dirname -- "$DRV_B")']], R_DIFF, (c, r) => assert.equal(r.status, 0, msg(r)));
 mutant('M-cp-ln', 'cp -- "$x" -> ln -s -- "$x"', [['cp -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"', 'ln -s -- "$x" "$dir/$STAGE_NAME" || die "cannot copy $x"']], F_LIVE, (c, r) => assert.equal(r.status, 2, msg(r)));
 mutant('M-note', 'else STAGE_SAME=0 -> else STAGE_SAME=1', [['else STAGE_SAME=0; fi', 'else STAGE_SAME=1; fi']], R_DIFF, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.equal(has(r, NOTE), 1, msg(r)); });
 mutant('M-mode', 'MODE="diff ($STAGE_MODE)" -> MODE="diff"', [['MODE="diff ($STAGE_MODE)"', 'MODE="diff"']], R_DIFF, (c, r) => { assert.equal(r.status, 1, msg(r)); assert.match(r.stdout, /^mode {4}diff {2}runs 3 /m); });

@@ -158,7 +158,7 @@
 #   bailout line) is not a deopt record; a driver that itself prints trace-like text (`[bailout` /
 #   `[completed compiling `) at line start is read as V8 trace output.
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
-#   package self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
+#   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
 #   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
 #   checked, not the intermediate hops); and a .git that git does not recognise as a
@@ -351,7 +351,8 @@ FILENAME == ARGV[1] {                               # records, in trace order (X
       if (q > 0) { o = substr(s, q + 18); q = index(o, ","); o = (q > 1 ? substr(o, 1, q - 1) : "") }
       if (o ~ /^-?[0-9]+$/) { NRD++; OF[NRD] = o; PS[NRD] = ", no source position"; PD = NRD }
     } else if (!TF && match($0, /^\[completed compiling 0x[0-9a-fA-F]+ <JSFunction /) && substr($0, RLENGTH + 1, length(fn)) == fn &&
-      substr($0, RLENGTH + 1 + length(fn)) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN(_JS)?\)( OSR)? - took .*\]$/) { TF = 1; TA = LM }
+      (s = substr($0, RLENGTH + 1 + length(fn))) ~ /^ \(sfi = 0x[0-9a-fA-F]+\)> \(target TURBOFAN(_JS)?\)( OSR)? - took .*\]$/ &&
+      index(s, "]") == length(s) && index(s, "[") == 0 && index(s, "\r") == 0) { TF = 1; TA = LM }
     next
   }
   if (PD > 0 && substr($0, 1, 11) != "@@LITE-MARK" && (p = index($0, ";;; deoptimize at ")) > 0) { PS[PD] = posof(substr($0, p + 18)); PD = 0; next }
@@ -1260,8 +1261,8 @@ fi
 MODE=diff
 if [[ $STAGED == 1 ]]; then
   stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver
-  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")
-  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")
+  DRV_B_DIR=$(dirname -- "$DRV_B"); DRV_B_BASE=$(basename -- "$DRV_B")
+  DRV_A_DIR=$(dirname -- "$DRV_A"); DRV_A_BASE=$(basename -- "$DRV_A")
   MODE="diff ($STAGE_MODE)"
 fi
 say "deopt-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"

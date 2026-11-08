@@ -1072,13 +1072,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   flake; it is NOT proven to be its cause (the race was not reproduced on macOS, 0 / 3000; the deterministic
   big-input form was). Self-test counts unchanged (dd 99, 116 with fixtures; ic 76). Tests:
   `test/deopt-diff.test.mjs` +28 end-to-end rows (13 A3 rows and 9 per-clause revert variants, the A4 row and
-  its revert, 2 A5 rows and 2 reverts); new
-  `test/judge-drain.test.mjs` (10 tests: a line-level drain harness for both roots, teeth pinned to
-  `git show bd0192f:`); `test/death-signature.test.mjs` SYNC_FILES += judge-drain. Measured: review r2,
-  `node --test test/deopt-diff.test.mjs` in the head-r2 overlay, 184 / 184 pass, 441 s (load ~34; a
-  deterministic, untimed run, one run). Tier: DETERMINISTIC. Reviews:
-  .handoff/evidence/b50-ddawk/REVIEW-r1.md REJECTED (2 LITERAL doc-truth items, the `-h` line), REVIEW-r2.md
-  APPROVED (local, untracked).
+  its revert, 2 A5 rows and 2 reverts); new `test/judge-drain.test.mjs` (10 tests, 5 per root: a line-level
+  harness that runs each root's judge() extraction line under `set -euo pipefail`: a small-record control, a 2-X
+  control (the first X record wins), a 200000-line record for 20 cycles, a keep-last mutant that must fail the
+  2-X row, and the `git show bd0192f:` build that must fail the big record, which skips when bd0192f is
+  unreachable and is fatal under CI=true); `test/death-signature.test.mjs` SYNC_FILES += judge-drain. Measured:
+  review r2, `node --test test/deopt-diff.test.mjs` in the head-r2 overlay, 184 / 184 pass, 441 s (load ~34; a
+  deterministic, untimed run, one run). Tier: DETERMINISTIC. Reviews: .handoff/evidence/b50-ddawk/REVIEW-r1.md
+  REJECTED (2 LITERAL doc-truth items, the `-h` line), REVIEW-r2.md APPROVED (local, untracked).
 
 - G-SHL3 (bb / dd audit B2b / B2c / B3 / N1; B2a documented), bytecode-budget, deopt-diff,
   inlining-budget-diff (b50-b52): four refusal gaps closed on the cold path, before any spawn. B2b: `refuse_live`
@@ -1087,29 +1088,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   symlinked `--after` in `$( )`, its status checked in the current shell, and adds the toplevel around its END's
   directory; an unresolvable chain (a race: the kernel followed it, the walk cannot finish; a loop, a dangling
   link or an unenterable directory is "not found" first, "--after not found" / "--before not found") is exit 2
-  "--after: cannot resolve its symlink chain: FILE", and on `--before` the same race is exit 2
-  "cannot resolve the directory of P (a link in the symlink
-  chain of ARG)" (0 spawns). resolve_links' `readlink` now takes `--`. B2c (widened): `--after`'s own name joins
-  the hard-link candidate names, so a hard link of a tracked file under `--after`'s name is refused. Residual: a
-  hard link under another name or in a subdirectory stays undetected (accepted, documented). B3: an unwritable
-  (or unsearchable) existing OUT is refused before any spawn or write, exit 2 "--out: cannot create DIR/stage
-  (DIR is not writable)"; before, report.txt was truncated and raw/before + raw/after created, then the run
-  died in stage_write. N1: the fallback `is_tracked` (lib/common.sh) is physical (`cd -P`, `pwd -P`, `--` on
-  dirname / basename) like lib/tracked.sh, and inlining-budget-diff now includes lib/tracked.sh, so ibd gets
-  the A1a / A1b classification too. ibd also gains `unset CDPATH` before its prologue (blocker fix, review r1),
-  as the other four tools have. A `-`-led dirname gets a `./` prefix at the three `cd` joins on the refuse_live
-  path (resolve_links, both `is_tracked` defs), because bash reads `cd -- -` as OLDPWD even after `--`. Not
-  changed (ruled, moved to ibd U2): devino's `stat` `--`, resolve_links' `readlink || die`, `dirname` `--` in
-  refuse_live, ibd's `cp "$f"` `--`. B2a (an intermediate hop of the symlink chain is not checked) is a
-  documented class-3 limit. No hot body changed. Tier: DETERMINISTIC. Tests: new
-  rows in test/shlib.test.mjs, test/tracked.test.mjs, test/build.test.mjs, test/bytecode-budget-stage.test.mjs,
-  test/deopt-diff-stage.test.mjs; test/deopt-diff-boundary.test.mjs ibd parity gains the G-SHL3 hunks.
+  "--after: cannot resolve its symlink chain: FILE", and on `--before` the same race is exit 2 "cannot resolve
+  the directory of P (a link in the symlink chain of ARG)" (0 spawns). resolve_links' `readlink` now takes `--`.
+  B2c (widened): `--after`'s own name joins the hard-link candidate names, so a hard link of a tracked file
+  under `--after`'s name is refused. Residual: a hard link under another name or in a subdirectory stays
+  undetected (accepted, documented). B3: an unwritable (or unsearchable) existing OUT is refused before any
+  spawn or write, exit 2 "--out: cannot create DIR/stage (DIR is not writable)"; before, report.txt was
+  truncated and raw/before + raw/after created, then the run died in stage_write. N1: the fallback `is_tracked`
+  (lib/common.sh) is physical (`cd -P`, `pwd -P`, `--` on dirname / basename) like lib/tracked.sh, and
+  inlining-budget-diff now includes lib/tracked.sh, so ibd gets the A1a / A1b classification too. ibd also gains
+  `unset CDPATH` before its prologue (blocker fix, review r1), as the other four tools have. A `-`-led dirname
+  gets a `./` prefix at the three `cd` joins on the refuse_live path (resolve_links, both `is_tracked` defs),
+  because bash reads `cd -- -` as OLDPWD even after `--`. Not changed (ruled, moved to ibd U2): devino's `stat`
+  `--`, resolve_links' `readlink || die`, `dirname` `--` in refuse_live, ibd's `cp "$f"` `--`. B2a (an
+  intermediate hop of the symlink chain is not checked) is a documented class-3 limit. No hot body changed.
+  Tier: DETERMINISTIC. Tests: new rows in test/shlib.test.mjs, test/tracked.test.mjs, test/build.test.mjs,
+  test/bytecode-budget-stage.test.mjs, test/deopt-diff-stage.test.mjs; test/deopt-diff-boundary.test.mjs ibd
+  parity gains the G-SHL3 hunks.
   Measured: b52 local `npm test` 2079 tests, 2077 pass, 0 fail, 2 skip (node v26.8.2, macOS bash 3.2, one run,
-  before the test-only D1t fix and the docs-only `-h` edit). Real-Linux behaviour is UNVERIFIED locally (emulated with BASH_ENV + PATH
-  shims for bash >= 4.4 and GNU / uutils tools); CI will show it. Reviews: .handoff/evidence/b50-shl3/
-  REVIEW-r1.md REJECTED (DESIGN), REVIEW-r2.md REJECTED (DESIGN: a devino `--` voided 3 existing mutants;
-  maintainer ruled Q-SHL3-R3 "Revert A4"), REVIEW-r3.md APPROVED after one test-only literal fix (local,
-  untracked).
+  before the test-only D1t fix and the docs-only `-h` edit). Real-Linux behaviour is UNVERIFIED locally
+  (emulated with BASH_ENV + PATH shims for bash >= 4.4 and GNU / uutils tools); CI will show it. Reviews:
+  .handoff/evidence/b50-shl3/ REVIEW-r1.md REJECTED (DESIGN), REVIEW-r2.md REJECTED (DESIGN: a devino `--`
+  voided 3 existing mutants; maintainer ruled Q-SHL3-R3 "Revert A4"), REVIEW-r3.md APPROVED after one test-only
+  literal fix (local, untracked).
 
 - G-BBAWK (bb audit B1a / B1c / B4a; B1b documented), bytecode-budget, inlining-budget-diff (b50-b52): three
   parser gaps closed, one trust limit documented. B1a (COUNT_AWK, two rules): a `[generated bytecode for
@@ -1139,9 +1140,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   explained: bash defers ic-diff's TERM trap until its foreground step ends, and the trap then writes to the stderr pipe
   `spawnSync` has already closed, so SIGTERM could not bound a hung step (LEDGER #73). Test-only, no script changed.
 
+- G-FILL-DD (dd audit argon 2026-11-07, A6 / Fable N2 / dd TIER_AWK; b54), deopt-diff: the REPORTED tier
+  section now reads a `[completed compiling` line as a compile only under the same tail rule as the verdict
+  records (one closing `]` at the end, no second `[`, no CR); a line with trailing text ending in `]` no
+  longer moves the "ops until TURBOFAN_JS" line. Tier section only: verdict and exit code are unchanged.
+  `dirname` / `basename` of the staged drivers take `--` (inert in shipped use: staged mode makes OUT
+  absolute, so the gate is lexical); one `-h` wording fix ("; and a hard link" -> "; a hard link"). Root
+  script rebuilt from `src/`.
+
 - Tests (b53, test-only): five mutants that reviews of G-BBAWK and G-SHL3 recorded as surviving are now killed.
   test/bytecode-budget-awk.test.mjs (25 -> 40 rows): a glued header without `want = 0` (scenario G0), orphan `Bytecode
   length:` lines with no digits (O1 / O2 / O3), and a behaviour row for the probe's `tr '\000' '?'` on a NUL-truncating awk
   (E5), which only source anchors caught before. test/shlib.test.mjs (+2): the `-e` of the B2b guard, on a dangling
   --after. test/bytecode-budget-stage.test.mjs (+4): the `-x` of the stage preflight. Tier: DETERMINISTIC. Real Linux
   bash 5 / uutils unverified locally (NUL-clean awk emulated). Review: approved (local, untracked).
+- Tests (b54, test-only): test/bytecode-budget-awk.test.mjs (40 -> 44 rows) gains scenarios C1 and O4 (a
+  10-digit length, 0000000006, as a header's length and as an orphan), each with a live row and a mutant row,
+  for the good rule's `length($3) <= 9` cap and for the orphan rule having no cap; the shlib I7em and
+  stage R10 / R11 mutant rows now pin the die each mutant ends in. Tier: DETERMINISTIC.
+- Tests (b54, test-only): test/deopt-diff-fillers.test.mjs (19 tests): TIER_AWK compile-tail guards (a
+  second `[`, a CR, a mid `]`, T6 row 2 closed with `]`) on the shipped root against `git show 96e7712:`,
+  with one mutant per guard in src and root, and a lexical row for `--` on the staged-driver dirname /
+  basename lines, with its must-fail control. test/deopt-diff-stage and -live strip the NODE_* env as
+  test/deopt-diff does (harness only, no gate). The M-cwd mutant anchor followed the `--` edit. Tier:
+  DETERMINISTIC.

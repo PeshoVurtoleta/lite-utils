@@ -99,9 +99,12 @@ const SC = {
     O1: H(1) + L(6) + 'x\n' + 'Bytecode length: abc\n',
     O2: H(1) + L(6) + 'x\n' + 'Bytecode length:\n',
     O3: H(1) + L(6) + 'x\n' + 'Bytecode length: 12x\n',
+    O4: H(1) + L(6) + 'x\n' + 'Bytecode length: 0000000006\n',   // 10-digit orphan: n = 2, good = 1 -> "1 of 2"
     // E5: a length line ending in a NUL: tr maps the NUL to '?', so the line no longer ends at its digits: bad
     //   (n = 1, good = 0 -> "1 of 1"). A tr that DELETES the NUL (tr -d) or no tr on a NUL-truncating awk reads 6: exit 0.
     E5: H(1) + 'Bytecode length: 6\0\n',
+    // C1: a 10-digit length (value 6, so a build without the 1..9 digit cap reads it good): n = 1, good = 0 -> "1 of 1"
+    C1: H(1) + 'Bytecode length: 0000000006\n',
 };
 
 // A fake node (sh): --version, --v8-options (fixture excerpt), else cats the trace file. Every call logs its argv.
@@ -210,8 +213,8 @@ for (const withOut of [false, true]) {
 }
 
 // G-BBAWK reviewer gaps (b52 r1 NITS): the glued-header clear, the orphan rule, the NUL form of tr
-for (const [sc, re] of [['G0', REASON(2, 2)], ['O1', REASON(1, 2)], ['O2', REASON(1, 2)], ['O3', REASON(1, 2)],
-    ['E5', REASON(1, 1)]]) {
+for (const [sc, re] of [['G0', REASON(2, 2)], ['O1', REASON(1, 2)], ['O2', REASON(1, 2)], ['O3', REASON(1, 2)], ['O4', REASON(1, 2)],
+    ['E5', REASON(1, 1)], ['C1', REASON(1, 1)]]) {
     test(`bytecode-budget-awk live ${sc}: exit 2 NO-VERDICT, the bad count named`, { skip }, () => {
         const g = gate(BB, sc, { env: mutEnv() });
         assert.equal(g.r.status, 2, g.text);
@@ -257,8 +260,9 @@ test('bytecode-budget-awk mutant: tr before tee -> raw/ files hold 0 NUL instead
 const COUNT_G = '{ n++; want = 0; hdr = 1; next }';
 const COUNT_O = '!hdr && /^Bytecode length:/ { n++ }';
 const TR_PLAIN = '2>&1) | tr \'\\000\' \'?\' | awk';
+const COUNT_CAP = ' && length($3) <= 9 {';   // the good rule's 1..9 digit cap (a 10-digit run must stay a bad match)
 const GAP_MUT = [
-    ['g-want0-off: the glued-header rule without want = 0', COUNT_G, '{ n++; hdr = 1; next }', 'G0', REASON(1, 2)],
+    ['g-want0-off: the glued-header rule without want = 0', COUNT_G, '{ n++; hdr = 1; next }', 'G0', null],
     ['orphan-digits: the orphan rule needs digits to the end', COUNT_O, '!hdr && /^Bytecode length: [0-9]+$/ { n++ }', 'O1', null],
     ['orphan-digits: the orphan rule needs a digit after "length: "', COUNT_O, '!hdr && /^Bytecode length: [0-9]/ { n++ }', 'O1', null],
     ['orphan-digits: no-digit orphan "Bytecode length:" (O2) vs the digit rule', COUNT_O, '!hdr && /^Bytecode length: [0-9]/ { n++ }', 'O2', null],
@@ -268,9 +272,11 @@ const GAP_MUT = [
     ['tr-off: no tr on the no-out branch', TR_PLAIN, '2>&1) | awk', 'E5', null],
     ['tr-delete: tr -d NUL on the --out branch', TEE, '| tee "$OUT/raw/$5" | tr -d \'\\000\'', 'E5', 'out'],
     ['tr-off: no tr on the --out branch', TEE, '| tee "$OUT/raw/$5"', 'E5', 'out'],
+    ['orphan-cap: the orphan rule capped like the good rule misses a 10-digit orphan', COUNT_O, '!hdr && /^Bytecode length:/ && length($3) <= 9 { n++ }', 'O4', null],
+    ['cap-off: the good rule without length($3) <= 9 reads a 10-digit length as 6', COUNT_CAP, ' {', 'C1', null],
 ];
 GAP_MUT.forEach(([name, from, to, sc, kind], i) => {
-    test(`bytecode-budget-awk mutant ${name} (${sc}): the live row's outcome changes (exit 0)`, { skip }, () => {
+    test(`bytecode-budget-awk mutant ${name} (${sc}): the live row's outcome changes (exit 0; G0: exit 2, other count)`, { skip }, () => {
         const dir = mkdtempSync(join(tmpdir(), 'bbawk-gm-'));
         try {
             const p = variant(dir, BB, `gap-${i}`, from, to);

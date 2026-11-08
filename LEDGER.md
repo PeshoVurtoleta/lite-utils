@@ -308,6 +308,9 @@ consistent with the 8-12 s past the cap (row wall time, which includes setup). R
 control SIGTERM at 1002 ms, the 0560272 ic root SIGPIPE under a 1200 ms cap; with its node step hung 9 s under a 2000 ms
 cap, SIGTERM returns at 10407 ms and SIGKILL at 2004 ms. Rule: a capped child with a TERM trap can outlive the cap without
 limit and name another signal; cap such a child with SIGKILL, and read the cap line, not the signal, as the verdict.
+SIGKILL's cost: it kills bash only, so the step bash was running (the hung ic-diff node step) is not signalled and runs
+on as an orphan; it can leave one stray `es-*` entry in the tmpdir on a row that is already red (the cap line names it),
+so the separate E7 row at the end of the file can go red as a second failure of that run.
 Evidence: those CI runs; `.handoff/evidence/b53-sigpipe/` (local, untracked).
 
 ---
@@ -467,3 +470,20 @@ header text can forge a result. OPEN -> ibd triage: Opus N1 (ibd bytecode probe;
 Q-IBD-2). Test-gate lesson: a plan's "anchors stay" claim checked only one substring; the stop gate caught a
 sibling anchor (M-prefix-match) displaced by the spec's own text.
 Evidence: `.handoff/PLAN-b50-bbawk.md` (A1, A2), `.handoff/evidence/b52-bbawk/` (local, untracked).
+
+**#74 G-FILL-DD (b54): dd audit argon 2026-11-07 A6.2-A6.6 dispositions (A6.4 PARTLY closed).**
+A6.2 lib/common.sh:82,85 NOT edited: no reach in dd or bb (lib/stage.sh:28 normalizes a dash-led path to
+./NAME; refuse_live is reached in dd only via lib/stage.sh:62, after that line), and an edit would move all 5
+roots. ibd's unnormalized path (lib/modes.sh:54, `refuse_live "$BEFORE_FILE"`) is open for ibd triage. A6.3
+lib/v8flags.sh:25 unchanged (its `env -u` strips only NODE_OPTIONS and NODE_COMPILE_CACHE): the top unsets at
+src/bytecode-budget.sh:194 and src/deopt-diff.sh:229 cover the shipped paths, the other two includers also
+unset at the top (src/allocation-diff.sh:125, src/ic-diff.sh:137); standalone sourcing is test-only. A6.5 /
+A6.6 CLOSED as NOT REPRODUCED: the text argon cites never existed. At the audited 5e570f0,
+test/deopt-diff-stage-boundary.test.mjs:551 is a `mutant(` row, test/deopt-diff.test.mjs:16 is an import and
+CHECKS is the constant 99 at :20, not a 95-row array; `git log --all -S` finds no `33 checks` / `27 teeth`,
+and no version of test/deopt-diff.test.mjs has a trailing `// N` ordinal. A real count drift of that class is
+OPEN, in no task: the test/deopt-diff.test.mjs:20 comment sums 53 + 21 + 13 = 87 rows for CHECKS = 99. A6.4
+PARTLY closed: the env strip is done for test/deopt-diff-stage.test.mjs and test/deopt-diff-live.test.mjs
+(harness only, no gate); test/deopt-diff-boundary.test.mjs:24 waits for the FILLERS B2 batch, and
+test/deopt-diff-stage-boundary.test.mjs:36 has the same gap (found by the b54 review, in no task yet).
+Evidence: `.handoff/PLAN-b54-audit-fillers.md` (local, untracked).

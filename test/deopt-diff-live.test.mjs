@@ -23,7 +23,8 @@ const MONO = join(FIX, 'mono.mjs');
 const EXACT = process.version === 'v26.8.2';
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ENV = { ...process.env };
-for (const k of ['NODE_OPTIONS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'GIT_EDITOR', 'EDITOR', 'VISUAL']) delete ENV[k];
+ENV.NODE_V8_COVERAGE = undefined;   // not a delete: node's child_process re-inserts a missing NODE_V8_COVERAGE key
 
 // A copy of the script in a temp dir, with exact-once edits (each must match exactly once, else the row is invalid).
 function variant(dir, name, edits) {

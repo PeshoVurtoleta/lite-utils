@@ -836,13 +836,14 @@ const s3DieX = (rx) => (c, r) => {
 const S3_X = [
     ['R10', { prep: s3Dir0666, args: (c) => fileO(c), check: s3DieX(S3_DIE) },
         '[[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" && -x "$OUT" ) ]]',
-        '[[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" ) ]]'],
+        '[[ -e "$OUT/stage" || ! -e "$OUT" || ( -w "$OUT" ) ]]', /--out: cannot create .*\/raw$/m],
     ['R11', { prep: s3PrepR11, args: (c) => fileO(c),
         check: s3DieX(new RegExp('^' + SH_PFX + ': --out: .*/stage is not empty')) },
         '[[ -r "$OUT/stage" && -w "$OUT/stage" && -x "$OUT/stage" ]]',
-        '[[ -r "$OUT/stage" && -w "$OUT/stage" ]]'],
+        '[[ -r "$OUT/stage" && -w "$OUT/stage" ]]', /--out: cannot create .*\/stage\/before/m],
 ];
-for (const [id, cs, from, to] of S3_X) {
+// the last field pins WHERE the mutant dies (the first mkdir that fails): R10 at OUT/raw, R11 at OUT/stage/before
+for (const [id, cs, from, to, mutDie] of S3_X) {
     test(`bytecode-budget G-SHL3 ${id} 0666 (no -x) dir: exit 2 die naming OUT, 0 spawns`, { skip: skip || s3Uid0 },
         () => { shRun(SCRIPT, cs, (c, r) => cs.check(c, r)); });
     test(`bytecode-budget G-SHL3 ${id} MUTANT -x dropped from the stage preflight: the row check is red`,
@@ -850,6 +851,8 @@ for (const [id, cs, from, to] of S3_X) {
             const p = shBuild(`b52-x-${id}`, [['stage.sh', from, to]]);
             shRun(p, cs, (c, r) => {
                 assert.throws(() => cs.check(c, r), assert.AssertionError, `${id}: still passes on the mutant`);
+                assert.equal(r.status, 2, msg(r));
+                assert.match(r.stderr, mutDie, `${id}: the mutant must die at its own mkdir: ${msg(r)}`);
             });
         });
 }
