@@ -30,6 +30,8 @@ after(() => rmSync(TMP, { recursive: true, force: true }));
 
 const big = join(TMP, 'big.rec');
 writeFileSync(big, 'X why\n' + 'E a\n'.repeat(200000));
+const two = join(TMP, 'two.rec');
+writeFileSync(two, 'X first\nX second\nE a\n');
 const small = join(TMP, 'small.rec');
 writeFileSync(small, 'X why\nE a\n');
 
@@ -53,6 +55,19 @@ for (const f of ROOTS) {
     const r = run(line, small);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout, 'why');
+  });
+
+  // 2-X control: judge keeps only the FIRST X record (spec: first X wins); the mutant keeps the LAST and must go red
+  const keepLast = line.replace('/^X / && !n++ { print substr($0, 3) }', '/^X / { x = substr($0, 3) } END { print x }');
+  test(f + ': control, two X records keep the first (2-X)', () => {
+    const r = run(line, two);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, 'first');
+  });
+  test(f + ': teeth, keep-last mutant fails the 2-X row', () => {
+    assert.notEqual(keepLast, line, 'mutant replacement must apply');
+    assert.equal(run(keepLast, small).stdout, 'why', 'mutant still fine on one X');
+    assert.notEqual(run(keepLast, two).stdout, 'first');
   });
 
   // red on the pre-fix (bd0192f) roots: G-DDAWK makes it pass

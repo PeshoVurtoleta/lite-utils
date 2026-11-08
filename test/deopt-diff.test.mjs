@@ -827,7 +827,7 @@ const reasonD = (to) => `${E9}\n${D10.replace('not a Smi', to)}\n`;
 const A3_ROWS = [
     // [label, after trace, reason, [[variant name, edits], ...] each failing THIS row]
     ['A3 E9 CR D10', `${E9}\r${D10}\n`, RS3, []],
-    ['A3 E9 space D10 (no separator)', `${E9} ${D10}\n`, RS3, []],
+    ['A3 E9 space D10 (one space between, not glued)', `${E9} ${D10}\n`, RS3, []],
     ['A3 E9 minus ] then [x]', `${DE}[x]\n`, RS3, [['A3c-no-bracket-clause', [dropClause(CL3, TL3, 1)]]]],
     ['A3 E9 minus ] then CR x]', `${DE}\rx]\n`, RS3, [['A3c-no-CR-clause', [dropClause(CL3, TL3, 2)]]]],
     ['A3 E9 space x]', `${E9} x]\n`, RS3, [['A3c-no-close-clause', [dropClause(CL3, TL3, 0)]]]],

@@ -7,8 +7,8 @@
 # fetch-depth 0: the parity / teeth rows read `git show <commit>:<file>`. The pins live in the test files only:
 # GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of test/bytecode-budget*.test.mjs,
 # the deopt-diff-boundary A4 git row, the 221ff2ec base rows of test/deopt-diff-stage*.test.mjs, the spawn-cap S5 teeth
-# aecb40f census row) FAILS when its commit is missing (locally it skips with the reason). The history
-# step below fails a shallow clone up front.
+# aecb40f census row, the judge-drain bd0192f teeth row) FAILS when its commit is missing (locally it skips with
+# the reason). The history step below fails a shallow clone up front.
 # The live deopt-diff pair asserts exact lines only on node v26.8.2 (MD-21 (a)), so the two 26.8.2 legs run that
 # tier on every push; on every other node it asserts the exit codes and the spawn count only
 # (test/deopt-diff-live.test.mjs). Hidden-death detection (death-reporter) is node >= 24 only: its row skips on 22.

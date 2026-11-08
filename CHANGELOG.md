@@ -45,9 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and a version-prefix mutant that must each be caught, gate rows on a fake node, 48 refusal rows with 0 node spawns
   (41 report/gate + 7 diff), the driver cwd, spawn and retention counts (8 spawns for 3 fns x 2 runs; 9 after
   MD-46), and a live pair on node v26.8.2 (`mid=211` exit 0, `mid=210` exit 1; on any other node the pair must exit
-  2 with a version-mismatch
-  NO-VERDICT). REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19` / `mid=210`, one
-  distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
+  2 with a version-mismatch NO-VERDICT). REPORTED (not gated): 20/20 runs per side of `--max add=6,mid=211,dup=19`
+  / `mid=210`, one distinct output with 0x stripped (2026-11-02, Darwin arm64, node v26.8.2, script sha256 a26e9f15,
   load1 2.31 before / 2.49 after, 4 other node processes before / 8 after, none >= 10% CPU before,
   one after (another package's `node --test`)).
 - `bytecode-budget.sh --diff`: the same named functions in two drivers on one node binary, their
@@ -1067,13 +1066,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   D-record line now names "no tab, CR, `[` or `]`". A5 (TIER_AWK): a `@@LITE-MARK` line is never taken for the
   `;;; deoptimize at` position line of a pending deopt (a marker line glued to `;;; deoptimize at` text used to
   be swallowed as the position). A4 (`judge()`, deopt-diff AND ic-diff): the awk that picks the first X record
-  ended with `exit`; under `pipefail` a record over 64 KiB made `printf` die of SIGPIPE, so the run ended
-  "unexpected error" and the reason and the tier section were lost. The awk now drains its input
-  (`/^X / && !n++ { print substr($0, 3) }`). This is consistent with the Q-NIGHTLY flake; it is NOT proven to be
-  its cause (the race was not reproduced on macOS, 0 / 3000; the deterministic big-input form was). Self-test
-  counts unchanged (dd 99, 116 with fixtures; ic 76). Tests: `test/deopt-diff.test.mjs` +28 end-to-end rows
-  (13 A3 rows and 9 per-clause revert variants, the A4 row and its revert, 2 A5 rows and 2 reverts); new
-  `test/judge-drain.test.mjs` (6 tests: a line-level drain harness for both roots, teeth pinned to
+  ended with `exit`; under `pipefail` a record well past 64 KiB (pipe buffer + awk read buffer) made `printf` die of
+  SIGPIPE, so the run ended "unexpected error" and lost the reason (in deopt-diff, also the tier section). The
+  awk now drains its input (`/^X / && !n++ { print substr($0, 3) }`). This is consistent with the Q-NIGHTLY
+  flake; it is NOT proven to be its cause (the race was not reproduced on macOS, 0 / 3000; the deterministic
+  big-input form was). Self-test counts unchanged (dd 99, 116 with fixtures; ic 76). Tests:
+  `test/deopt-diff.test.mjs` +28 end-to-end rows (13 A3 rows and 9 per-clause revert variants, the A4 row and
+  its revert, 2 A5 rows and 2 reverts); new
+  `test/judge-drain.test.mjs` (10 tests: a line-level drain harness for both roots, teeth pinned to
   `git show bd0192f:`); `test/death-signature.test.mjs` SYNC_FILES += judge-drain. Measured: review r2,
   `node --test test/deopt-diff.test.mjs` in the head-r2 overlay, 184 / 184 pass, 441 s (load ~34; a
   deterministic, untimed run, one run). Tier: DETERMINISTIC. Reviews:
