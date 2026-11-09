@@ -178,11 +178,20 @@
 #   and "cannot resolve the directory of P (a link in the symlink chain of ARG)" (ARG = the --before value).
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
 #   self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
-#   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
-#   checked, not the intermediate hops); and a .git that git does not recognise as a
+#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a tracked hard link in --before's directory or
+#   below is refused, and the refusal says "git-tracked" although that name itself is not tracked; a hard link
+#   elsewhere in the repository, under a name the other rules miss, stays undetected; a name git matched ignoring
+#   case (a case-sensitive file system, a tracked sibling that differs only in case) is not swept, so a hard link
+#   under such a name stays undetected too); a tracked link inside --before's symlink chain that lies outside the
+#   directories of --before and of the chain's end and below them (inside those trees a tracked hard link or
+#   symlink to the file is refused as "git-tracked" by the inode sweep);
+#   and a .git that git does not recognise as a
 #   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
-#   so a tracked --before inside it is not refused.
+#   so a tracked --before inside it is not refused. The import check strips // and /* */ comments and needs import,
+#   from or require before the quoted './NAME' on one line: a plain string holding that text passes it (Known limit,
+#   like the absolute path above); only the first quoted './NAME' of each quote style on a line is tested, so
+#   `const x = './mod.js'; import './mod.js';` is refused; an import split over two lines, or after a comment
+#   marker inside a string, is refused.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
 #   one driver, the gate is pinned to that node version (--node-version) and any run-to-run change is
 #   NO-VERDICT, never OVER -- and --self-test (canned text; with --fixtures, the recorded node v26.8.2
@@ -198,10 +207,12 @@
 unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 set -euo pipefail
+[[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
 FINAL=""
 trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "bytecode-budget: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+REPORT=""   # die reads it: an inherited $REPORT is never a report file
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes
 
@@ -264,9 +275,13 @@ END { bad = n - good; print n + 0, bad + 0, (out == "" ? "-" : out) }
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { printf 'bytecode-budget: %s\nVERDICT NO-VERDICT\n' "$*" >&2; exit 2; }
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+  printf 'bytecode-budget: %s\nVERDICT NO-VERDICT\n' "$*" >&2
+  if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf 'bytecode-budget: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
+  exit 2
+}
 say() { printf '%s\n' "$*" | tee -a "$REPORT"; }
-sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-8; }
+sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | tr -d '\\' | cut -c1-8; }
 usage() { sed -n '2,/^$/{s/^# \{0,1\}//;p;}' "$0"; }
 multiset() { sort | uniq -c; }   # the ONE multiset: judge() and --self-test both use it (never sort -u)
 devino() { # device:inode, following symlinks (GNU stat, else BSD / macOS stat)
@@ -350,6 +365,7 @@ worst() { # NO-VERDICT > DIFF > SAME
 }
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
+  local e hit
   command -v git >/dev/null 2>&1 || return 1
   d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
   d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
@@ -361,11 +377,21 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git err
   elif [[ "$out" == false ]]; then
     return 1
   elif [[ "$out" == true ]]; then
-    rc=0
-    out=$(LC_ALL=C git --literal-pathspecs -C "$d" ls-files --error-unmatch -- "$b" 2>&1) || rc=$?
-    l=${out%%$'\n'*}
-    [[ $rc -ne 0 ]] || return 0
-    if [[ $rc -eq 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
+    hit=0
+    while IFS= read -r -d '' e; do
+      if [[ "$e" == "$b" || "$d/$e" -ef "$1" ]]; then hit=1; fi
+    done < <(exec 3>&1; rc=0; x=$(LC_ALL=C git --icase-pathspecs -C "$d" ls-files -z --error-unmatch -- ":(literal)$b" 2>&1 >&3) || rc=$?; printf '%s\n@rc=%s' "$x" "$rc")
+    rc=${e##*@rc=}; out=${e%$'\n@rc='*}; l=${out%%$'\n'*}
+    if [[ "$rc" == 0 ]]; then return $((1 - hit)); fi
+    if [[ "$rc" == 1 && "$out" == *"did not match"* ]]; then   # icase folds ASCII only (LC_ALL=C): a name that did not match is matched by inode (Unicode case, ASCII aliases, NFC / NFD)
+      while IFS= read -r -d '' e; do
+        [[ ! "$d/$e" -ef "$1" ]] || return 0
+      done < <(exec 3>&1; rc=0; x=$(LC_ALL=C git -C "$d" ls-files -z 2>&1 >&3) || rc=$?; printf '%s\n@rc=%s' "$x" "$rc")
+      rc=${e##*@rc=}; out=${e%$'\n@rc='*}; l=${out%%$'\n'*}
+      [[ "$rc" != 0 ]] || return 1
+      out=""
+    fi
+    if [[ "$rc" == 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
   fi
   die "${what:-is_tracked}: git failed while checking whether $1 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref"
 }
@@ -432,7 +458,7 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
     [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
   done
-  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename, grep and cp read ./-NAME
+  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename and cp read ./-NAME
   [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"
   [[ -n "$DRIVER" ]] || die "$STAGE_MODE mode needs --driver FILE (a driver that imports the module as './<name>')"
@@ -481,7 +507,20 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   [[ "$(printf '%s' "$STAGE_NAME" | LC_ALL=C tr 'A-Z' 'a-z')" != "$(printf '%s' "$b" | LC_ALL=C tr 'A-Z' 'a-z')" ]] || die "the module and --driver have the same file name up to case ($STAGE_NAME / $b): rename the driver"
   # a non-ASCII or control byte (LC_ALL=C: [:print:] is 0x20-0x7E) can fold too (APFS: Unicode case, NFC / NFD): refuse it
   [[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"
-  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" -- "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
+  # a comment or a plain mention of the name must not pass: comments are stripped, then import / from / require must lead the quoted name on its line
+  STAGE_IMP="./$STAGE_NAME" awk '
+    BEGIN { q[1] = "\047" ENVIRON["STAGE_IMP"] "\047"; q[2] = "\"" ENVIRON["STAGE_IMP"] "\"" }
+    { s = $0; o = ""
+      while (s != "") {
+        if (inb) { i = index(s, "*/"); if (!i) { s = ""; break }; s = substr(s, i + 2); inb = 0; continue }
+        i = index(s, "/*"); j = index(s, "//")
+        if (j && (!i || j < i)) { o = o substr(s, 1, j - 1); s = ""; break }
+        if (!i) { o = o s; s = ""; break }
+        o = o substr(s, 1, i - 1); s = substr(s, i + 2); inb = 1
+      }
+      for (k = 1; k <= 2; k++) { i = index(o, q[k]); if (i && substr(o, 1, i - 1) ~ /(^|[^A-Za-z0-9_$.])(import|from|require)[ \t]*\(?[ \t]*$/) found = 1 }
+    }
+    END { exit !found }' <"$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
   STAGE_DRIVER=$(cd -- "$(dirname -- "$DRIVER")" && pwd)/$(basename -- "$DRIVER")
   # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
   # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one

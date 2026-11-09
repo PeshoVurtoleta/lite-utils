@@ -129,10 +129,12 @@
 unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 set -euo pipefail
+[[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
 FINAL=""
 trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "allocation-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+REPORT=""   # die reads it: an inherited $REPORT is never a report file
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes
 
@@ -194,9 +196,13 @@ END {
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { printf 'allocation-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2; exit 2; }
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+  printf 'allocation-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
+  if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf 'allocation-diff: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
+  exit 2
+}
 say() { printf '%s\n' "$*" | tee -a "$REPORT"; }
-sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-8; }
+sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | tr -d '\\' | cut -c1-8; }
 usage() { sed -n '2,/^$/{s/^# \{0,1\}//;p;}' "$0"; }
 multiset() { sort | uniq -c; }   # the ONE multiset: judge() and --self-test both use it (never sort -u)
 devino() { # device:inode, following symlinks (GNU stat, else BSD / macOS stat)
@@ -280,6 +286,7 @@ worst() { # NO-VERDICT > DIFF > SAME
 }
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
+  local e hit
   command -v git >/dev/null 2>&1 || return 1
   d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"
   d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
@@ -291,11 +298,21 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git err
   elif [[ "$out" == false ]]; then
     return 1
   elif [[ "$out" == true ]]; then
-    rc=0
-    out=$(LC_ALL=C git --literal-pathspecs -C "$d" ls-files --error-unmatch -- "$b" 2>&1) || rc=$?
-    l=${out%%$'\n'*}
-    [[ $rc -ne 0 ]] || return 0
-    if [[ $rc -eq 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
+    hit=0
+    while IFS= read -r -d '' e; do
+      if [[ "$e" == "$b" || "$d/$e" -ef "$1" ]]; then hit=1; fi
+    done < <(exec 3>&1; rc=0; x=$(LC_ALL=C git --icase-pathspecs -C "$d" ls-files -z --error-unmatch -- ":(literal)$b" 2>&1 >&3) || rc=$?; printf '%s\n@rc=%s' "$x" "$rc")
+    rc=${e##*@rc=}; out=${e%$'\n@rc='*}; l=${out%%$'\n'*}
+    if [[ "$rc" == 0 ]]; then return $((1 - hit)); fi
+    if [[ "$rc" == 1 && "$out" == *"did not match"* ]]; then   # icase folds ASCII only (LC_ALL=C): a name that did not match is matched by inode (Unicode case, ASCII aliases, NFC / NFD)
+      while IFS= read -r -d '' e; do
+        [[ ! "$d/$e" -ef "$1" ]] || return 0
+      done < <(exec 3>&1; rc=0; x=$(LC_ALL=C git -C "$d" ls-files -z 2>&1 >&3) || rc=$?; printf '%s\n@rc=%s' "$x" "$rc")
+      rc=${e##*@rc=}; out=${e%$'\n@rc='*}; l=${out%%$'\n'*}
+      [[ "$rc" != 0 ]] || return 1
+      out=""
+    fi
+    if [[ "$rc" == 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi
   fi
   die "${what:-is_tracked}: git failed while checking whether $1 is tracked (${l:-no output, exit $rc}): fix it (e.g. git config --global --add safe.directory DIR) or use --before-ref"
 }

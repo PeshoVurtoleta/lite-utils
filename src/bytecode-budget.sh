@@ -178,11 +178,20 @@
 #   and "cannot resolve the directory of P (a link in the symlink chain of ARG)" (ARG = the --before value).
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
 #   self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
-#   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
-#   checked, not the intermediate hops); and a .git that git does not recognise as a
+#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a tracked hard link in --before's directory or
+#   below is refused, and the refusal says "git-tracked" although that name itself is not tracked; a hard link
+#   elsewhere in the repository, under a name the other rules miss, stays undetected; a name git matched ignoring
+#   case (a case-sensitive file system, a tracked sibling that differs only in case) is not swept, so a hard link
+#   under such a name stays undetected too); a tracked link inside --before's symlink chain that lies outside the
+#   directories of --before and of the chain's end and below them (inside those trees a tracked hard link or
+#   symlink to the file is refused as "git-tracked" by the inode sweep);
+#   and a .git that git does not recognise as a
 #   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
-#   so a tracked --before inside it is not refused.
+#   so a tracked --before inside it is not refused. The import check strips // and /* */ comments and needs import,
+#   from or require before the quoted './NAME' on one line: a plain string holding that text passes it (Known limit,
+#   like the absolute path above); only the first quoted './NAME' of each quote style on a line is tested, so
+#   `const x = './mod.js'; import './mod.js';` is refused; an import split over two lines, or after a comment
+#   marker inside a string, is refused.
 # Tier: DETERMINISTIC (gated in npm test): the gate verdict -- the lengths come from one node binary and
 #   one driver, the gate is pinned to that node version (--node-version) and any run-to-run change is
 #   NO-VERDICT, never OVER -- and --self-test (canned text; with --fixtures, the recorded node v26.8.2

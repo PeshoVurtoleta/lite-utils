@@ -121,7 +121,7 @@
 #   ...`; `out     <DIR>` (--out); then per fn `  <fn>: SAME -- identical IC multiset (before <n> | after <m>
 #   site(s))`, `  <fn>: DIFF -- IC multiset differs (...)` + its before= / after= lines, or `  <fn>: NO-VERDICT --
 #   <before|after>: <reason>`; then `VERDICT <SAME|DIFF|NO-VERDICT>`. Refusals and die lines go to stderr as
-#   `ic-diff: <why>` + `VERDICT NO-VERDICT`.
+#   `ic-diff: <why>` + `VERDICT NO-VERDICT` and, once report.txt has its head, to report.txt.
 # Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT.
 # Note: a LoadIC site in a fn with no feedback vector (< ~8-10 calls) logs NO line (absent, not X); StoreIC and
 #   LoadGlobalIC sites there log X->X (node 26.8.2). --v8-flags=--no-lazy-feedback-allocation gives every fn one.

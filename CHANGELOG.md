@@ -7,6 +7,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G0 shared lib, all five tools (audit R1 = BB-opus-4 / DD-opus-2 / IBD-opus-4, R17 = IBD-fable-4 / ICD-fable-3, R21 =
+  AD-opus-3, R19 = AD-fable-1, R4 = BB-opus-3; Q-B58-STDERR, Q-B58-ALIAS, Q-B59-POSIX-COND). `is_tracked`
+  (lib/tracked.sh): the ls-files pathspec is `:(literal)` and `--icase-pathspecs` (ASCII case folding), the list is
+  NUL-separated, and git's stderr stays out of the name stream (a core.fsmonitor hook printing on a successful call
+  cannot make a tracked file read untracked, parity with 57b93d1). A match counts only as the exact name or the same
+  inode; a tracked `Thing.js` given as `thing.js` on a case-folding file system is now refused (R1). Every name git
+  did not match gets one more `ls-files -z` of its directory: an entry with the same inode counts as tracked, so a
+  tracked hard link or symlink to `--before` in `--before`'s directory or below is refused as "git-tracked" (the text
+  says so although that name itself is not tracked), and so are Unicode case aliases (U+212A, sharp s) and NFC / NFD
+  spellings; a tracked hard link elsewhere in the repository stays undetected. A git error still dies exit 2, an
+  inherited GIT_LITERAL_PATHSPECS=1 included. Git spawns per call: 3 for a name ls-files did not match, 2 when it
+  matched, 1 outside a work tree. `die`: the die line and `VERDICT NO-VERDICT` also go to report.txt, only from the
+  main shell and only once the report has its head, so a run that dies after its head and before its verdict ends with
+  exactly one VERDICT line (ic-diff's INT / TERM window after the verdict can add a second: LEDGER #88 d) and a die
+  before the head leaves a 0-byte report (R17). `REPORT=""` is set in the prologue, after the fail-closed trap: an
+  inherited `$REPORT` is never a report file (bytecode-budget and inlining-budget-diff assign it late). `sha8`: a
+  backslash in the file name no longer corrupts the head `sha256/8` (R21, `tr -d '\\'`). Prologue: an inherited posix
+  mode (POSIXLY_CORRECT, SHELLOPTS=posix) is turned off, only when it is set (R19); an unconditional `set +o posix`
+  also turns bash 3.2's alias expansion off, which would kill the `node` alias refusal of allocation-diff and ic-diff.
+  bytecode-budget and deopt-diff: the `--driver` import check reads the driver with awk instead of grep (R4): `//` and
+  `/* */` comments are stripped, and `import`, `from` or `require` must lead the quoted `./NAME` on its line, so a
+  commented-out import and a plain mention are refused; known limits (a plain string holding the text passes; only the
+  first quoted occurrence per quote style is tested) are in -h. -h of bytecode-budget and deopt-diff: the "Not
+  detected" paragraph states the new reach of the inode sweep; ic-diff -h: die lines also go to report.txt once it has
+  its head. The R4 sibling in lib/modes.sh is not part of this entry. Tests: test/audit-g0.test.mjs added (die /
+  report, sha8, posix, import-check rows and the mutants); G-T1 rows in test/tracked.test.mjs; the spawn-count pins,
+  the M7 mutant, the X1d fixture and the A5 rows are re-targeted. Known limits: LEDGER #89.
 - FILLERS (bb audit B4b / N1 / B4a; ibd inherits the limits read). `bytecode-budget.sh`: a failure of the
   driver-output pipeline (awk, tr or tee, not the driver) is NO-VERDICT, exit 2, naming the stage: `cannot read driver
   output in run <k> (<tee|tr|awk> exited <rc>)`; precedence as deopt-diff (awk > tr > tee > driver rc). The --version

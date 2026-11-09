@@ -24,7 +24,7 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
     [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
   done
-  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename, grep and cp read ./-NAME
+  # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename and cp read ./-NAME
   [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"
   [[ -n "$DRIVER" ]] || die "$STAGE_MODE mode needs --driver FILE (a driver that imports the module as './<name>')"
@@ -73,7 +73,20 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   [[ "$(printf '%s' "$STAGE_NAME" | LC_ALL=C tr 'A-Z' 'a-z')" != "$(printf '%s' "$b" | LC_ALL=C tr 'A-Z' 'a-z')" ]] || die "the module and --driver have the same file name up to case ($STAGE_NAME / $b): rename the driver"
   # a non-ASCII or control byte (LC_ALL=C: [:print:] is 0x20-0x7E) can fold too (APFS: Unicode case, NFC / NFD): refuse it
   [[ "$STAGE_NAME$b" != *[![:print:]]* ]] || die "the module or --driver file name has a non-ASCII byte ($STAGE_NAME / $b): rename it"
-  grep -q -F -e "'./$STAGE_NAME'" -e "\"./$STAGE_NAME\"" -- "$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
+  # a comment or a plain mention of the name must not pass: comments are stripped, then import / from / require must lead the quoted name on its line
+  STAGE_IMP="./$STAGE_NAME" awk '
+    BEGIN { q[1] = "\047" ENVIRON["STAGE_IMP"] "\047"; q[2] = "\"" ENVIRON["STAGE_IMP"] "\"" }
+    { s = $0; o = ""
+      while (s != "") {
+        if (inb) { i = index(s, "*/"); if (!i) { s = ""; break }; s = substr(s, i + 2); inb = 0; continue }
+        i = index(s, "/*"); j = index(s, "//")
+        if (j && (!i || j < i)) { o = o substr(s, 1, j - 1); s = ""; break }
+        if (!i) { o = o s; s = ""; break }
+        o = o substr(s, 1, i - 1); s = substr(s, i + 2); inb = 1
+      }
+      for (k = 1; k <= 2; k++) { i = index(o, q[k]); if (i && substr(o, 1, i - 1) ~ /(^|[^A-Za-z0-9_$.])(import|from|require)[ \t]*\(?[ \t]*$/) found = 1 }
+    }
+    END { exit !found }' <"$DRIVER" || die "--driver must import './$STAGE_NAME' (the staged module beside it): $DRIVER"
   STAGE_DRIVER=$(cd -- "$(dirname -- "$DRIVER")" && pwd)/$(basename -- "$DRIVER")
   # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
   # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one

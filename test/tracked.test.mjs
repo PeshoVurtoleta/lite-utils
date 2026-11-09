@@ -13,7 +13,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
 import {
-    mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, cpSync, rmSync, existsSync, symlinkSync, chmodSync, truncateSync,
+    mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, cpSync, rmSync, existsSync, symlinkSync, chmodSync, truncateSync, linkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -88,6 +88,15 @@ function fx() {
     for (const n of [':x.js', 'a.js', '*']) writeFileSync(join(L, n), 'x\n');
     git(L, ['--literal-pathspecs', 'add', '--', ':x.js', 'a.js'], 'add');
     f.lit = L;
+    // M7 fixture (R3): tracked a.js and c.js; the UNTRACKED file "[ab].js" is a hard link of c.js. Live: ":(literal)[ab].js" matches nothing ->
+    // inode sweep -> same inode as c.js -> tracked (rc 0). Without :(literal) the glob [ab].js matches a.js (rc 0, no exact-name / inode hit) -> rc 1.
+    const L2 = join(top, 'lit2');
+    mkdirSync(L2);
+    git(L2, ['init', '-q']);
+    for (const n of ['a.js', 'c.js']) writeFileSync(join(L2, n), 'x\n');
+    git(L2, ['--literal-pathspecs', 'add', '--', 'a.js', 'c.js'], 'add');
+    linkSync(join(L2, 'c.js'), join(L2, '[ab].js'));
+    f.lit2 = L2;
     function clone(name, breakIt) {
         const d = join(top, name);
         cpSync(R, d, { recursive: true });
@@ -143,10 +152,11 @@ function firstLine(c) {
 function m3Kills(fl) {
     return fl.rc !== 0 && fl.line.startsWith('fatal: not a git repository') && !fl.line.startsWith('fatal: not a git repository (or any ');
 }
-function litVerdict(rootsDir, file) { // null, or why not: ":x.js" tracked -> 0; untracked "*" beside tracked files -> 1
+function litVerdict(rootsDir, file) { // null, or why not: ":x.js" tracked -> 0; untracked "*" beside tracked files -> 1; untracked "[ab].js" hard link of tracked c.js -> 0
     const f = fx();
-    for (const [n, rc] of [[':x.js', 0], ['*', 1]]) {
-        const c = { kind: 'rc', rc, path: join(f.lit, n), env: {} };
+    // ':x.js' and '*' are parity controls since R3 (the inode sweep makes them verdict-equivalent under M7); '[ab].js' (hard link of tracked c.js) has the M7 teeth
+    for (const [n, rc, dir] of [[':x.js', 0, f.lit], ['*', 1, f.lit], ['[ab].js', 0, f.lit2]]) {
+        const c = { kind: 'rc', rc, path: join(dir, n), env: {} };
         const m = verdict(c, run(rootsDir, file, c));
         if (m !== null) return `${n}: ${m}`;
     }
@@ -212,7 +222,7 @@ for (const file of FIVE) {
 }
 
 for (const file of FIVE) {
-    test(`A1 literal-pathspecs ${file}: tracked ":x.js" -> 0, untracked "*" beside a tracked file -> 1`, { skip }, () => {
+    test(`A1 literal-pathspecs ${file}: tracked ":x.js" -> 0, untracked "*" beside a tracked file -> 1, untracked "[ab].js" (hard link of tracked c.js) -> 0`, { skip }, () => {
         assert.equal(litVerdict(ROOT, file), null);
     });
 }
@@ -259,9 +269,9 @@ function shimCalls(file, c) {
     return { n, left: readdirSync(tmpd) };
 }
 for (const file of FIVE) {
-    test(`A5 ${file}: git spawns per call (2 inside a work tree, 1 outside) and 0 temp files per call`, { skip }, () => {
+    test(`A5 ${file}: git spawns per call (3 for a name with no literal match, 2 when it matched, 1 outside a work tree) and 0 temp files per call`, { skip }, () => {
         const cs = cases();
-        for (const [name, want] of [['tracked', 2], ['untracked', 2], ['outside', 1]]) {
+        for (const [name, want] of [['tracked', 2], ['untracked', 3], ['outside', 1]]) {
             const { n, left } = shimCalls(file, cs[name]);
             assert.equal(n, want, `${name}: git spawns`);
             assert.deepEqual(left, [], `${name}: temp files left in TMPDIR`);
@@ -300,7 +310,7 @@ function mutantRoots(m) {
 const ANCHOR_GUARD = '  command -v git >/dev/null 2>&1 || return 1\n';
 const MUTANTS = [
     // M1: ls-files back to a plain exit test (any failure reads as untracked) -> the truncated-index row dies
-    { id: 'M1', from: '    [[ $rc -ne 0 ]] || return 0\n', to: '    [[ $rc -ne 0 ]] || return 0\n    return 1\n', exact: ['index'], kills: ['index'] },
+    { id: 'M1', from: '    if [[ "$rc" == 1 ]]; then case "$out" in *"did not match"*) return 1 ;; esac; fi\n', to: '    return 1\n', exact: ['index'], kills: ['index'] },
     // M2: any rev-parse failure returns 1 -> broken gitfile, bad config, dubious ownership, GIT_DIR to a missing dir (and a .git file to a missing dir) are no longer refused
     { id: 'M2', from: '    case "$l" in "fatal: not a git repository (or any "*) return 1 ;; esac\n', to: '    return 1\n', exact: ['gitfile', 'missing', 'config', 'dubious', 'gitdir'], kills: ['gitfile', 'config', 'dubious', 'gitdir'] },
     // M3: the "(or any " part of the no-repo match dropped -> "fatal: not a git repository: '<path>'" (GIT_DIR to a missing dir) reads as no repo.
@@ -311,8 +321,9 @@ const MUTANTS = [
     // M5: the `command -v` guard removed -> git off PATH is no longer "not tracked"
     { id: 'M5', from: ANCHOR_GUARD, to: '', exact: ['nogit'], kills: ['nogit'] },
     // M6: always die -> the untracked controls die
-    // M7: `--literal-pathspecs ` removed from the ls-files call -> pathspec magic: ":x.js" dies, "*" matches a tracked file
-    { id: 'M7', from: 'git --literal-pathspecs -C', to: 'git -C', exact: ['lit'], kills: ['lit'] },
+    // M7: `:(literal)` removed from the ls-files pathspec -> the glob "[ab].js" (an untracked hard link of tracked c.js) matches a.js: rc 1 instead of 0.
+    // (R3: ":x.js" and "*" no longer tell M7 from live, the inode sweep reads them the same; they stay in the lit row as controls)
+    { id: 'M7', from: '-- ":(literal)$b"', to: '-- "$b"', exact: ['lit'], kills: ['lit'] },
     { id: 'M6', from: '  local d b out rc=0 l\n', to: '  local d b out rc=0 l\n  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (m6): always"\n', exact: ['tracked', 'untracked', 'outside', 'dotgit', 'nogit', 'lit'], kills: ['untracked', 'outside', 'dotgit', 'nogit'] },
 ];
 for (const m of MUTANTS) {
@@ -344,4 +355,225 @@ for (const m of MUTANTS) {
             && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
         assert.deepEqual([...killed.keys()].sort(), want.sort(), `${m.id}: killed rows must be exactly the mutant's targets`);
     });
+}
+
+// ---- b58 G0 / G-T1 (.handoff/PLAN-b58-g0.md ASSERTIONS): the case-folding, :(literal) is_tracked of lib/tracked.sh on all FIVE roots ----
+// Old code = the 57b93d1 roots (git history; a missing commit skips locally, FAILS under CI=true). Every expected rc is the
+// spec's (tracked 0, untracked / nosuch 1, a git error dies), not what a root printed. Results: bash 3.2 macOS host only.
+const G0_SHA = '57b93d1';
+const g0Have = capSync('git', ['cat-file', '-e', `${G0_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8', env: ENV }, 30000, 'git cat-file g0')
+    .status === 0 ? true : `commit ${G0_SHA} not available (shallow clone?)`;
+let G0_OLD = null;
+function g0Old() {
+    if (g0Have !== true) assert.fail(`${g0Have} (CI=true: a history row fails, never skips)`);
+    if (G0_OLD !== null) return G0_OLD;
+    const dir = mk('g0-old');
+    for (const f of FIVE) {
+        const g = capSync('git', ['show', `${G0_SHA}:${f}`], { cwd: ROOT, encoding: 'utf8', env: ENV, maxBuffer: 1 << 26 }, 30000, `git show ${f}`);
+        assert.equal(g.status, 0, g.stderr);
+        writeFileSync(join(dir, f), g.stdout);
+    }
+    return (G0_OLD = dir);
+}
+// a repo under TOP with the given tracked files (git add only) and untracked files
+function g0Repo(name, tracked, untracked = []) {
+    const d = mk(name);
+    git(d, ['init', '-q']);
+    for (const n of [...tracked, ...untracked]) writeFileSync(join(d, n), 'x\n');
+    git(d, ['--literal-pathspecs', 'add', '--', ...tracked], 'add');
+    return d;
+}
+// host facts: does `thing.js` open the file stored as `Thing.js` (case-folding host)?
+let FOLD = null;
+function g0Fold() {
+    if (FOLD === null) {
+        const d = mk('g0-fold');
+        writeFileSync(join(d, 'Thing.js'), 'x\n');
+        FOLD = existsSync(join(d, 'thing.js'));
+    }
+    return FOLD;
+}
+const g0rc = (r) => (r.status === 0 ? r.stdout : `exit ${r.status} ${r.stdout} ${r.stderr}`);
+for (const file of FIVE) {
+    test(`G-T1a ${file}: tracked Thing.js, is_tracked <dir>/thing.js -> rc 0 (case-folding hosts only; macOS leg)`, { skip }, (t) => {
+        if (!g0Fold()) return t.skip('G-T1a: case-sensitive host (runs on case-folding hosts only: macOS APFS default)');
+        const d = g0Repo(`g1a-${file}`, ['Thing.js']);
+        const c = { kind: 'rc', rc: 0, path: join(d, 'thing.js'), env: {} };
+        assert.equal(g0rc(run(ROOT, file, c)), 'rc=0\n');
+    });
+    test(`G-T1a twin ${file}: the ${G0_SHA} root returns 1 on tracked Thing.js via thing.js (red on old; case-folding hosts only)`, { skip: skip || histSkip(g0Have) }, (t) => {
+        if (!g0Fold()) return t.skip('G-T1a twin: case-sensitive host (runs on case-folding hosts only: macOS APFS default)');
+        const d = g0Repo(`g1at-${file}`, ['Thing.js']);
+        const c = { kind: 'rc', rc: 0, path: join(d, 'thing.js'), env: {} };
+        assert.equal(g0rc(run(g0Old(), file, c)), 'rc=1\n', 'the old root must read the case-different name as untracked');
+    });
+    test(`G-T1b ${file}: tracked Thing.js beside a distinct untracked thing.js -> rc 1 (case-sensitive hosts only; Linux CI leg)`, { skip }, (t) => {
+        if (g0Fold()) return t.skip('G-T1b: case-folding host (runs on case-sensitive hosts only: Linux CI leg)');
+        const d = g0Repo(`g1b-${file}`, ['Thing.js'], ['thing.js']);
+        const c = { kind: 'rc', rc: 1, path: join(d, 'thing.js'), env: {} };
+        assert.equal(g0rc(run(ROOT, file, c)), 'rc=1\n');
+    });
+}
+// parity rows: spec rc on the live root AND the pinned old root (same rc on both)
+function g1cCases() {
+    const f = fx();
+    const q = g0Repo('g1c-quote', ['q"b.js', 'k.js']);
+    const u = g0Repo('g1c-untr', ['k.js'], ['u.js', '*']);
+    return [
+        ['untracked file', 1, join(u, 'u.js')],
+        [':x.js tracked (pathspec magic name)', 0, join(f.lit, ':x.js')],
+        ['* untracked beside tracked files', 1, join(u, '*')],
+        ['q"b.js tracked', 0, join(q, 'q"b.js')],
+        ['nosuch.js (absent)', 1, join(q, 'nosuch.js')],
+    ];
+}
+for (const file of FIVE) {
+    test(`G-T1c ${file}: live and ${G0_SHA} agree with the spec rc (untracked 1, :x.js 0, * 1, q"b.js 0, nosuch 1) and a truncated index dies on both`,
+        { skip: skip || histSkip(g0Have) }, () => {
+            for (const [name, rc, path] of g1cCases()) {
+                const c = { kind: 'rc', rc, path, env: {} };
+                assert.equal(g0rc(run(ROOT, file, c)), `rc=${rc}\n`, `live: ${name}`);
+                assert.equal(g0rc(run(g0Old(), file, c)), `rc=${rc}\n`, `old: ${name}`);
+            }
+            const ci = cases().index;
+            assert.equal(verdict(ci, run(ROOT, file, ci)), null, 'live: truncated index');
+            assert.equal(verdict(ci, run(g0Old(), file, ci)), null, 'old: truncated index');
+        });
+    test(`G-T1d ${file}: an inherited GIT_LITERAL_PATHSPECS=1 on a tracked file dies (exit 2 + the die line), never rc 1`, { skip }, () => {
+        const c = { kind: 'err', path: join(fx().R, 't.txt'), env: {} };
+        const r = run(ROOT, file, c, { GIT_LITERAL_PATHSPECS: '1' });
+        assert.equal(verdict(c, r), null, g0rc(r));
+        assert.ok(!r.stdout.includes('rc='), `must not print an rc: ${r.stdout}`);
+    });
+}
+
+// ---- b58 G0 round 2 (.handoff/PLAN-b58-g0.md ADDENDUM R2): G-T1e .. G-T1i. Expected rcs are the spec's; old = the 57b93d1 roots
+// (measured on this host, bash 3.2 macOS: NFC-tracked name asked in NFD reads rc 0 on old, so that row is a PARITY row). ----
+const U = (s) => Buffer.from(s, 'latin1').toString('utf8');      // bytes -> string: \xc3\x89 = U+00C9 etc.
+const NAME_E_UP = U('\xc3\x89a.js'), NAME_E_LO = U('\xc3\xa9a.js');   // "E-acute a.js (U+00C9)" / "e-acute a.js (U+00E9)"
+const NFC_E = U('\xc3\xa9.js'), NFD_E = U('e\xcc\x81.js');            // "e-acute.js" precomposed / decomposed
+const FOLD_SKIP = 'case-folding / Unicode-normalizing host only (macOS APFS leg; a case-sensitive host cannot open the other spelling)';
+const lc = { LC_ALL: 'C' };
+function g1cRc(root, file, path, extra = {}) { return g0rc(run(root, file, { kind: 'rc', path, env: {} }, { ...lc, ...extra })); }
+function opens(a, b) { return existsSync(a) && existsSync(b); }
+for (const file of FIVE) {
+    test(`G-T1e ${file}: a core.fsmonitor hook printing to stderr on a successful ls-files -> rc 0 on live AND on ${G0_SHA} (parity); the r1 merged-stderr form is the mutant in audit-g0`, { skip: skip || histSkip(g0Have) }, () => {
+        const d = g0Repo(`g1e-${file}`, ['a.js']);
+        const hook = join(mk(`g1e-hook-${file}`), 'hook.sh');
+        writeFileSync(hook, '#!/bin/sh\necho NOISE-FROM-HOOK >&2\nexit 0\n'); chmodSync(hook, 0o755);
+        git(d, ['config', 'core.fsmonitor', hook]);
+        assert.equal(g1cRc(ROOT, file, join(d, 'a.js')), 'rc=0\n', 'live');
+        assert.equal(g1cRc(g0Old(), file, join(d, 'a.js')), 'rc=0\n', 'old');
+    });
+    test(`G-T1f ${file}: tracked "E-acute a.js (U+00C9)" asked as "e-acute a.js (U+00E9)" -> rc 0 (Unicode case; ${FOLD_SKIP})`, { skip }, (t) => {
+        const d = g0Repo(`g1f1-${file}`, [NAME_E_UP]);
+        if (!opens(join(d, NAME_E_UP), join(d, NAME_E_LO))) return t.skip(`G-T1f: ${FOLD_SKIP}`);
+        assert.equal(g1cRc(ROOT, file, join(d, NAME_E_LO)), 'rc=0\n');
+    });
+    test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked "E-acute a.js (U+00C9)" asked as "e-acute a.js (U+00E9)" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+        const d = g0Repo(`g1f1t-${file}`, [NAME_E_UP]);
+        if (!opens(join(d, NAME_E_UP), join(d, NAME_E_LO))) return t.skip(`G-T1f twin: ${FOLD_SKIP}`);
+        assert.equal(g1cRc(g0Old(), file, join(d, NAME_E_LO)), 'rc=1\n');
+    });
+    test(`G-T1f parity ${file}: tracked NFC "e-acute.js" asked in NFD -> rc 0 on live AND on ${G0_SHA} (parity row: old already reads 0 here; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+        const d = g0Repo(`g1f2-${file}`, [NFC_E]);
+        if (!opens(join(d, NFC_E), join(d, NFD_E))) return t.skip(`G-T1f parity: ${FOLD_SKIP}`);
+        assert.equal(g1cRc(ROOT, file, join(d, NFD_E)), 'rc=0\n', 'live');
+        assert.equal(g1cRc(g0Old(), file, join(d, NFD_E)), 'rc=0\n', 'old');
+    });
+    // B3 (R3): Unicode case folds the sweep reaches by inode (no ASCII icase): Kelvin sign U+212A vs k, sharp s U+00DF vs ss. Host-gated by opens().
+    const NAME_KELVIN = U('\xe2\x84\xaak.js'), NAME_KK = 'kk.js', NAME_SHARP = U('stra\xc3\x9fe.js'), NAME_STRASSE = 'strasse.js';
+    for (const [lab, tr, ask] of [['Kelvin sign U+212A + "k.js"', NAME_KELVIN, NAME_KK], ['sharp s "stra" U+00DF "e.js"', NAME_SHARP, NAME_STRASSE]]) {
+        test(`G-T1f ${file}: tracked ${lab} asked as "${ask}" -> rc 0 (${FOLD_SKIP})`, { skip }, (t) => {
+            const d = g0Repo(`g1fu-${file}-${ask}`, [tr]);
+            if (!opens(join(d, tr), join(d, ask))) return t.skip(`G-T1f ${ask}: ${FOLD_SKIP}`);
+            assert.equal(g1cRc(ROOT, file, join(d, ask)), 'rc=0\n');
+        });
+        test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked ${lab} asked as "${ask}" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+            const d = g0Repo(`g1fut-${file}-${ask}`, [tr]);
+            if (!opens(join(d, tr), join(d, ask))) return t.skip(`G-T1f twin ${ask}: ${FOLD_SKIP}`);
+            assert.equal(g1cRc(g0Old(), file, join(d, ask)), 'rc=1\n');
+        });
+    }
+    function nfdRepo(name) {   // index really holds the NFD spelling (core.precomposeunicode=false before add)
+        const d = mk(name);
+        git(d, ['init', '-q']); git(d, ['config', 'core.precomposeunicode', 'false']);
+        writeFileSync(join(d, NFD_E), 'x\n');
+        git(d, ['--literal-pathspecs', 'add', '--', NFD_E], 'add');
+        return d;
+    }
+    test(`G-T1f ${file}: tracked NFD name (index holds NFD) asked in NFC -> rc 0 (${FOLD_SKIP})`, { skip }, (t) => {
+        const d = nfdRepo(`g1f3-${file}`);
+        if (!opens(join(d, NFD_E), join(d, NFC_E))) return t.skip(`G-T1f NFD: ${FOLD_SKIP}`);
+        assert.equal(g1cRc(ROOT, file, join(d, NFC_E)), 'rc=0\n');
+    });
+    test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on a tracked NFD name asked in NFC (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+        const d = nfdRepo(`g1f3t-${file}`);
+        if (!opens(join(d, NFD_E), join(d, NFC_E))) return t.skip(`G-T1f NFD twin: ${FOLD_SKIP}`);
+        assert.equal(g1cRc(g0Old(), file, join(d, NFC_E)), 'rc=1\n');
+    });
+    for (const [label, name] of [['ASCII', 'u.js'], ['non-ASCII', U('\xc3\xb1.js')]]) {
+        // G-T1g twins (spec: a git answer that is neither a clean list nor the "did not match" of the pathspec dies, never rc 1)
+        test(`G-T1g twin (i) ${file}: untracked ${label} name, the sweep (plain ls-files -z) exits 1 saying "did not match" -> dies (exit 2) naming git's line, never rc 1`, { skip }, () => {
+            const d = g0Repo(`g1gi-${file}-${label}`, ['k.js'], [name]);
+            const c = { kind: 'err', path: join(d, name), env: { PATH: g1gShim('plain1') } };
+            const r = run(ROOT, file, c, lc);
+            assert.equal(verdict(c, r), null, g0rc(r));
+            assert.ok(r.stderr.includes('(error: shim plain did not match)'), r.stderr);
+        });
+        test(`G-T1g twin (ii) ${file}: untracked ${label} name, --error-unmatch exits 1 with "fatal: shim other rc1" -> dies (exit 2) naming that line, never rc 1`, { skip }, () => {
+            const d = g0Repo(`g1gii-${file}-${label}`, ['k.js'], [name]);
+            const c = { kind: 'err', path: join(d, name), env: { PATH: g1gShim('unmatch1') } };
+            const r = run(ROOT, file, c, lc);
+            assert.equal(verdict(c, r), null, g0rc(r));
+            assert.ok(r.stderr.includes('(fatal: shim other rc1)'), r.stderr);
+        });
+        test(`G-T1g twin (iii) ${file}: untracked ${label} name, --error-unmatch exits 128 with "fatal: shim other did not match" -> dies (exit 2) naming that line, never rc 1`, { skip }, () => {
+            const d = g0Repo(`g1giii-${file}-${label}`, ['k.js'], [name]);
+            const c = { kind: 'err', path: join(d, name), env: { PATH: g1gShim('unmatch128') } };
+            const r = run(ROOT, file, c, lc);
+            assert.equal(verdict(c, r), null, g0rc(r));
+            assert.ok(r.stderr.includes('(fatal: shim other did not match)'), r.stderr);
+        });
+    }
+    test(`G-T1g ${file}: the non-ASCII sweep (plain ls-files -z) failing with exit 128 dies (exit 2) naming git's line, never rc 1`, { skip }, () => {
+        const d = g0Repo(`g1g-${file}`, ['k.js'], [NAME_E_LO]);
+        const c = { kind: 'err', path: join(d, NAME_E_LO), env: { PATH: g1gShim('plain128') } };
+        const r = run(ROOT, file, c, lc);
+        assert.equal(verdict(c, r), null, g0rc(r));
+        assert.ok(r.stderr.includes('(fatal: shim sweep failure)'), r.stderr);
+    });
+    test(`G-T1h ${file}: git spawns -- every name with no literal match 3 (untracked ASCII, untracked non-ASCII), a name that matched 2 (tracked ASCII, tracked non-ASCII), 0 temp files left`, { skip }, () => {
+        const d = g0Repo(`g1h-${file}`, [NAME_E_LO, 'k.js'], [U('\xc3\xb1.js'), 'u.js']);
+        for (const [name, want] of [['u.js', 3], [U('\xc3\xb1.js'), 3], ['k.js', 2], [NAME_E_LO, 2]]) {
+            const { n, left } = shimCalls(file, { kind: 'rc', rc: 0, path: join(d, name), env: lc });
+            assert.equal(n, want, `${JSON.stringify(name)}: git spawns`);
+            assert.deepEqual(left, [], 'temp files left in TMPDIR');
+        }
+    });
+    test(`G-T1i ${file}: a tracked file deleted from disk only -> rc 0; an untracked file named b@rc=0.js -> rc 1`, { skip }, () => {
+        const d = g0Repo(`g1i-${file}`, ['gone.js', 'k.js'], ['b@rc=0.js']);
+        rmSync(join(d, 'gone.js'));
+        assert.equal(g1cRc(ROOT, file, join(d, 'gone.js')), 'rc=0\n', 'deleted tracked');
+        assert.equal(g1cRc(ROOT, file, join(d, 'b@rc=0.js')), 'rc=1\n', 'untracked b@rc=0.js');
+    });
+}
+// a PATH dir whose git fails one call and passes everything else to real git. mode 'plain128': the plain `ls-files -z` (no --error-unmatch)
+// exits 128 "fatal: shim sweep failure"; 'plain1': the same call exits 1 "error: shim plain did not match"; 'unmatch1': the --error-unmatch
+// ls-files exits 1 "fatal: shim other rc1"
+const G1G = new Map();
+function g1gShim(mode) {
+    if (G1G.has(mode)) return G1G.get(mode);
+    const dir = mk(`g1g-shim-${mode}`);
+    for (const c of ['dirname', 'basename']) symlinkSync(which(c), join(dir, c));
+    const bad = { plain128: "if [[ $plain == 1 ]]; then echo 'fatal: shim sweep failure' >&2; exit 128; fi",
+        plain1: "if [[ $plain == 1 ]]; then echo 'error: shim plain did not match' >&2; exit 1; fi",
+        unmatch1: "if [[ $plain == 2 ]]; then echo 'fatal: shim other rc1' >&2; exit 1; fi",
+        unmatch128: "if [[ $plain == 2 ]]; then echo 'fatal: shim other did not match' >&2; exit 128; fi" }[mode];
+    assert.ok(bad !== undefined, mode);
+    writeFileSync(join(dir, 'git'), `#!${BASH}\nplain=0; for a in "$@"; do case "$a" in ls-files) plain=1 ;; --error-unmatch) plain=2 ;; esac; done\n` +
+        `${bad}\nexec '${which('git')}' "$@"\n`);
+    chmodSync(join(dir, 'git'), 0o755);
+    G1G.set(mode, dir);
+    return dir;
 }

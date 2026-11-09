@@ -784,13 +784,15 @@ function fxDashHardlink() {   // cwd frz holds -b.js, a hard link of the tracked
     linkSync(join(repo, '-b.js'), join(frz, '-b.js'));
     return { d: frz, live: join(repo, '-b.js'), args: ibdArgs(d, '-b.js', join(repo, 'after', 'Signal.js')) };
 }
-function fxDashDirHardlink() {   // cwd d (no repo); the repo -d tracks Signal.js; --before -d/x.js is its hard link: only dirname(--before) finds -d
+function fxDashDirHardlink() {   // cwd d (no repo); the repo -d tracks Signal.js; --before -d/sub/x.js is its hard link, one dir BELOW the tracked file:
+    // is_tracked's inode sweep lists only sub/ (and below), never -d/Signal.js, so the hard link is not refused as "git-tracked" (R8 residual);
+    // only the live_tops pass, which reaches -d through dirname(--before), finds the same file as the live -d/Signal.js
     const d = mk('x1d'), repo = join(d, '-d');
-    mkdirSync(repo); mkdirSync(join(d, 'after'));
+    mkdirSync(join(repo, 'sub'), { recursive: true }); mkdirSync(join(d, 'after'));
     writeFileSync(join(repo, 'Signal.js'), `${E9}\n`); writeFileSync(join(d, 'after', 'Signal.js'), `${E9}\n`);
     git(repo, ['init', '-q']); git(repo, ['add', 'Signal.js']);
-    linkSync(join(repo, 'Signal.js'), join(repo, 'x.js'));
-    return { d, live: join(repo, 'Signal.js'), args: ibdArgs(d, '-d/x.js', join(d, 'after', 'Signal.js')) };
+    linkSync(join(repo, 'Signal.js'), join(repo, 'sub', 'x.js'));
+    return { d, live: join(repo, 'Signal.js'), args: ibdArgs(d, '-d/sub/x.js', join(d, 'after', 'Signal.js')) };
 }
 function fxDashWatch() { const d = mk('x1w'), dd = join(d, '-d'); mkdirSync(dd); mkdirSync(join(d, 'after')); writeFileSync(join(dd, 'x.js'), `${E9}\n`); writeFileSync(join(dd, 'Watch.js'), `${E9}\n`); writeFileSync(join(d, 'after', 'Signal.js'), `${E9}\n`); return { d, args: ibdArgs(d, '-d/x.js', join(d, 'after', 'Signal.js')) }; }
 function cleanVerdict(root) {   // null iff the run reaches node past the IBD_PRE reads, one VERDICT, no refusal
@@ -817,7 +819,7 @@ test('X1w U2 NOF16, --before -d/x.js (dash-led dir, no repo): reaches node, one 
 });
 // dirname without `--` on a clean -b.js only adds stderr noise (top_of "" = git -C "" = cwd, already in live_tops), so its
 // teeth are the -d/ repo reached through dirname(--before) alone.
-test('X1d U2 NOF16, -d/x.js a hard link of the tracked -d/Signal.js: "same file as the live" refusal; MUTANT dirname without `--` loses it', { skip: mskip }, () => {
+test('X1d U2 NOF16, -d/sub/x.js a hard link of the tracked -d/Signal.js (below the sweep\'s reach): "same file as the live" refusal; MUTANT dirname without `--` loses it', { skip: mskip }, () => {
     assert.equal(refusesSame(join(mNOF(), TOOLS.ibd[0]), fxDashDirHardlink()), null);
     const out = pb('x1-dirname', [NOF16, ['lib', 'common.sh', 'live_tops "$f" "$(dirname -- "$f")" "$(dirname -- "$p")"', 'live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"']]);
     assert.notEqual(refusesSame(join(out, TOOLS.ibd[0]), fxDashDirHardlink()), null, 'dirname mutant survived');
@@ -837,4 +839,27 @@ test('N after 2 nested runs of this file, 0 entries are left under each private 
         assert.equal(r.status, 0, `run ${i}: ${r.stdout.slice(-2000)}${r.stderr.slice(-500)}`);
         assert.deepEqual(readdirSync(t), [], `run ${i}: entries left under the mkdtemp root`);
     }
+});
+
+// ---------------------------------------------------------------- b58 G0 G-T3b: sha8 reads stdin
+// `printf x | sha8 -` is the first 8 hex digits of SHA-256("x"); the expected value is node's own hash of "x" (the oracle),
+// never the shell tool's. Live lib/common.sh and the 57b93d1 one (git history) must agree. bash 3.2 macOS host only.
+const G0B_SHA = '57b93d1';
+function sha8Stdin(commonText, what) {
+    const m = /^sha8\(\) \{.*$/m.exec(commonText);
+    assert.ok(m !== null, `${what}: no sha8() one-line definition`);
+    const p = join(mk('sha8h'), 'h.sh');
+    writeFileSync(p, `${m[0]}\nprintf x | sha8 -\n`);
+    const r = capSync(BASH, [p], { encoding: 'utf8', env: ENV }, 30000, `sha8 - (${what})`);
+    return { status: r.status, out: r.stdout, err: r.stderr };
+}
+test('G-T3b live lib/common.sh: `printf x | sha8 -` == the first 8 hex digits of SHA-256("x") computed in node', { skip }, () => {
+    const want = createHash('sha256').update('x').digest('hex').slice(0, 8) + '\n';
+    assert.deepEqual(sha8Stdin(LIB(ROOT, 'common.sh'), 'live'), { status: 0, out: want, err: '' });
+});
+test(`G-T3b ${G0B_SHA} lib/common.sh (git history) agrees: stdin hashing was already right (parity pin, not a must-fail)`, { skip: skip || histSkip(capSync('git', ['cat-file', '-e', `${G0B_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8', env: ENV }, 30000, 'git cat-file g0b').status === 0 ? true : `commit ${G0B_SHA} not available (shallow clone?)`) }, () => {
+    const g = capSync('git', ['show', `${G0B_SHA}:lib/common.sh`], { cwd: ROOT, encoding: 'utf8', env: ENV, maxBuffer: 1 << 26 }, 30000, 'git show common.sh g0b');
+    assert.equal(g.status, 0, g.stderr);
+    const want = createHash('sha256').update('x').digest('hex').slice(0, 8) + '\n';
+    assert.deepEqual(sha8Stdin(g.stdout, 'old'), { status: 0, out: want, err: '' });
 });

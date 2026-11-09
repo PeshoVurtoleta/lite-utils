@@ -1,5 +1,5 @@
 #: lib/common.sh -- die say sha8 usage multiset devino top_of live_tops resolve_links is_tracked
-#: refuse_live worst. Reads at call time: REPORT (say), AFTER_FILE (live_tops: the toplevels around its dir and,
+#: refuse_live worst. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
 #: for a symlink, around the dir of its chain's end; refuse_live: its name joins the cand list) and REPO
 #: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage).
 #: Sets TOP_OF (top_of; a local of live_tops) and LIVE_TOPS (live_tops; a local of refuse_live). top_of and
@@ -11,9 +11,13 @@
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { printf '@SCRIPT@: %s\nVERDICT NO-VERDICT\n' "$*" >&2; exit 2; }
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+  printf '@SCRIPT@: %s\nVERDICT NO-VERDICT\n' "$*" >&2
+  if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf '@SCRIPT@: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
+  exit 2
+}
 say() { printf '%s\n' "$*" | tee -a "$REPORT"; }
-sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-8; }
+sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | tr -d '\\' | cut -c1-8; }
 usage() { sed -n '2,/^$/{s/^# \{0,1\}//;p;}' "$0"; }
 multiset() { sort | uniq -c; }   # the ONE multiset: judge() and --self-test both use it (never sort -u)
 devino() { # device:inode, following symlinks (GNU stat, else BSD / macOS stat)

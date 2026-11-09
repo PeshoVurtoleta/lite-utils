@@ -247,6 +247,21 @@ row and mutant). Evidence: CHANGELOG "STAGE-NITS" 486, "BBA4" 510, "ICN" 517.
 **#37 NUL-LEAK (burst 39).** A SIGINT / SIGTERM-killed test process leaked its NUL awk shim dir. Fix: `nulTmpDir`
 removes the dir on SIGINT / SIGTERM, then re-raises. Evidence: CHANGELOG "NUL-LEAK" line 468.
 
+**#86 G0 shared lib (b58-b59): four mechanisms, each caught by a review round or the first full `npm test`.** (a)
+is_tracked T0.1, ruled and cross-checked in b57, still regressed: its `2>&1` put git's stderr into the NUL name
+stream, so a tracked file read untracked when a core.fsmonitor hook printed on a successful ls-files (r1 blocker 1;
+fix Q-B58-STDERR: `exec 3>&1; x=$(git ... 2>&1 >&3)`). (b) A fragment that starts reading a global must check that
+every root assigns it first: die now writes into `$REPORT`, but bytecode-budget and inlining-budget-diff assign REPORT
+late, so an inherited REPORT took writes outside `--out` (r2 blocker 1); `REPORT=""` in the prologue. (c) An
+assignment ahead of the fail-closed trap is a fail-open window: that line sat above the trap, and `readonly
+REPORT=...` through BASH_ENV made bytecode-budget exit 1 with no VERDICT (measured, r3 blocker 2; 57b93d1 exits 2);
+the line now sits directly below the trap. `FINAL=""` has the same window on the base (measured in r3b with `readonly
+FINAL=1` through BASH_ENV: #89 b). (d) An unconditional `set +o posix` turns expand_aliases off on bash 3.2, which
+killed the `node` alias refusal of allocation-diff and ic-diff (five BASH_ENV alias rows red), caught only by the
+first full `npm test` on the G0 diff; fix Q-B59-POSIX-COND: `[[ ! -o posix ]] || set +o posix`. Evidence:
+`.handoff/RULINGS-b58-g0.md`, `.handoff/evidence/REVIEW-b58-g0-r1.md`, `REVIEW-b58-g0-r2.md`, `REVIEW-b59-g0-r3.md`,
+`REVIEW-b59-g0-r3b.md` (local, untracked).
+
 ---
 
 ## C. CI / platform lessons
@@ -370,6 +385,16 @@ real node under `npm test` and failed only there (test/ext-audit-inl.test.mjs:28
 drops `NODE` (its cleanEnv is at test/ext-audit-inl.test.mjs:57); run each new row under both `node --test` and
 `npm test`.
 
+**#87 G0: two test-gate lessons.** (a) A lib change that adds a fallback path can make old mutants verdict-equivalent:
+after the inode sweep, `--icase-pathspecs` and `:(literal)` both read the old fixtures the same (the sweep finds the
+file by inode), and the X1d hard link was refused as "git-tracked" before the check it pinned. Retarget each row to
+what still differs (the git spawn count for `--icase-pathspecs`; a glob-named file that is a hard link of a tracked
+file for `:(literal)`; the hard link in a subdirectory with the tracked file above --before's directory, outside the
+sweep, for X1d) rather than delete it, and say in the row which part is now only a parity control. (b) A unit that
+touches lib/ runs the FULL suite before its first review: G0 went two review rounds without one, and the posix line's
+alias regression (#86 d) showed only at the first full `npm test`. Evidence: `.handoff/evidence/REVIEW-b59-g0-r3.md`
+(local, untracked).
+
 ---
 
 ## E. Process lessons
@@ -417,6 +442,19 @@ sitting): read the cited script before writing "as X does" into option text. (d)
 spawn above a write must carry the write's failure modes into the preflight; addendum A1's "Nothing else moves" missed
 it (REVIEW-b1r-r2 blocker 1). Evidence: `.handoff/evidence/u1/REVIEW-b1-r1.md`, `REVIEW-b1r-r2.md`,
 `REVIEW-b1r2-r1.md` (local, untracked).
+
+**#88 G0: rulings and process.** (a) Q-B58-ALIAS: after round 2's REJECT the maintainer ruled that every name ls-files
+does not match gets the inode sweep (not only non-ASCII names), because an ASCII-typed `--before` can open a tracked
+non-ASCII file on APFS (U+212A, sharp s, U+FB01 aliases; rc 1 on old and new) and the audit rubric makes a wrong
+verdict a fix however rare. Cost: +1 git spawn on every untracked `--before` (3 / 2 / 1). Real reach: the sweep lists
+`--before`'s directory and below, so a tracked hard link elsewhere in the repository stays undetected; -h says that,
+not "everywhere". (b) The b57 cross-check found that the first-pass fixes of seven audit findings (five fix forms)
+would have regressed; the shared lib took the cross-checked forms. (c) R2 (full stdout pipe drops V8 records) reaches
+deopt-diff too, not only bytecode-budget; it is ruled to G1, G2 and G5, not G0. (d) ic-diff's INT / TERM trap (`die
+"interrupted"`, src/ic-diff.sh:815 and :833) can now give `VERDICT X` and then `VERDICT NO-VERDICT` in the report,
+exit 2: accepted, the last line matches the exit status. Evidence: `.handoff/RULINGS-b58-g0.md`,
+`.handoff/RULINGS-b57-audit.md`, `.handoff/PLAN-b58-g0.md`, `.handoff/evidence/REVIEW-b58-g0-r1.md` (local,
+untracked).
 
 ---
 
@@ -468,7 +506,8 @@ live toplevel; an unresolvable chain dies exit 2), B2c (widened: `--after`'s nam
 B3 (an unwritable OUT is refused before any spawn or write; no truncated report), N1 (the fallback `is_tracked`
 is physical; ibd includes lib/tracked.sh). DOCUMENTED (Class 3): B2a = `refuse_live` checks `--before` and the END
 of its symlink chain, not the intermediate hops; B2c residual = a hard link under another name or in a
-subdirectory stays undetected. The ibd items ruled to U2 (Q-SHL3-R3) are CLOSED by U2 (#79): devino `--` (a clean
+subdirectory stays undetected. [Superseded in part by #88 a (G0, Q-B58-ALIAS): a tracked hard link or symlink to `--before`
+in its directory or below is now refused as git-tracked.] The ibd items ruled to U2 (Q-SHL3-R3) are CLOSED by U2 (#79): devino `--` (a clean
 `-`-led `--before` on ibd died in devino's stat as "unexpected error (exit 1)": fail closed, wrong text),
 resolve_links' `readlink || die` (class 3, reachable only by a race), `refuse_live` `dirname "$f"` / `"$p"`
 `--`, ibd `cp "$f"` `--`, F16 entry `./` prefix; U2 also retargeted M-dash-revert and retired M-trap-off
@@ -604,3 +643,11 @@ A8 (audit-side oracle file reproduction.mjs:77, 83; not a gate; cosmetic): recor
 (REVIEW-gac-r1): APPROVED, 3 NITs, 2 applied; open for FILLERS: two grammar mutants (`[^()]*` -> `.*`, group `?` -> `*`)
 survive the A1 rows and cannot change a kind, count or verdict. Evidence: `.handoff/evidence/REVIEW-gac-r1.md`,
 `.handoff/evidence/b56-alloc-audit-closure.md` (local, untracked).
+
+
+**#89 G0 open limits.** (a) when ls-files exits 0 with hit 0 (git matched the name ignoring case, but it is neither
+the exact name nor the same inode), is_tracked returns 1 (untracked) with no sweep, so on a case-sensitive file system
+a hard link under a case-only sibling name of a tracked file stays undetected; documented in the bytecode-budget and
+deopt-diff -h; by reading, no regression against 57b93d1. (b) `readonly FINAL=1` through BASH_ENV makes
+bytecode-budget exit 1 with no VERDICT; pre-existing, measured identical on 57b93d1. Evidence:
+`.handoff/evidence/REVIEW-b59-g0-r3b.md` (local, untracked).

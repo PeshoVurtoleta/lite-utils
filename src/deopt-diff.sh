@@ -159,13 +159,22 @@
 #   `[completed compiling `) at line start is read as V8 trace output.
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
 #   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
-#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
-#   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
-#   checked, not the intermediate hops); and a .git that git does not recognise as a
+#   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a tracked hard link in --before's directory or
+#   below is refused, and the refusal says "git-tracked" although that name itself is not tracked; a hard link
+#   elsewhere in the repository, under a name the other rules miss, stays undetected; a name git matched ignoring
+#   case (a case-sensitive file system, a tracked sibling that differs only in case) is not swept, so a hard link
+#   under such a name stays undetected too); a tracked link inside --before's symlink chain that lies outside the
+#   directories of --before and of the chain's end and below them (inside those trees a tracked hard link or
+#   symlink to the file is refused as "git-tracked" by the inode sweep);
+#   and a .git that git does not recognise as a
 #   repository (unreadable, a corrupt HEAD, no objects/: git answers "not a git repository") reads as no repository,
 #   so a tracked --before inside it is not refused. Known gap, as in bytecode-budget: refs/replace
 #   swaps the staged blob (a `git replace` of a ref's blob stages the replacement, and the head's sha256/8 is the
-#   replacement's).
+#   replacement's). The import check strips // and /* */ comments and needs import, from or require before the quoted
+#   './NAME' on one line: a plain string holding that text passes it (Known limit, like the absolute path above);
+#   only the first quoted './NAME' of each quote style on a line is tested, so
+#   `const x = './mod.js'; import './mod.js';` is refused; an import split over two lines, or after a comment
+#   marker inside a string, is refused.
 # Refused (ref / file mode, lib/stage.sh; exit 2 before any spawn or write, as in bytecode-budget): a --module that
 #   is not a regular file in git at a ref (a TRACKED SYMLINK is mode 120000: "is not a regular file in git (mode
 #   120000)"); a module and --driver whose file names are equal up to ASCII case (one file on a case-insensitive
