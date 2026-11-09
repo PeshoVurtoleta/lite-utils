@@ -64,6 +64,10 @@
 #   (p4-probe, 5 of 5 runs): a console.log driver (pipe stdout touched) with a slow reader lost 268 of 666
 #   in-window trace lines, and no glued or partial line marked the loss. Write `end` before exit, never in an
 #   'exit' listener (-> NO-VERDICT). fd 3 is the guard's; writing to it or closing it reads no guard count.
+#   An allocation TurboFan scalar-replaces is not an allocation: a loop that builds `{a: i, b: i + 1}` in the window
+#   and reads one field can read young 0, ZERO, once it is optimized (escape analysis removed the object). ZERO is the
+#   correct measurement there: the optimized code does not allocate. To measure the allocation, fix the driver and keep
+#   the objects reachable: `keep[i & 1023] = hot(i)`.
 # Guard: gcn.cjs (the tool's own preload, an absolute path) counts the run's GCs with v8.GCProfiler. Its 'exit'
 #   listener, registered before any driver listener, allocates past two semi-spaces (>= 1 young GC after your
 #   `end`: the exit fence), writes `@@LITE-MARK gcn` to fd 1, then the count to fd 3. The count must equal g
@@ -157,7 +161,7 @@ BEGIN { st = 0; ss = 0; se = 0; g = 0; p = 0 }
 st == 3 { if ($0 == "@@LITE-MARK gcn") x("@@LITE-MARK gcn given twice"); next }
 $0 == "@@LITE-MARK gcn" { if (st != 2) x("@@LITE-MARK gcn before @@LITE-MARK end"); st = 3; next }
 /^\[[0-9]+:0x/ {
-  if ($0 !~ /^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: [A-Z][A-Za-z() -]* [0-9.]+ \([0-9.]+\) -> [0-9.]+ \([0-9.]+\) MB, pooled: [0-9.]+ MB, [0-9.]+ \/ [0-9.]+ ms (\(\+ [^()]*\) )?\(average mu = [0-9.]+, current mu = [0-9.]+\) [A-Za-z][A-Za-z ]*; (GC in old space requested)?$/) {
+  if ($0 !~ /^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: [A-Z][A-Za-z() -]* [0-9.]+ \([0-9.]+\) -> [0-9.]+ \([0-9.]+\) MB, pooled: [0-9.]+ MB, [0-9.]+ \/ [0-9.]+ ms +(\(\+ [^()]*\) +)?\(average mu = [0-9.]+, current mu = [0-9.]+\) [A-Za-z][A-Za-z ]*; (GC in old space requested)?$/) {
     x("GC line does not match the --trace-gc grammar"); next
   }
   k = $0; sub(/^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: /, "", k); sub(/ [0-9].*$/, "", k); sub(/ \(during sweeping\)$/, "", k)

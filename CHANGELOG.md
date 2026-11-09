@@ -46,6 +46,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (called by bb, dd and ibd; alloc and ic carry the text only), and an unreadable symlink in a chain dies "cannot
   read the symlink" (class 3, race only). lib/modes.sh is ibd only: `cp` and `dirname` take `--` on its `--before` /
   `--after` staging lines. Known limits: LEDGER #79. Tests: test/ibd-u2.test.mjs added; the A4 parity row is re-pinned.
+- `inlining-budget-diff.sh` U3 (audit N1; Q-IBD-ENV). F10b landed in FILLERS. lib/v8probe.sh BYTECODE_AWK prints `?` for a function whose
+  bytecode header is glued to preceding text, or whose `Bytecode length:` line has no header since the previous length
+  line (an orphan), instead of a partial or misattributed number, or nothing; the number is REPORTED only, `?` takes the say-only
+  branch, no VERDICT moves. bytecode-budget.sh shares the lib and is rebuilt. ibd now unsets NODE_OPTIONS,
+  NODE_V8_COVERAGE, NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS at the top of the script (Q-ENV, as the other four
+  tools), so no node spawn sees one. `-h` gains a Known limits paragraph (what a refusal leaves in OUT and whether a
+  rerun is accepted; a glued V8 compile line is a real case, refused outside --concurrent; the U2 refusals). The A4 parity row is re-pinned to the U3
+  ibd root. Known limits: LEDGER #80, #81. Follow-up (LiteSignal): its vendored bench copy
+  (LiteSignal/bench/inlining-budget-diff.sh) needs the new root, and test/94-inlining-budget-diff.test.mjs:14 holds
+  CHECKS = 43 (U1 moved the self-test to 54); LEDGER #82.
+- `allocation-diff.sh` G-ALLOC-CLOSE (audit A1, A4; Q-A1). The GC line grammar accepts one or more spaces before
+  `(average mu` and before the `(+ ...)` group, which makes the node 22 `--trace-gc` line (v22.23.4, audit A1)
+  parse; it was NO-VERDICT on every node 22 run. Single-space lines parse as before. `-h` Driver contract gains the
+  scalar-replacement paragraph (A4): an allocation TurboFan removes reads young 0, ZERO, which is correct for
+  optimized code; keep the objects reachable to measure it. Real node 22 proof comes from CI (none on the host).
+  LEDGER #85.
+- `ic-diff.sh` (audit I1; Q-I1). `-h` says that on node 22 this tool ends NO-VERDICT (the code-kind numbering table
+  is V8 14.x only). Documented, no code change; LEDGER #83.
 - Package scaffold: private, `node:test` only, no dependencies.
 - `build.sh` + `lib/` + `src/`: shipped scripts are generated from `src/` + `lib/` fragments;
   `test/build.test.mjs` fails on drift (fresh build vs committed root script), on a stray root

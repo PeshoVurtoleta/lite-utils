@@ -46,7 +46,7 @@
 #   * Driver output glued to a V8 compile line (no newline before it) is NO-VERDICT, exit 2; not checked under --concurrent.
 #
 # Budget report (REPORTED from run 1, NEVER part of the verdict):
-#   * bytecode length of each <fn> (from --print-bytecode) and every limit it crosses;
+#   * bytecode length of each <fn> (from --print-bytecode; a torn stream prints ?) and every limit it crosses;
 #   * per compile unit that involves <fn>: inlines, bytes charged and the cumulative budget.
 #     TurboFan charges only non-small inlines and skips a candidate SILENTLY when
 #     used + int(1.2 * (size + existing inlined size)) > 920 (V8 truncates the reserve; probed on
@@ -83,7 +83,18 @@
 # Newer V8 (> 14.6): the SKIP / INLINE / budget-counter / colour / emoji formats are verified only
 # against canned sample text in --self-test, not against a real newer node binary.
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
+# Known limits: a refusal after the --out dir is created (a wrong mode combination or driver count, a DRIVER_BEFORE /
+# DRIVER_AFTER path or --before / --after not found, an unknown --before-ref) leaves empty raw/ dec/ bud/ ms/ stage/ and
+# a 0-byte report.txt there, and a rerun on that OUT is accepted; a refusal after files were staged (ref / file mode: an
+# unknown --after-ref, a bad --driver) and a run that fails later (raw/ and report.txt partly written) leave a non-empty
+# subdir, so a rerun on that OUT is refused. A refusal before the first write (an unknown option, a bad --runs or --fn,
+# --v8-flags, the --out checks) leaves OUT as it was. Driver output glued to a V8 compile line is a real case: it was
+# observed on node v26.8.2 in front of a Maglev OSR compile; a glued TurboFan header is UNVERIFIED (never observed on a
+# real node). Also refused, exit 2: a report.txt under --out that is a symlink, not a regular writable file or hard-linked
+# elsewhere; an fn or tier given twice; --before and --after the same file; an empty value on a value option; --runs of
+# more than 2 digits (even 003); a failed <node> -p probe.
 
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 # @include lib/prologue.sh
 
@@ -703,7 +714,7 @@ judge() {
   VERDICT=$(worst "$VERDICT" "$v")
 }
 
-say "inlining-budget-diff  node $NODE_V  $NODE_BIN  (same binary both sides, NODE_OPTIONS stripped)"
+say "inlining-budget-diff  node $NODE_V  $NODE_BIN  (same binary both sides, NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
 say "before  $DESC_B"
 say "after   $DESC_A"
 if [[ $STAGED == 1 ]] && cmp -s "$DRV_B" "$DRV_A" && cmp -s "$(dirname "$DRV_B")/Signal.js" "$(dirname "$DRV_A")/Signal.js"; then

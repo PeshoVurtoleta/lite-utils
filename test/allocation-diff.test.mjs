@@ -3,7 +3,7 @@
 // ORACLE: .handoff/PLAN-phase4-g1.md TASK 6 + the addenda that add mutants (M11-M13 A6, M14-M17, M18-M20, "M10 in B3 = a
 // 4-stage tr no-op"), the B2 mutant table (.handoff/evidence/p4g1/b2/mutants.py: anchors, descriptions and designed rows
 // copied verbatim, rows mapped from its label prefixes) and the B2 reviews (evidence/p4g1/b2-review/REVIEW.txt: the
-// ungated -h claims, Y6, Y7), never what the script printed. TIER: DETERMINISTIC (no V8 spawn: the self-test feeds canned
+// ungated -h claims, Y6, Y7), never what the script printed. TIER: DETERMINISTIC (no V8 spawn but the A1 live row, which reads only the grammar text: the self-test feeds canned
 // text and its own fake node; the refusal rows below run this file's OWN logging fake node and mktemp shim).
 // Mutants: each is ONE exact-once edit (an anchor that matches 0 or > 1 times fails the row) on a temp copy of the built
 // root script; it must exit 1 with the FAILED summary and FAIL every designed row (found by label prefix, so a mutant
@@ -1066,9 +1066,176 @@ test('allocation-diff B2h mutant: the root script minus the MD-33 guard line (li
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// --- Q-A1 (b56, audit 2026-11-04 A1): GC_AWK reads one OR MORE spaces before `(average` / `(+ ...)`, node v22's spacing.
+// This file's OWN fake node (--version v22.23.4; a run cats ./trace.txt, writes the guard count to fd 3, exit 0). Fixture
+// lines: the audit's real v22.23.4 Scavenge line (FINDINGS A1), and its real Mark-Compact line with a `(+ ...)` group
+// (a Mark-Compact in the window is NO-VERDICT, so the group line sits before `start`; one row keeps it in the window).
+const A1_S22 = '[3188:0x2d309000]       99 ms: Scavenge 4.8 (5.4) -> 4.0 (6.4) MB, pooled: 0 MB, 1.95 / 0.00 ms  (average mu = 1.000, current mu = 1.000) allocation failure; ';
+const A1_M22 = '[3546:0x9a67000]       99 ms: Mark-Compact 28.2 (30.2) -> 21.5 (27.3) MB, pooled: 0 MB, 13.62 / 0.00 ms  (+ 1.6 ms in 0 steps since start of marking, biggest step 0.0 ms, walltime since start of marking 25 ms) (average mu = 0.850, current mu = 0.850) finalize incremental marking via stack guard; GC in old space requested';
+const A1_GRAM = 'GC line does not match the --trace-gc grammar';
+const A1_NV = (side) => `  NO-VERDICT -- ${side}: unparseable --trace-gc output in run 1: ${A1_GRAM}`;
+const [A1_ST, A1_END, A1_GCN] = ['start', 'end', 'gcn'].map((m) => `@@LITE-MARK ${m}`);
+// the run-of-spaces text after `ms` / after the group, replaced by the shape under test
+const a1Ms = (l, to) => { assert.equal(count(l, ' ms  ('), 1); return l.replace(' ms  (', () => to); };
+const a1Group = (l, to) => { assert.equal(count(l, ') (average'), 1); return l.replace(') (average', () => to); };
+const a1Cut = (l, gone) => { assert.equal(count(l, gone), 1); return l.replace(gone, ''); };
+function a1Rig() {
+    const d = mkdtempSync(join(tmpdir(), 'ad-a1-'));
+    const bash = process.env.BASH && process.env.BASH.startsWith('/') ? process.env.BASH : '/bin/bash';
+    const node = join(d, 'node');
+    writeFileSync(node, [`#!${bash}`, 'case "$1" in --version) echo v22.23.4; exit 0 ;;',
+        "  --v8-options) printf '%s\\n' '  --expose-gc (expose gc extension)' '        type: bool  default: --no-expose-gc'; exit 0 ;; esac",
+        'cat ./trace.txt', 'cat ./count >&3', 'exit 0', ''].join('\n'));
+    chmodSync(node, 0o755);
+    mkdirSync(join(d, 'tmp'));
+    let k = 0;
+    const drv = (lines) => {
+        const dir = join(d, `d${k++}`);
+        mkdirSync(dir);
+        const gcn = lines.indexOf(A1_GCN);
+        assert.ok(gcn >= 0);
+        writeFileSync(join(dir, 'driver.js'), '');
+        writeFileSync(join(dir, 'trace.txt'), lines.join('\n') + '\n');
+        writeFileSync(join(dir, 'count'), `${lines.slice(0, gcn).filter((l) => /^\[\d+:0x/.test(l)).length}\n`);
+        return join(dir, 'driver.js');
+    };
+    const run = (script, args) => {
+        const r = capSync('bash', [script, '--node', node, ...args], { encoding: 'utf8', cwd: d, env: { ...ENV, TMPDIR: join(d, 'tmp') } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return { status: r.status, stdout: r.stdout, stderr: r.stderr, out: r.stdout + r.stderr, L: r.stdout.split('\n') };
+    };
+    return { drv, run, done: () => rmSync(d, { recursive: true, force: true }) };
+}
+function withA1(fn) { const g = a1Rig(); try { fn(g); } finally { g.done(); } }
+// a window of `lines`, one fence GC line after `end`, the guard's gcn
+const a1Trace = (lines, before = []) => [...before, A1_ST, ...lines, A1_END, A1_S22, A1_GCN];
+function a1Verdict(r, rc, verdict, line) {
+    assert.equal(r.status, rc, r.out);
+    assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), `VERDICT ${verdict}`, r.out);
+    assert.equal(r.L.filter((l) => l === line).length, 1, `want one "${line}"\n${r.out}`);
+    assert.equal(count(r.out, A1_GRAM), 0, r.out);
+}
+const A1_N3 = '  NONZERO -- 3 young GC(s) in the window (every run equal to run 1)';
+const a1Y3 = (l) => a1Trace([l, l, l]);
+function a1Accepts(script) {
+    withA1((g) => {
+        // no group: two spaces (the audit's verbatim line), five spaces -> NONZERO 3, every line read
+        for (const l of [A1_S22, a1Ms(A1_S22, ' ms     (')]) {
+            a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Y3(l))]), 1, 'NONZERO', A1_N3);
+        }
+        // the group, before `start`: two spaces after ms and one after the group (the audit's verbatim line); two after the group
+        for (const l of [A1_M22, a1Group(A1_M22, ')  (average'), a1Group(a1Ms(A1_M22, ' ms     ('), ')     (average')]) {
+            a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Trace([A1_S22, A1_S22, A1_S22], [l]))]), 1, 'NONZERO', A1_N3);
+        }
+        // the normal ends of both modes, on node-22-format lines only: ZERO, SAME, DIFF
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Trace([]))]), 0, 'ZERO', '  ZERO -- no young GC in the window (every run equal to run 1)');
+        a1Verdict(g.run(script, ['--runs', '3', g.drv(a1Y3(A1_S22)), g.drv(a1Y3(A1_S22))]), 0, 'SAME', '  SAME -- identical young-GC multiset in the window (before 3 | after 3)');
+        a1Verdict(g.run(script, ['--runs', '3', g.drv(a1Y3(A1_S22)), g.drv(a1Trace([A1_S22]))]), 1, 'DIFF', '  DIFF -- young-GC multiset in the window differs (before 3 | after 1)');
+        // the group line IN the window parses: the old-space refusal names it, never the grammar
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Trace([A1_M22]))]), 2, 'NO-VERDICT', '  NO-VERDICT -- driver: old-generation GC in the window in run 1 (Mark-Compact)');
+    });
+}
+const A1_WIDE = ' ms +(\\(\\+ [^()]*\\) +)?\\(average mu';
+const A1_TEETH = [
+    ['A1-reverted', [[A1_WIDE, ' ms (\\(\\+ [^()]*\\) )?\\(average mu']]],
+    ['A1-ms-one-space', [[A1_WIDE, ' ms (\\(\\+ [^()]*\\) +)?\\(average mu']]],
+    ['A1-group-one-space', [[A1_WIDE, ' ms +(\\(\\+ [^()]*\\) )?\\(average mu']]],
+];
+test('allocation-diff Q-A1: node v22.23.4 GC lines (`ms  (average`, `ms  (+ ...) (average`, wider runs) -> NONZERO 3 / ZERO / SAME / DIFF, no grammar text', { skip }, () => {
+    a1Accepts(SCRIPT);
+});
+test(`allocation-diff Q-A1: revert checks (${A1_TEETH.map((x) => x[0]).join(', ')}) fail the row`, { skip }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-a1t-'));
+    try {
+        for (const [n, edits] of A1_TEETH) {
+            const p = variant(dir, n, edits);   // outside throws: a bad anchor is a row error, never a kill
+            assert.throws(() => a1Accepts(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+        }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// the widening did not open the grammar: each shape in the window -> exit 2, the grammar die, exact
+const A1_BAD = [
+    ['no (average, no group', a1Cut(A1_S22, '(average mu = 1.000, current mu = 1.000) ')],
+    ['no (average, after the group', a1Cut(A1_M22, '(average mu = 0.850, current mu = 0.850) ')],
+    ['a tab for the run after ms', a1Ms(A1_S22, ' ms\t(')],
+    ['a tab inside the run after ms', a1Ms(A1_S22, ' ms \t (')],
+    ['no space after ms', a1Ms(A1_S22, ' ms(')],
+    ['garbage after ms', a1Ms(A1_S22, ' ms  x (')],
+    ['a tab for the run after the group', a1Group(A1_M22, ')\t(average')],
+    ['no space after the group', a1Group(A1_M22, ')(average')],
+    ['garbage after the group', a1Group(A1_M22, ') x (average')],
+];
+function a1Refuses(script) {
+    withA1((g) => {
+        for (const [what, l] of A1_BAD) {
+            const r = g.run(script, ['--runs', '2', '--zero', g.drv(a1Trace([l]))]);
+            assert.equal(r.status, 2, `${what}\n${r.out}`);
+            assert.equal(r.L.filter((x) => x.startsWith('VERDICT ')).join('|'), 'VERDICT NO-VERDICT', `${what}\n${r.out}`);
+            assert.equal(r.L.filter((x) => x === A1_NV('driver')).length, 1, `${what}\n${r.out}`);
+        }
+    });
+}
+const A1_OPEN_TEETH = [
+    ['A1-ms-tab-class', [[A1_WIDE, ' ms[ \t]+(\\(\\+ [^()]*\\) +)?\\(average mu']]],
+    ['A1-ms-any-text', [[A1_WIDE, ' ms.*(\\(\\+ [^()]*\\) +)?\\(average mu']]],
+    ['A1-group-tab-class', [[A1_WIDE, ' ms +(\\(\\+ [^()]*\\)[ \t]*)?\\(average mu']]],
+];
+test(`allocation-diff Q-A1 control: ${A1_BAD.length} malformed node-22-format lines (no (average, a tab, no space, garbage) -> exit 2, the grammar reason`, { skip }, () => {
+    a1Refuses(SCRIPT);
+});
+test(`allocation-diff Q-A1 control: revert checks (${A1_OPEN_TEETH.map((x) => x[0]).join(', ')}) fail the row`, { skip }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-a1o-'));
+    try {
+        for (const [n, edits] of A1_OPEN_TEETH) {
+            const p = variant(dir, n, edits);
+            assert.throws(() => a1Refuses(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+        }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// A real node (the runner's own binary, whichever CI leg): the shipped grammar reads this node's --trace-gc lines. No
+// timing or GC-count assertion: ZERO, NONZERO and a NO-VERDICT that is not the grammar's all pass; the driver must have
+// run (the counts line). A red here on a node version is a real grammar gap of that version, not a flake.
+const A1_LIVE_DRIVER = ["const fs = require('fs');", 'const keep = new Array(1024);', 'function hot(i) { return { a: i, b: i + 1 }; }',
+    'for (let i = 0; i < 20000; i++) keep[i & 1023] = hot(i);', "fs.writeSync(1, '@@LITE-MARK start\\n');",
+    'for (let i = 0; i < 300000; i++) keep[i & 1023] = hot(i);', "fs.writeSync(1, '@@LITE-MARK end\\n');", ''].join('\n');
+function a1Live(script) {
+    const d = mkdtempSync(join(tmpdir(), 'ad-a1l-'));
+    try {
+        writeFileSync(join(d, 'driver.js'), A1_LIVE_DRIVER);
+        const r = capSync('bash', [script, '--node', process.execPath, '--runs', '2', '--zero', join(d, 'driver.js')], { encoding: 'utf8', cwd: d, env: { ...ENV, TMPDIR: d } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return { status: r.status, out: r.stdout + r.stderr };
+    } finally { rmSync(d, { recursive: true, force: true }); }
+}
+const A1_LIVE_TEETH = ['A1-live-control', [[A1_WIDE, A1_WIDE.replace(' ms +(', ' ms #(')]]];
+test(`allocation-diff Q-A1 live (${process.version}): a real node's --trace-gc lines never read as "does not match the --trace-gc grammar"`, { skip }, () => {
+    const r = a1Live(SCRIPT);
+    assert.ok([0, 1, 2].includes(r.status), r.out);
+    assert.match(r.out, /^ {2}driver: run 1 young \d+/m, r.out);
+    assert.equal(count(r.out, 'does not match the --trace-gc grammar'), 0, r.out);
+});
+test('allocation-diff Q-A1 live: must-fail control (a root whose grammar refuses every line) shows the grammar text on this node', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-a1c-'));
+    try {
+        const r = a1Live(variant(dir, A1_LIVE_TEETH[0], A1_LIVE_TEETH[1]));
+        assert.equal(r.status, 2, r.out);
+        assert.ok(count(r.out, 'does not match the --trace-gc grammar') >= 1, r.out);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('allocation-diff -h: the A4 Driver-contract paragraph (scalar replacement is not an allocation), each phrase once', { skip }, () => {
+    withRig((g) => {
+        const h = g.run(SCRIPT, ['-h']);
+        assert.equal(h.status, 2, h.out);
+        for (const s of ['An allocation TurboFan scalar-replaces is not an allocation', '`keep[i & 1023] = hot(i)`', 'correct measurement there: the optimized code does not allocate']) {
+            assert.equal(count(h.stdout, s), 1, `-h must hold "${s}" exactly once\n${h.stdout}`);
+        }
+        const L = h.stdout.split('\n');
+        assert.ok(L.indexOf('  the objects reachable: `keep[i & 1023] = hot(i)`.') > L.findIndex((l) => l.startsWith('Driver contract: ')), 'the paragraph sits after the Driver contract line');
+        assert.ok(L.indexOf('  the objects reachable: `keep[i & 1023] = hot(i)`.') < L.findIndex((l) => l.startsWith('Guard: gcn.cjs')), 'the paragraph sits inside the Driver contract section');
+    });
+});
+
 // --- anchors: every edit this file makes (mutants, wiring, Y7, -h and refusal teeth) matches EXACTLY once in the script
 test('allocation-diff anchors: every mutant / wiring / Y7 / teeth anchor matches exactly once in allocation-diff.sh', () => {
-    const all = [...MUTANTS.map((m) => [m[0], m[3]]), ...EW, Y7, ...HELP_TEETH, ...RF.flatMap((r) => r[2])];
+    const all = [...MUTANTS.map((m) => [m[0], m[3]]), ...EW, Y7, ...HELP_TEETH, ...RF.flatMap((r) => r[2]), ...A1_TEETH, ...A1_OPEN_TEETH, A1_LIVE_TEETH];
     assert.ok(all.length >= MUTANTS.length + 20);
     for (const [name, edits] of all) {
         for (const [from, to] of edits) {

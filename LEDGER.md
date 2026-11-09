@@ -169,13 +169,13 @@ values was out of scope; the maintainer ruled "Record as known". See #66. Eviden
 **#21 Node binary re-looked-up after each `cd` (FAIL-OPEN; inlining F1).** Before and after could run different
 binaries. Fix: node is resolved once to an absolute path; `--node` naming a builtin, directory or non-executable
 file is refused exit 2 before any spawn (inlining F11 is the same class). Evidence: CHANGELOG "external-audit group
-(bb, dd)" lines 693, 696; audit FINDINGS F1, F11 (local, untracked). ibd: closed by U1 (F1 / F11).
+(bb, dd)" lines 693, 696; audit FINDINGS F1, F11 (local, untracked). ibd: was "open until the D-4a group lands"; closed by U1 (F1 / F11), which ran first (CHANGELOG "U1").
 
 **#22 `--v8-flags` unchecked passthrough (FAIL-OPEN; F2, F15, A3, A5, B19, D4).** Flags that load code (`--require*`,
 `--import*`, `--loader*`, `--snapshot-blob`), read files (`--env-file*`, `--experimental-config-file*`), run code
 (`--eval*`, `--print*`) or write files ran inside the measured process. Fix: prefix-matched refusal before any spawn
 (MD-39, 40, 42, 43, 44, 45), later the runtime allowlist (MD-50, see #6). Evidence: CHANGELOG "B-four" lines 787,
-788; "allocation-diff.sh, external-audit group" line 827; audit FINDINGS (local, untracked). ibd: closed by U1 (F2 / F15).
+788; "allocation-diff.sh, external-audit group" line 827; audit FINDINGS (local, untracked). ibd: was "open until the D-4a group lands"; closed by U1 (F2 / F15) (CHANGELOG "U1").
 
 **#23 Malformed `--v8-flags` entries accepted.** `---x` and `--=1` passed (ic-diff); each flag must now be `--` plus a
 letter. Related: a non-numeric inlining limit in `--v8-flags` died only after spawns (F12). Evidence: CHANGELOG
@@ -454,10 +454,11 @@ swallowing git errors, `2>/dev/null || true`) on bb and dd. Closed by G-DDAWK (b
 ic-diff; "consistent with" the Q-NIGHTLY flake, not proven its cause), A5 (TIER_AWK: a `@@LITE-MARK` line taken
 for a position line). OPEN: A6 = hygiene (LOW), routed to FILLERS by orchestrator/SPOT-CHECK.md:35.
 Leads for the D-4a inlining-budget-diff group:
-(1) ibd A1a stays OPEN (its own logical `is_tracked`); (2) ibd's "--after not found" now reads as the `--before` git
+(1) ibd A1a: its own logical `is_tracked` is closed by G-SHL3 N1 (#71); (2) ibd's "--after not found" now reads as the `--before` git
 failure (closed by U2 L2, #79) when `--after`'s directory is missing (`refuse_live` runs first; fail-closed,
 wording only); (3) ibd runs
-`mkdir -p "$OUT"` (inlining-budget-diff.sh:652) before `refuse_live` (:706), so a refusal leaves OUT behind.
+`mkdir -p "$OUT"` (inlining-budget-diff.sh:652) before `refuse_live` (:706), so a refusal leaves OUT behind
+(documented by U3 B3 in the -h Known limits; the finding is #80).
 Evidence: `.handoff/PLAN-b48-shlib.md`, `.handoff/evidence/b48-shlib/`, `.handoff/PLAN-b50-ddawk.md`,
 `.handoff/evidence/b50-ddawk/` (local, untracked).
 
@@ -484,8 +485,8 @@ Evidence: `.handoff/PLAN-b50-shl3.md` (A2, A3, A5), `.handoff/evidence/b50-shl3/
 CLOSED by G-BBAWK (CHANGELOG "G-BBAWK"): B1a (COUNT_AWK: a header after column 1 and a `Bytecode length:` line
 with no header above it count bad), B1c (`tr '\000' '?'` on both probe branches, tee before tr), B4a (LIMITS_AWK
 `/^  --/` reset; bb + ibd REPORTED limits). DOCUMENTED: B1b = driver output is trusted; a driver that prints V8
-header text can forge a result. OPEN -> ibd triage: Opus N1 (ibd bytecode probe; to be closed by ibd U1 / U3, rulings
-Q-IBD-2). Test-gate lesson: a plan's "anchors stay" claim checked only one substring; the stop gate caught a
+header text can forge a result. Opus N1 (ibd bytecode probe; rulings Q-IBD-2) was routed to ibd triage and
+is CLOSED by ibd U1 (tr) and U3 (awk rule) (#81). Test-gate lesson: a plan's "anchors stay" claim checked only one substring; the stop gate caught a
 sibling anchor (M-prefix-match) displaced by the spec's own text.
 Evidence: `.handoff/PLAN-b50-bbawk.md` (A1, A2), `.handoff/evidence/b52-bbawk/` (local, untracked).
 
@@ -537,12 +538,69 @@ third digit refused), F10a (the `-p` probe runs under `env -u NODE_OPTIONS`), F1
 same file refused), F14 / F17 (a fn or tier given twice refused), L2 (`--after` not found named). #71: devino `--`,
 `readlink || die` and `refuse_live`'s `dirname` / `basename` `--` are in lib/common.sh, built into all 5 roots (called
 by bb, dd, ibd; alloc and ic never call `refuse_live`); `cp` `--` is in lib/modes.sh, ibd only. Not closed here (known deferred
-residuals, they would move a root): the `-h` text omits U2's refusals (report.txt under `--out`, fn / tier
-given twice, `--before` and `--after` the same file, an empty value; PLAN A1 routes refusals to LEDGER F + -h);
-lib/modes.sh:26 `cp "$DRIVER"`, :56 `dirname "$BEFORE_FILE"` and :75-76 `dirname` / `basename` of POS have no `--`
+residuals, they would move a root): the `-h` text omitted U2's refusals; CLOSED by U3 B3's Known limits paragraph,
+which lists a report.txt that is a symlink, not regular writable or hard-linked, an fn or tier given twice, `--before`
+and `--after` the same file, an empty value on a value option, `--runs` of more than 2 digits and a failed `-p` probe.
+What remains unlisted in `-h`: the dash-led `./` rewrite (F7 / F16, behaviour, not a refusal); lib/modes.sh:26 `cp "$DRIVER"`, :56 `dirname "$BEFORE_FILE"` and :75-76 `dirname` / `basename` of POS have no `--`
 (unreachable while F16 rewrites the path first); `TMPDIR=-tmp` (the default OUT is built after the F16 loop: mkdir
-exits 64, "unexpected error", exit 2, 2 spawns). Real GNU / uutils `stat`, `cp`, `dirname`, `basename` and `readlink`
-with `--`, bash 5 and node 22 / 24 UNVERIFIED locally (BSD only; CI will show it).
+exits 64 on BSD (GNU: 1 expected, unverified), "unexpected error", exit 2, 2 spawns). Real GNU / uutils `stat`, `cp`, `dirname`,
+`basename`, `readlink` and `mkdir` with `--`, bash 5 and node 22 / 24 UNVERIFIED locally (BSD only; CI will show it).
 Evidence: `.handoff/PLAN-b52-ibd-u2.md` (A1), `.handoff/evidence/b5x-ibd-triage.md`,
 `.handoff/evidence/u1/REVIEW-u2-b1-r1.md`, `REVIEW-u2-tests-r1.md`, `REVIEW-u2-tests-r2.md` (APPROVED) (local,
 untracked).
+
+**#80 ibd L3 (U3 B3): a refusal after `mkdir -p "$OUT"` leaves OUT behind; whether a rerun is accepted depends on what was written.**
+Raised by PLAN task 6, which asked to check it; the first B3 review (REVIEW-u3-b3-r1) added the rerun-refused half: the ruled wording "empty subdirs" was
+short, a refusal after the mkdir leaves empty raw/ dec/ bud/ ms/ stage/ AND a 0-byte report.txt, and a rerun on that
+OUT is accepted. A refusal after files were staged (ref / file mode: an unknown `--after-ref`, a bad `--driver`) and a
+run that fails later (raw/ and report.txt partly written) leave a non-empty subdir, and a rerun on that OUT is
+refused. Not fixed (class 2: awkward but closed, exit 2); documented in the -h Known limits (src/inlining-budget-diff.sh
+:86-95; the same refusal-after-mkdir shapes as #70 (3) and #76 (1)). The first -h text overreached twice (r1: "a driver
+not found" and "an unknown git ref" listed under rerun-accepted, "the option checks" leaving OUT as it was; r2: "a bad
+option value" likewise, since the mode-combination checks of lib/modes.sh run after the mkdir); round 3 ruled by the maintainer
+(Q-B3-R3, one more literal round) and corrected the text. No row pins rerun accepted / refused (hand-run only, REVIEW
+NIT carried). Real GNU / uutils behaviour UNVERIFIED.
+Evidence: `.handoff/evidence/u1/REVIEW-u3-b3-r1.md`, `REVIEW-u3-b3-r2.md` (local, untracked).
+
+**#81 ibd N1 / N2 (U3): N1 closed for the BYTECODE_AWK read; the N2 real-V8 note.**
+Fable N1 / audit F10b (the `--v8-options` limits read without the env strip) is CLOSED for this read only: lib/v8limits.sh:4
+strips NODE_OPTIONS and NODE_COMPILE_CACHE (landed by FILLERS; U3 adds ibd's top-of-script unset, Q-IBD-ENV, and a
+row that a leaked var reaches no spawn). The Opus N1 (ibd bytecode probe) is CLOSED by ibd U1 (tr) and U3 (awk rule): lib/v8probe.sh BYTECODE_AWK
+printing `?` on a glued header or an orphan length; REPORTED only, no verdict byte moves (REVIEW-u3-b1-r1 Q3). N2
+real-V8 note (in the -h Known limits): driver output glued to a V8 compile line was observed on node v26.8.2 in
+front of a Maglev OSR compile; a glued TurboFan header is UNVERIFIED (never observed on a real node). Real gawk /
+mawk / uutils awk and node 22 / 24 UNVERIFIED.
+Evidence: `.handoff/evidence/u1/REVIEW-u3-b1-r1.md`, `REVIEW-u3-b2-r1.md`, `.handoff/evidence/b5x-ibd-triage.md`
+(local, untracked).
+
+**#82 Follow-up (LiteSignal): the vendored ibd bench copy and its CHECKS literal.**
+/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/bench/inlining-budget-diff.sh needs the new ibd root,
+and /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/test/94-inlining-budget-diff.test.mjs:14 holds
+`const CHECKS = 43;` (this tool's `--self-test` has moved to 54 since U1, CHANGELOG "U1"). Not edited from here
+(another package). Open until the maintainer syncs it.
+
+**#83 Q-I1: ic-diff on node 22 ends NO-VERDICT (known limit, class 2; audit I1).**
+Ruled DOCUMENT (RULINGS-b56-audit-closure Q-I1): the code-kind numbering table (src/ic-diff.sh:187, 189, 208) is
+V8 14.x only, so every node 22 run is NO-VERDICT, never a wrong verdict (usability only; package.json engines.node
+is >= 22). The audit's candidate fix did NOT land: I4 and I5 are candidate-only and not present (landing the candidate
+would revive both: I4 needs its guard, I5 a decision). Text: one -h line (src/ic-diff.sh:133). Repro (audit
+reproduction.mjs on a copy): I1 RED; a canned node 22 log gives exit 2 NO-VERDICT. Node 24's numbering is
+UNMEASURED; no node 22 / 24 on the host. Gate: a mutant widening the allowlist to node 22 numbers survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (canned `Builtin,2` and `JS,9` logs; M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of
+(Maglev read as baseline). Evidence: `.handoff/evidence/b56-ic-audit-closure.md`, audit 2026-11-04-ic-diff FINDINGS
+(local, untracked). Other I-ids: I2 / I3 / I6 FIXED per that closure check, not mapped further here (#69).
+
+**#84 Q-NO-WARNINGS: NODE_NO_WARNINGS stays unstripped in allocation-diff (known limit; audit A6 residual).**
+Ruled DOCUMENT, no code change (this ruling moves no root). Q-ENV lists four names; NODE_NO_WARNINGS is
+not one. Measurement (b56 closure check, REPORTED, one reviewer run): on a warning-heavy driver the GC count moved
+16 -> 11; across 5 smaller sizes it was never ZERO, and one size read NONZERO -> NO-VERDICT (cause not examined).
+No wrong verdict shown. Evidence: `.handoff/evidence/b56-alloc-audit-closure.md` (local, untracked).
+
+**#85 G-ALLOC-CLOSE: allocation-diff audit A1 and A4 CLOSED; A8 recorded.**
+A1 (Q-A1): GC_AWK allows one or more spaces before `(average` / `(+ ...)`, so the node 22 `--trace-gc` line
+(audit R1, v22.23.4) parses; fixture row from that line plus a must-fail mutant; single-space lines unchanged. No node
+22 on the host: real-node proof is the CI legs (a fixture proves the grammar, the live row runs on 22 only in CI).
+A4: the -h Driver contract gains the scalar-replacement paragraph (text only; ZERO is correct for optimized code).
+A8 (audit-side oracle file reproduction.mjs:77, 83; not a gate; cosmetic): record only, no action. Review
+(REVIEW-gac-r1): APPROVED, 3 NITs, 2 applied; open for FILLERS: two grammar mutants (`[^()]*` -> `.*`, group `?` -> `*`)
+survive the A1 rows and cannot change a kind, count or verdict. Evidence: `.handoff/evidence/REVIEW-gac-r1.md`,
+`.handoff/evidence/b56-alloc-audit-closure.md` (local, untracked).

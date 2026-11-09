@@ -626,6 +626,15 @@ test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row'
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// --- Q-I1 (b56): the -h known limit, one line, exact (a ruling: DOCUMENT, no allowlist change) ---
+const KNOWN_LIMIT_22 = 'Known limit: on node 22 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 numbering is adopted; a NO-VERDICT, never a wrong verdict.';
+test('ic-diff -h: the node-22 known limit, one whole line, exactly once', { skip }, () => {
+    const [h] = helpRuns(SCRIPT);
+    assert.equal(h.status, 2, h.stdout + h.stderr);
+    assert.equal(h.stdout.split('\n').filter((l) => l === KNOWN_LIMIT_22).length, 1, h.stdout);
+    assert.equal(h.stdout.split('on node 22').length - 1, 1, h.stdout);
+});
+
 // --- A4 (+ A7 K1 / K2) on this file's OWN fake node and mktemp shim (independent of the self-test's fake). The fake
 // node logs its argv per spawn, exits 7 when NODE_OPTIONS or NODE_COMPILE_CACHE reaches it (every run below sets
 // both), answers --version / --v8-options (a synopsis + one name / type entry verbatim from
@@ -644,6 +653,11 @@ const L01 = 'LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,';
 const L1P = 'LoadIC,0x3bcd762b6932,98560,3,12,1,P,0x29a78805c261,x,,';
 const MONO = [V8V, CC_GET, L01, ''].join('\n');
 const POLY = [V8V, CC_GET, L01, L1P, ''].join('\n');
+// Q-I1 (b56, audit 2026-11-04 I1): node 22's V8 12.4 code-kind numbering (a real line shape, kinds one lower than 14.x). The
+// C7 / C9 allowlist is NOT widened: each such log stays X, the allowlist's own text.
+const V8V12 = 'v8-version,12,4,254,21,-node.33,0';
+const N22_BUILTIN = [V8V12, 'code-creation,Builtin,2,98500,0x3bcd76100000,8,ArrayPush', ''].join('\n');
+const N22_JS9 = [V8V12, 'code-creation,JS,9,98536,0x3bcd762b6930,5,get file:///w/drv.js:2:13,0x29a78805a970,~', ''].join('\n');
 const TB = '\t';
 // a KeyedStoreIC site of get, final 1, with no mod (ks0) or mod .GROW (ksg): the mod field reaches the V record
 const KS0 = 'KeyedStoreIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,0,,';
@@ -680,6 +694,7 @@ function rig() {
         rc3: drv('rc3', 'driver.js', MONO, { rc: '3\n' }), term: drv('term', 'driver.js', MONO, { term: '' }),
         dashb: drv('dashb', '-x.js', MONO), dasha: drv('dasha', '-y.js', MONO),
         ks0: drv('ks0', 'driver.js', [V8V, CC_GET, KS0, ''].join('\n')), ksg: drv('ksg', 'driver.js', [V8V, CC_GET, KSG, ''].join('\n')),
+        n22b: drv('n22b', 'driver.js', N22_BUILTIN), n22j: drv('n22j', 'driver.js', N22_JS9),
     };
     // one run of SCRIPT with NODE_OPTIONS + NODE_COMPILE_CACHE set, PATH = shim first, TMPDIR = d/tmp, cwd = d/cwd;
     // NODE = the --node value (default: the fake's absolute path)
@@ -702,6 +717,20 @@ function rig() {
     return { d, D, fk, run, ents, tmp: join(d, 'tmp'), done: () => rmSync(d, { recursive: true, force: true }) };
 }
 function verdicts(out) { return out.split('\n').filter((l) => l.startsWith('VERDICT ')); }
+// Q-I1: a node-22-numbered log: exit 2, NO-VERDICT on the run's first X, the allowlist named exactly. The widening the audit
+// warned of (read JS,11 as baseline) is the teeth: Builtin,2 or JS,9 admitted -> the row goes red.
+function node22Row(script) {
+    const g = rig();
+    try {
+        for (const [dv, kind] of [[g.D.n22b, 'Builtin,2'], [g.D.n22j, 'JS,9']]) {
+            const r = g.run(script, ['--fn', 'get', dv, dv]);
+            assert.equal(r.status, 2, r.out);
+            assert.deepEqual(verdicts(r.out), ['VERDICT NO-VERDICT'], r.out);
+            const why = `unreadable IC log in run 1: code kind outside the allowlist: ${kind} at log line 2`;
+            assert.deepEqual(r.stdout.split('\n').filter((l) => l.startsWith('  get: ')), [`  get: NO-VERDICT -- before: ${why}`, `  get: NO-VERDICT -- after: ${why}`], r.out);
+        }
+    } finally { g.done(); }
+}
 
 // A4 / K1 spawns + mktemp: R=3 SAME -> 9 spawns (--version, --v8-options = the allowlist read, --v8-options = the
 // hashed probe, 6 trace runs), mktemp -d exactly once
@@ -870,6 +899,10 @@ const A4 = [
         // teeth: v_ms drops the mod (X13); IC_AWK never keeps it (X13b)
         [['X13', [['"\\t" $5 ($6 != "" ? " " $6 : "") }', '"\\t" $5 }']]],
          ['X13b', [['MOD[k] = $10;', 'MOD[k] = "";']]]]],
+    ['Q-I1 node 22 numbering: a Builtin,2 / JS,9 entry -> exit 2 NO-VERDICT, "code kind outside the allowlist: <kind>" (the C7 / C9 tables unwidened)', node22Row,
+        // teeth: node 22's kinds admitted (the C7 / C9 widening the Q-I1 ruling forbids)
+        [['M-c7-node22', [['split("Builtin,3 BytecodeHandler,0 RegExp,4", t, " ")', 'split("Builtin,2 Builtin,3 BytecodeHandler,0 RegExp,4", t, " ")']]],
+         ['M-c9-node22', [['split("Eval,10 JS,10 JS,11 JS,12 JS,13 Script,10", t, " ")', 'split("JS,9 Eval,10 JS,10 JS,11 JS,12 JS,13 Script,10", t, " ")']]]]],
     ['--node <relative> + the allowlist --v8-options read exits 1 -> exit 2, the die names the ABSOLUTE resolved path, 2 spawns, 0 mktemp', relNodeDie,
         // teeth: the allowlist read runs the caller's --node value, not the resolved path (b35 G4 B1 review NIT 2)
         [['M-v8fl-bin', [['\nv8fl_check "$NODE_RES"\n', '\nv8fl_check "$NODE_BIN"\n']]]]],

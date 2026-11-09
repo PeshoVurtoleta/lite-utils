@@ -339,7 +339,15 @@ row('F10a NODE_OPTIONS=--bogus is unseen by the -p probe (the fake exits 9 if it
     assert.equal(o.dies.length, 0, o.out);
     assert.equal(o.rc, 0, o.out);
     assert.match(o.spawns[0], /^-p /, `first spawn: ${o.spawns[0]}`);
-}, { 'drop env -u NODE_OPTIONS on -p': () => variant('f10a', 'NODE_V=$(env -u NODE_OPTIONS', rep('env -u NODE_OPTIONS ', '')) });
+}, { 'drop env -u NODE_OPTIONS on -p': () => {
+    // COMPOUND on purpose: the ruled top-of-file Q-ENV `unset` makes this `env -u` redundant, so a single edit is an equivalent mutant. Do not simplify back.
+    const b = variant('f10a', 'NODE_V=$(env -u NODE_OPTIONS', rep('env -u NODE_OPTIONS ', ''));
+    const QENV = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
+    const t = readFileSync(b.path, 'latin1');
+    assert.equal(t.split(QENV).length - 1, 1, 'variant f10a: the Q-ENV unset line must match exactly once');
+    writeFileSync(b.path, t.replace(QENV, () => ''), 'latin1');
+    return b;
+} });
 row('F10a -p exiting 2 is the named die "cannot run <node> -p": exit 2, exactly 1 die line', (b) => withCase((c) => {
     drivers(c);
     return runIbd(b, c, [...BASE, '--node', fakeNode(c, 'node', 'bin', { pRc: 2 }), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);

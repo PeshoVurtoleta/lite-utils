@@ -130,6 +130,7 @@
 #   vm / data: scripts (their names start with neither `/` nor `file:///`); computed method names (named after the
 #   enclosing literal); a detached child that outlives the driver. A Worker or a forked child that logs is caught
 #   by the isolate-file count (NO-VERDICT).
+# Known limit: on node 22 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 numbering is adopted; a NO-VERDICT, never a wrong verdict.
 # Tier: on a user driver the verdict is STATISTICAL (IC states follow warm-up, GC and tier-up timing; run it under the
 #   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
