@@ -51,15 +51,17 @@ elif [[ -n "$BEFORE_FILE$AFTER_FILE" ]]; then
   [[ ${#POS[@]} -eq 0 ]] || die "file mode takes no driver paths"
   command -v git >/dev/null 2>&1 || die "file mode needs git to check that --before is a frozen copy (or use --before-ref)"
   [[ -f "$BEFORE_FILE" ]] || die "--before not found: $BEFORE_FILE"
+  [[ -f "$AFTER_FILE" ]] || die "--after not found: $AFTER_FILE"
   refuse_live "$BEFORE_FILE" "--before"
   if [[ -f "$(dirname "$BEFORE_FILE")/Watch.js" ]]; then refuse_live "$(dirname "$BEFORE_FILE")/Watch.js" "the Watch.js beside --before"; fi
+  [[ ! "$BEFORE_FILE" -ef "$AFTER_FILE" ]] || die "--before and --after are the same file (hard link / symlink): --before must be a FROZEN copy"
   for side in before after; do
     if [[ $side == before ]]; then f="$BEFORE_FILE"; else f="$AFTER_FILE"; fi
     [[ -f "$f" ]] || die "--$side not found: $f"
     dir="$OUT/stage/$side"; mkdir -p "$dir"
-    cp "$f" "$dir/Signal.js"     # the copy IS the freeze: edits to $f during the run cannot leak in
-    w="$(dirname "$f")/Watch.js"
-    if [[ -f "$w" ]]; then cp "$w" "$dir/Watch.js"
+    cp -- "$f" "$dir/Signal.js"     # the copy IS the freeze: edits to $f during the run cannot leak in
+    w="$(dirname -- "$f")/Watch.js"
+    if [[ -f "$w" ]]; then cp -- "$w" "$dir/Watch.js"
     elif grep -qE "['\"]\./Watch\.js['\"]" "$dir/Signal.js"; then die "no Watch.js beside $f (Signal.js re-exports it)"; fi
     write_driver "$dir"
     d="$f  sha256/8 $(sha8 "$dir/Signal.js")"

@@ -455,21 +455,23 @@ ic-diff; "consistent with" the Q-NIGHTLY flake, not proven its cause), A5 (TIER_
 for a position line). OPEN: A6 = hygiene (LOW), routed to FILLERS by orchestrator/SPOT-CHECK.md:35.
 Leads for the D-4a inlining-budget-diff group:
 (1) ibd A1a stays OPEN (its own logical `is_tracked`); (2) ibd's "--after not found" now reads as the `--before` git
-failure when `--after`'s directory is missing (`refuse_live` runs first; fail-closed, wording only); (3) ibd runs
+failure (closed by U2 L2, #79) when `--after`'s directory is missing (`refuse_live` runs first; fail-closed,
+wording only); (3) ibd runs
 `mkdir -p "$OUT"` (inlining-budget-diff.sh:652) before `refuse_live` (:706), so a refusal leaves OUT behind.
 Evidence: `.handoff/PLAN-b48-shlib.md`, `.handoff/evidence/b48-shlib/`, `.handoff/PLAN-b50-ddawk.md`,
 `.handoff/evidence/b50-ddawk/` (local, untracked).
 
-**#71 G-SHL3 (b50-b52): bb / dd audit B2a / B2b / B2c / B3 / N1 CLOSED or documented; residuals move to ibd U2.**
+**#71 G-SHL3 (b50-b52): bb / dd audit B2a / B2b / B2c / B3 / N1 CLOSED or documented; ibd residuals: #79.**
 CLOSED by G-SHL3 (CHANGELOG "G-SHL3"): B2b (a symlinked `--after`: the repo around the END of its chain is now a
 live toplevel; an unresolvable chain dies exit 2), B2c (widened: `--after`'s name joins the hard-link candidates),
 B3 (an unwritable OUT is refused before any spawn or write; no truncated report), N1 (the fallback `is_tracked`
 is physical; ibd includes lib/tracked.sh). DOCUMENTED (Class 3): B2a = `refuse_live` checks `--before` and the END
 of its symlink chain, not the intermediate hops; B2c residual = a hard link under another name or in a
-subdirectory stays undetected. OPEN until ibd U2 (ruled, Q-SHL3-R3; do not close here): devino `--` (a clean
-`-`-led `--before` on ibd dies in devino's stat as "unexpected error (exit 1)": fail closed, wrong text),
+subdirectory stays undetected. The ibd items ruled to U2 (Q-SHL3-R3) are CLOSED by U2 (#79): devino `--` (a clean
+`-`-led `--before` on ibd died in devino's stat as "unexpected error (exit 1)": fail closed, wrong text),
 resolve_links' `readlink || die` (class 3, reachable only by a race), `refuse_live` `dirname "$f"` / `"$p"`
-`--`, ibd `cp "$f"` `--`, F16 entry `./` prefix; U2 also retargets / retires M-dash-revert + M-trap-off.
+`--`, ibd `cp "$f"` `--`, F16 entry `./` prefix; U2 also retargeted M-dash-revert and retired M-trap-off
+(test/bytecode-budget-stage-boundary.test.mjs, test/deopt-diff-stage-boundary.test.mjs).
 Test-gate lessons: (a) r2: a maintainer-ruled code change (A4's devino `--`) voided 3 existing mutants whose
 oracle was the old stat failure, measured only after the fact because the "105+1 SKIP / 120" gate was run before
 the change. (b) r3: a portable oracle validated against a build carrying a later-reverted change (A4) went red under
@@ -503,7 +505,7 @@ only, no gate), then FILLERS B2 (ADDENDUM A6) for test/deopt-diff-boundary.test.
 test/deopt-diff-stage-boundary.test.mjs (the latter found by the b54 review).
 Evidence: `.handoff/PLAN-b54-audit-fillers.md` (local, untracked).
 
-**#76 ibd U1 (b52-b55): known limits; only the F7 / F5 shapes of (3) are OPEN until U2.**
+**#76 ibd U1 (b52-b55): known limits; the F7 / F5 shapes of (3) were closed by U2 (#79).**
 (1) Q-IBD-3 RESTATED (maintainer, 2026-11-08): "a refusal in ref / file mode can leave staged files in stage/, and a
 rerun needs a fresh --out". Class 2 (awkward but closed): the lib/modes.sh refusal exits 2 after the staging copies, a
 rerun on the same --out is refused ("stage ... is not empty", exit 2). Also in the -h text of `--out`.
@@ -511,11 +513,11 @@ rerun on the same --out is refused ("stage ... is not empty", exit 2). Also in t
 `--v8-options`; neither carries the driver), was 0. The node version read and `v8fl_check` sit after the read-only
 --out preflight and before the first write (Q-IBD-6 CORRECTED).
 (3) Law-3 exceptions still live after U1 (REVIEW-b1r2-r1 NITs), all exit 2, neither spawn carries the driver: `--out -foo`
-and `--out -` (F7; mkdir exit 64; fixed in U2 with its `./` rewrite); report.txt dangling-symlink shapes (F5; U2,
-the `! -L` check stays above the hoist, PLAN A13). ENAMETOOLONG (a 300-char basename) is not predictable by a
-preflight, like ENOSPC, takes 2 spawns, no planned fix. Until U2 the source comment "a bad --out stays 0 spawns" at
-src/inlining-budget-diff.sh (the line above the node version read) overclaims: it holds for the shapes the preflight
-walks, not for these.
+and `--out -` (F7; mkdir exit 64; CLOSED by U2 with its `./` rewrite); report.txt dangling-symlink shapes (F5; CLOSED by
+U2, the `! -L` check stays above the hoist, PLAN A13). ENAMETOOLONG (a 300-char basename) is not predictable by a
+preflight, like ENOSPC, takes 2 spawns, no planned fix. U2 reworded the source comment above the node version read: the
+preflight refuses a bad --out with 0 spawns, and a path only mkdir can see through (ENAMETOOLONG) still
+takes the 2 spawns.
 Evidence: `.handoff/PLAN-b52-ibd-u1.md` (A5, A8), `.handoff/evidence/b5x-ibd-triage.md`,
 `.handoff/evidence/u1/` (local, untracked).
 
@@ -527,3 +529,20 @@ path), an edit would move all 5 roots. A6.3: lib/v8flags.sh unchanged, the top u
 A6.5 / A6.6: NOT REPRODUCED, not "gone" (PLAN-b54 A8): the text argon cited never existed; A6.4: closed by FILLERS B2 (A6). B2a: the
 symlink hop walk is left out (not trivial); see #71. Evidence: `.handoff/PLAN-b54-audit-fillers.md` (CLOSED,
 task 8, A5, A8), `.handoff/evidence/fillers/REVIEW-b1-r1.md` (local, untracked).
+
+**#79 ibd U2 (b56): audit F5 / F7 / F8 / F9 / F10a / F13 / F14 / F16 / F17 / L2 and #71's ibd residuals CLOSED.**
+CLOSED by U2 (CHANGELOG "U2"): F5 (a report.txt symlink or extra hard link in OUT is refused, 0 spawns), F7 / F16 (a
+dash-led path option, positional or driver basename gets `./`), F8 (empty `--opt=` on a value option refused), F9 (`--runs 09` is 9, a
+third digit refused), F10a (the `-p` probe runs under `env -u NODE_OPTIONS`), F13 (`--before` and `--after` the
+same file refused), F14 / F17 (a fn or tier given twice refused), L2 (`--after` not found named). #71: devino `--`,
+`readlink || die` and `refuse_live`'s `dirname` / `basename` `--` are in lib/common.sh, built into all 5 roots (called
+by bb, dd, ibd; alloc and ic never call `refuse_live`); `cp` `--` is in lib/modes.sh, ibd only. Not closed here (known deferred
+residuals, they would move a root): the `-h` text omits U2's refusals (report.txt under `--out`, fn / tier
+given twice, `--before` and `--after` the same file, an empty value; PLAN A1 routes refusals to LEDGER F + -h);
+lib/modes.sh:26 `cp "$DRIVER"`, :56 `dirname "$BEFORE_FILE"` and :75-76 `dirname` / `basename` of POS have no `--`
+(unreachable while F16 rewrites the path first); `TMPDIR=-tmp` (the default OUT is built after the F16 loop: mkdir
+exits 64, "unexpected error", exit 2, 2 spawns). Real GNU / uutils `stat`, `cp`, `dirname`, `basename` and `readlink`
+with `--`, bash 5 and node 22 / 24 UNVERIFIED locally (BSD only; CI will show it).
+Evidence: `.handoff/PLAN-b52-ibd-u2.md` (A1), `.handoff/evidence/b5x-ibd-triage.md`,
+`.handoff/evidence/u1/REVIEW-u2-b1-r1.md`, `REVIEW-u2-tests-r1.md`, `REVIEW-u2-tests-r2.md` (APPROVED) (local,
+untracked).

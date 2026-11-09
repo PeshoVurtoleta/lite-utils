@@ -22,6 +22,8 @@
 //          text put back: two), L1d bb / dd unaffected, K1 the new "cannot resolve its symlink chain" die via a
 //          shimmed readlink, C1 ibd under CDPATH, D1 / D2 `-`-led tracked --before (mutants: the `./` prefix deleted
 //          at each of the three sites, readlink `--` removed). Every twin is an in-file mutant build, none reads .handoff/.
+//          U2: F16 rewrites a `-`-led path before any of this, so L1 is a clean run and the `-`-led twins are built on NOF16
+//          (the F16 lines deleted). K2 a readlink that exits 1; X1 / X1h the `--` sites on NOF16 (clean `-b.js`).
 //   N      nested retention: 2 nested runs of this file leave their private mkdtemp root empty
 // Independent expected value for S1 (6): refuse_live = is_tracked(f) + is_tracked(p) (1 rev-parse each, outside a
 // repo) + live_tops top_of for ".", dirname(--after), dirname(f), dirname(p) (REPO is unset in file mode) = 2 + 4 = 6 git
@@ -402,10 +404,10 @@ test('I8m MUTANT B2c token dropped: the B2c row is not refused (node spawned), t
     assert.equal(refusesSame(IBD, b2cFixture('Store.js')), null);   // a fresh fixture, as I7m (F4)
 });
 
-// I7e (b52 reviewer gap): a DANGLING --after symlink. Expected from the modes.sh contract, not from a run: refuse_live
-// runs first and must not trip over it (the B2b guard is `-L && -e`), so the run ends at the "--after not found" die
-// (exit 2, IBD_PRE node spawns). The mutant without `-e` resolves the dead chain in live_tops and dies elsewhere ("cannot
-// resolve its symlink chain" / a git failure): same exit 2, other text.
+// I7e (b52 reviewer gap): a DANGLING --after symlink. Expected from the modes.sh contract, not from a run: the run ends at
+// the "--after not found" die (exit 2, IBD_PRE node spawns), since U2 (L2) before refuse_live. The B2b guard (`-L && -e`)
+// must still not trip over it, so the mutant deletes L2 too: without `-e` it resolves the dead chain in live_tops and dies
+// elsewhere (a git failure): same exit 2, other text.
 function danglingFixture() {
     const d = mk('b2b-dangling');
     mkdirSync(join(d, 'frz')); mkdirSync(join(d, 'work'));
@@ -427,7 +429,7 @@ test('I7e ibd dangling --after symlink: exit 2 "--after not found", IBD_PRE spaw
 test('I7em MUTANT B2b guard without -e: the dangling --after dies elsewhere, the row is red; the live build is green',
     { skip: skip || (NESTED ? 'nested retention run: mutant skipped (time)' : false) }, () => {
     const out = privBuild('b2b-no-e', [['lib', 'common.sh', 'if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then',
-        'if [[ -L "$AFTER_FILE" ]]; then']]);
+        'if [[ -L "$AFTER_FILE" ]]; then'], ['lib', 'modes.sh', '  [[ -f "$AFTER_FILE" ]] || die "--after not found: $AFTER_FILE"\n', '']]);
     const v = danglingVerdict(join(out, 'inlining-budget-diff.sh'));
     assert.notEqual(v, null, 'mutant survived: -e not needed');
     assert.match(v, /git failed while checking/, 'the mutant must die at the tracked check, not elsewhere');
@@ -565,18 +567,26 @@ const R1_B2B = '  if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]] && top_of "$(dir
 const RL_PFX = 'd=$(dirname -- "$p"); [[ $d != -* ]] || d="./$d"';
 const ITT_PFX = '  command -v git >/dev/null 2>&1 || return 1\n  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"\n';
 const ITC_PFX = '  local d b\n  d=$(dirname -- "$1"); [[ $d != -* ]] || d="./$d"\n';
-const RLK = 'l=$(readlink -- "$p")';
+const RLK = 'l=$(readlink -- "$p") || die "cannot read the symlink $p (in the chain of $1)"';
+const RLK_NODIE = 'l=$(readlink -- "$p")';
+// NOF16 = the F16 lines deleted: F16 rewrites a `-`-led path up front, so the `-`-led twins and the `--` sites below are only
+// reachable from the CLI on this build
+const NOF16 = ['src', 'inlining-budget-diff.sh', '# a value that starts with - must never reach a tool as an option; the ./ form names the same file (--out and the path options, then POS)\n'
+    + 'for x in BEFORE_FILE AFTER_FILE DRIVER REPO OUT; do [[ ${!x} != -* ]] || printf -v "$x" \'./%s\' "${!x}"; done\n'
+    + 'for ((i = 0; i < ${#POS[@]}; i++)); do [[ ${POS[$i]} != -* ]] || POS[$i]="./${POS[$i]}"; done\n', ''];
 const UNSET_CDPATH = 'unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry\n';
 const NOINC = ['src', 'inlining-budget-diff.sh', '# @include lib/tracked.sh\n', ''];
 const BUILT = {};
 function pb(name, edits) { if (!(name in BUILT)) BUILT[name] = privBuild(name, edits); return BUILT[name]; }
-const mR1 = () => pb('r1', [['lib', 'common.sh', B2B_LINE, R1_B2B], ['lib', 'common.sh', RL_PFX, 'd=$(dirname -- "$p")'],
+const mNOF = () => pb('nof16', [NOF16]);
+const mR1 = () => pb('r1', [NOF16, ['lib', 'common.sh', B2B_LINE, R1_B2B], ['lib', 'common.sh', RL_PFX, 'd=$(dirname -- "$p")'],
     ['lib', 'common.sh', RLK, 'l=$(readlink "$p")']]);
-const mRL = () => pb('rl', [['lib', 'common.sh', RL_PFX, 'd=$(dirname -- "$p")']]);
-const mRLK = () => pb('rlk', [['lib', 'common.sh', RLK, 'l=$(readlink "$p")']]);
-const mITT = () => pb('itt', [['lib', 'tracked.sh', ITT_PFX, '  command -v git >/dev/null 2>&1 || return 1\n  d=$(dirname -- "$1")\n']]);
-const mFB = () => pb('fbl', [NOINC]);
-const mFBC = () => pb('fbc', [NOINC, ['lib', 'common.sh', ITC_PFX, '  local d b\n  d=$(dirname -- "$1")\n']]);
+const mRL = () => pb('rl', [NOF16, ['lib', 'common.sh', RL_PFX, 'd=$(dirname -- "$p")']]);
+const mRLK = () => pb('rlk', [NOF16, ['lib', 'common.sh', RLK, 'l=$(readlink "$p")']]);
+const mRLD = () => pb('rld', [['lib', 'common.sh', RLK, RLK_NODIE]]);
+const mITT = () => pb('itt', [NOF16, ['lib', 'tracked.sh', ITT_PFX, '  command -v git >/dev/null 2>&1 || return 1\n  d=$(dirname -- "$1")\n']]);
+const mFB = () => pb('fbl', [NOF16, NOINC]);
+const mFBC = () => pb('fbc', [NOF16, NOINC, ['lib', 'common.sh', ITC_PFX, '  local d b\n  d=$(dirname -- "$1")\n']]);
 const mCD = () => pb('cd', [['src', 'inlining-budget-diff.sh', UNSET_CDPATH, '']]);
 const nverd = (r) => (r.out.match(/^VERDICT /gm) || []).length;
 const ibdArgs = (d, before, after) => ['--node', fakeNode(), '--fn', 'm0', '--out', join(d, 'out'), '--before', before, '--after', after];
@@ -601,18 +611,16 @@ function dashAfter(t, kind) {
 }
 const SYMCHAIN = /--after: cannot resolve its symlink chain/;
 
-test('L1 A2/A3 ibd: a `-/`-led symlinked --after (relative and absolute target) is no longer refused by a stray die: ' +
-    'exit 2 (ibd\'s own cp failure), IBD_PRE node spawns, exactly ONE VERDICT NO-VERDICT, no "symlink chain" text', { skip }, () => {
+test('L1 A2/A3 + U2 F16 ibd: a `-/`-led symlinked --after (relative and absolute target) is read as ./-/F: gets past ' +
+    'refuse_live (node spawned past the IBD_PRE reads), exactly ONE VERDICT, no refusal text', { skip }, () => {
     for (const kind of ['rel', 'abs']) {
         const f = dashAfter('ibd', kind); const r = runScript(IBD, f.d, f.args, { OLDPWD: decoy() });
-        assert.equal(r.rc, 2, `${kind}: ${r.out.slice(-400)}`);
-        assert.equal(r.spawns, IBD_PRE, kind);
+        passesIbd(r);
         assert.equal(nverd(r), 1, `${kind}: ${r.out.slice(-400)}`);
-        assert.match(r.out, /^VERDICT NO-VERDICT$/m);
         assert.doesNotMatch(r.out, /symlink chain|cannot resolve the directory of|git failed while checking/, kind);
     }
 });
-test('L1t twin: the r1 build (B2b line in $( ), no `./` prefix and no readlink `--` in resolve_links) is red on the same ' +
+test('L1t twin: the r1 build on NOF16 (B2b line in $( ), no `./` prefix and no readlink `--` in resolve_links) is red on the same ' +
     'rows: bash 3.2 prints a stray die and then TWO VERDICT lines, bash >= 4.4 (OLDPWD kept) a git "cannot change to" decoy ' +
     'die (or the same two lines)', { skip: mskip }, () => {
     const root = join(mR1(), TOOLS.ibd[0]);
@@ -636,14 +644,14 @@ test('L1d bb / dd: the `-/`-led symlinked --after is NOT refused (lib/stage.sh p
 
 // K: the new die. -e passed means the kernel followed the chain, so it is unreachable on a real fs; a PATH-shimmed
 // readlink that always answers "a" (lnk/a's own name) loops resolve_links past 40 hops.
-function chainFixture(t) {
+function chainFixture(t, shimBody = 'echo a') {
     const nm = TOOLS[t][1], d = mk(`chain-${t}`);
     for (const p of ['frz', 't', 'lnk', 'drv', 'shim']) mkdirSync(join(d, p), { recursive: true });
     writeFileSync(join(d, 'frz', nm), `${E9}\n`); writeFileSync(join(d, 't', nm), `${E9}\n`);
     writeFileSync(join(d, 'drv', 'driver.js'), `import './${nm}';\n`);
     symlinkSync(`../t/${nm}`, join(d, 'lnk', 'a'));
     const real = capSync(BASH, ['-c', 'command -v readlink'], { encoding: 'utf8', env: ENV }, 10000, 'command -v readlink').stdout.trim();
-    writeFileSync(join(d, 'shim', 'readlink'), `#!${BASH}\ncase "\${@: -1}" in */lnk/a|lnk/a) echo a ;; *) exec '${real}' "$@" ;; esac\n`);
+    writeFileSync(join(d, 'shim', 'readlink'), `#!${BASH}\ncase "\${@: -1}" in */lnk/a|lnk/a) ${shimBody} ;; *) exec '${real}' "$@" ;; esac\n`);
     chmodSync(join(d, 'shim', 'readlink'), 0o755);
     return { d, args: toolArgs(t, d, join(d, 'frz', nm), 'lnk/a'), env: { PATH: `${join(d, 'shim')}:${ENV.PATH}` } };
 }
@@ -666,6 +674,25 @@ test('K1t twin: the r1 build (resolve_links in $( )) prints the "symlink chain t
         assert.doesNotMatch(r.out, SYMCHAIN, t);
         assert.ok(r.spawns > (t === 'ibd' ? IBD_PRE : 0) || nverd(r) > 1, `${t}: the run must go on: spawns ${r.spawns}, ${r.out.slice(-400)}`);
     }
+});
+
+// K2 (U2): a readlink that EXITS 1 on a symlinked --after. resolve_links' `|| die` fails the $( ) the B2b guard reads; the
+// twin without it has l="" and runs on with the link's directory.
+test('K2 U2: a symlinked --after whose readlink exits 1 -> exit 2, IBD_PRE node spawns on ibd (0 on bb / dd), ' +
+    '"--after: cannot resolve its symlink chain: lnk/a", exactly one VERDICT, on all three roots', { skip }, () => {
+    for (const t of Object.keys(TOOLS)) {
+        const f = chainFixture(t, 'exit 1'); const r = runScript(join(ROOT, TOOLS[t][0]), f.d, f.args, f.env);
+        assert.equal(r.rc, 2, `${t}: ${r.out.slice(-400)}`);
+        assert.equal(r.spawns, t === 'ibd' ? IBD_PRE : 0, t);
+        assert.match(r.out, /--after: cannot resolve its symlink chain: lnk\/a/, t);
+        assert.equal(nverd(r), 1, `${t}: ${r.out.slice(-400)}`);
+    }
+});
+test('K2t twin: the readlink `|| die` removed: the same row CONTINUES on ibd (no chain die, node spawned past the pre reads; ' +
+    'bb / dd share the lib text, but their fixture stops at the staged module name check)', { skip: mskip }, () => {
+    const f = chainFixture('ibd', 'exit 1'); const r = runScript(join(mRLD(), TOOLS.ibd[0]), f.d, f.args, f.env);
+    assert.doesNotMatch(r.out, SYMCHAIN);
+    assert.ok(r.spawns > IBD_PRE, `the run must go on: spawns ${r.spawns}, ${r.out.slice(-400)}`);
 });
 
 // C: ibd unsets CDPATH (A2 blocker 1): a CDPATH entry must not turn a relative --before's `cd` join into two lines.
@@ -717,12 +744,14 @@ test('D1 A3 ibd before-link: --before -/Signal.js -> ../repo/Signal.js (tracked)
     'IBD_PRE spawns', { skip }, () => {
     assert.equal(trackedDie(IBD, fxBeforeLink), null);
 });
-test('D1t twin: resolve_links without its `./` prefix (the r2-before build) dies "cannot resolve the directory of" on ' +
-    'bash 3.2 and "unexpected error (exit N)" on bash >= 4.4; a readlink without `--` (A2) is also killed by this row', { skip: mskip }, () => {
+test('D1t twin (on NOF16): resolve_links without its `./` prefix (the r2-before build) dies "cannot resolve the directory of" on ' +
+    'bash 3.2 and "git failed while checking whether -/Signal.js is tracked (fatal: cannot change to" on bash >= 4.4; a readlink ' +
+    'without `--` (A2) is also killed by this row; the NOF16 control still dies "git-tracked"', { skip: mskip }, () => {
+    assert.equal(trackedDie(join(mNOF(), TOOLS.ibd[0]), fxBeforeLink), null, 'NOF16 control must still die git-tracked');
     const f = fxBeforeLink(); const r = runScript(join(mRL(), TOOLS.ibd[0]), f.d, f.args, { OLDPWD: decoy() });
-    // Both bash behaviours: bash 3.2 drops an inherited OLDPWD (`cd -` fails: "cannot resolve the directory of"); bash >=
-    // 4.4 keeps it when it names a dir (the join lands in the decoy; devino's stat then reads -/Signal.js as an option: "unexpected error (exit N)").
-    assert.match(r.out, /cannot resolve the directory of -\/Signal\.js|unexpected error \(exit \d+\)/); assert.doesNotMatch(r.out, GITTRACKED);
+    // Both bash behaviours: bash 3.2 drops an inherited OLDPWD (`cd -` fails: "cannot resolve the directory of"); bash >= 4.4
+    // keeps it when it names a dir (`cd -` echoes it, so the join holds two lines and the next `git -C` cannot change to it).
+    assert.match(r.out, /cannot resolve the directory of -\/Signal\.js|git failed while checking whether -\/Signal\.js is tracked \(fatal: cannot change to/); assert.doesNotMatch(r.out, GITTRACKED);
     assert.notEqual(trackedDie(join(mRL(), TOOLS.ibd[0]), fxBeforeLink), null);
     assert.notEqual(trackedDie(join(mRLK(), TOOLS.ibd[0]), fxBeforeLink), null, 'readlink `--` mutant survived');
 });
@@ -733,9 +762,70 @@ test('D2 A3 ibd before-tracked: cwd = repo root tracking -/Signal.js, --before -
 test('D2m MUTANTS the `./` prefix deleted from lib/tracked.sh is_tracked (default build) and from lib/common.sh ' +
     'is_tracked (fallback build, src marker removed): D2 is not refused; the unmutated fallback refuses',
     { skip: mskip }, () => {
+    assert.equal(trackedDie(join(mNOF(), TOOLS.ibd[0]), fxBeforeTracked), null, 'NOF16 control must still die git-tracked');
     assert.equal(trackedDie(join(mFB(), TOOLS.ibd[0]), fxBeforeTracked), null, 'unmutated fallback must refuse');
     assert.notEqual(trackedDie(join(mITT(), TOOLS.ibd[0]), fxBeforeTracked), null, 'tracked.sh mutant survived');
     assert.notEqual(trackedDie(join(mFBC(), TOOLS.ibd[0]), fxBeforeTracked), null, 'common.sh is_tracked mutant survived');
+});
+
+// ---------------------------------------------------------------- X: the U2 `--` sites (ASSERTION 2), reachable on NOF16 only
+function fxCleanDash() {   // cwd d = a repo with nothing tracked; a clean frozen -b.js in it
+    const d = mk('x1');
+    mkdirSync(join(d, 'after'));
+    writeFileSync(join(d, '-b.js'), `${E9}\n`); writeFileSync(join(d, 'after', 'Signal.js'), `${E9}\n`);
+    git(d, ['init', '-q']);
+    return { d, args: ibdArgs(d, '-b.js', join(d, 'after', 'Signal.js')) };
+}
+function fxDashHardlink() {   // cwd frz holds -b.js, a hard link of the tracked repo/-b.js; --after inside repo puts repo in live_tops
+    const d = mk('x1h'), repo = join(d, 'repo'), frz = join(d, 'frz');
+    mkdirSync(join(repo, 'after'), { recursive: true }); mkdirSync(frz);
+    writeFileSync(join(repo, '-b.js'), `${E9}\n`); writeFileSync(join(repo, 'after', 'Signal.js'), `${E9}\n`);
+    git(repo, ['init', '-q']); git(repo, ['add', '--', '-b.js']);
+    linkSync(join(repo, '-b.js'), join(frz, '-b.js'));
+    return { d: frz, live: join(repo, '-b.js'), args: ibdArgs(d, '-b.js', join(repo, 'after', 'Signal.js')) };
+}
+function fxDashDirHardlink() {   // cwd d (no repo); the repo -d tracks Signal.js; --before -d/x.js is its hard link: only dirname(--before) finds -d
+    const d = mk('x1d'), repo = join(d, '-d');
+    mkdirSync(repo); mkdirSync(join(d, 'after'));
+    writeFileSync(join(repo, 'Signal.js'), `${E9}\n`); writeFileSync(join(d, 'after', 'Signal.js'), `${E9}\n`);
+    git(repo, ['init', '-q']); git(repo, ['add', 'Signal.js']);
+    linkSync(join(repo, 'Signal.js'), join(repo, 'x.js'));
+    return { d, live: join(repo, 'Signal.js'), args: ibdArgs(d, '-d/x.js', join(d, 'after', 'Signal.js')) };
+}
+function fxDashWatch() { const d = mk('x1w'), dd = join(d, '-d'); mkdirSync(dd); mkdirSync(join(d, 'after')); writeFileSync(join(dd, 'x.js'), `${E9}\n`); writeFileSync(join(dd, 'Watch.js'), `${E9}\n`); writeFileSync(join(d, 'after', 'Signal.js'), `${E9}\n`); return { d, args: ibdArgs(d, '-d/x.js', join(d, 'after', 'Signal.js')) }; }
+function cleanVerdict(root) {   // null iff the run reaches node past the IBD_PRE reads, one VERDICT, no refusal
+    const f = fxCleanDash(); const r = runScript(root, f.d, f.args);
+    if (REFUSALS.test(r.out) || r.spawns <= IBD_PRE || nverd(r) !== 1) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+    return null;
+}
+const DEVINO_LINE = '  if stat -L -c \'%d:%i\' -- "$1" >/dev/null 2>&1; then stat -L -c \'%d:%i\' -- "$1"; else stat -L -f \'%d:%i\' -- "$1"; fi\n';
+test('X1 U2 NOF16 control, cwd in a repo, clean -b.js: reaches node, one VERDICT, no refusal', { skip: mskip }, () => {
+    assert.equal(cleanVerdict(join(mNOF(), TOOLS.ibd[0])), null);
+});
+for (const [name, edit] of [
+    ['devino', ['lib', 'common.sh', DEVINO_LINE, DEVINO_LINE.replaceAll(' -- "$1"', ' "$1"')]],
+    ['cp', ['lib', 'modes.sh', 'cp -- "$f" "$dir/Signal.js"', 'cp "$f" "$dir/Signal.js"']],
+]) {
+    test(`X1m MUTANT ${name} without \`--\` (on NOF16): the clean -b.js row goes red`, { skip: mskip }, () => {
+        assert.notEqual(cleanVerdict(join(pb(`x1-${name}`, [NOF16, edit]), TOOLS.ibd[0])), null, `${name} mutant survived`);
+    });
+}
+test('X1w U2 NOF16, --before -d/x.js (dash-led dir, no repo): reaches node, one VERDICT; MUTANT cp of Watch.js without `--` goes red', { skip: mskip }, () => {
+    const run = (root) => { const f = fxDashWatch(); const r = runScript(root, f.d, f.args); return (!REFUSALS.test(r.out) && r.spawns > IBD_PRE && nverd(r) === 1) ? null : `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`; };
+    assert.equal(run(join(mNOF(), TOOLS.ibd[0])), null);
+    assert.notEqual(run(join(pb('x1-cpw', [NOF16, ['lib', 'modes.sh', 'cp -- "$w" "$dir/Watch.js"', 'cp "$w" "$dir/Watch.js"']]), TOOLS.ibd[0])), null, 'cp Watch.js mutant survived');
+});
+// dirname without `--` on a clean -b.js only adds stderr noise (top_of "" = git -C "" = cwd, already in live_tops), so its
+// teeth are the -d/ repo reached through dirname(--before) alone.
+test('X1d U2 NOF16, -d/x.js a hard link of the tracked -d/Signal.js: "same file as the live" refusal; MUTANT dirname without `--` loses it', { skip: mskip }, () => {
+    assert.equal(refusesSame(join(mNOF(), TOOLS.ibd[0]), fxDashDirHardlink()), null);
+    const out = pb('x1-dirname', [NOF16, ['lib', 'common.sh', 'live_tops "$f" "$(dirname -- "$f")" "$(dirname -- "$p")"', 'live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"']]);
+    assert.notEqual(refusesSame(join(out, TOOLS.ibd[0]), fxDashDirHardlink()), null, 'dirname mutant survived');
+});
+test('X1h U2 NOF16, -b.js a hard link of the tracked repo/-b.js: "same file as the live" refusal; MUTANT basename without `--` loses it', { skip: mskip }, () => {
+    assert.equal(refusesSame(join(mNOF(), TOOLS.ibd[0]), fxDashHardlink()), null);
+    const out = pb('x1-basename', [NOF16, ['lib', 'common.sh', '"$top/$(basename -- "$f")" "$top/$(basename -- "$p")"', '"$top/$(basename "$f")" "$top/$(basename "$p")"']]);
+    assert.notEqual(refusesSame(join(out, TOOLS.ibd[0]), fxDashHardlink()), null, 'basename mutant survived');
 });
 
 // ---------------------------------------------------------------- N: nested retention

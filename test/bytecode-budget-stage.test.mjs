@@ -677,7 +677,7 @@ shMutant('drop-P-is_tracked-and-resolve_links', [['tracked.sh', SH_ISP, SH_ISP_N
 shMutant('drop-before-ef', [['stage.sh', '[[ "$STAGE_ABS_B" -ef "$BEFORE_FILE" ]] || die', 'true || die']], ['R2']);
 shMutant('drop-after-ef', [['stage.sh', '[[ "$STAGE_ABS_A" -ef "$AFTER_FILE" ]] || die', 'true || die']], ['R3']);
 shMutant('top_of-die-to-return-1', [['common.sh', '  die "${what:-top_of}: git failed', '  return 1 # die "${what:-top_of}: git failed']], ['R5', 'R6'], true);
-shMutant('live_tops-in-subshell', [['common.sh', '  live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"\n', '  ( live_tops "$f" "$(dirname "$f")" "$(dirname "$p")" ) || :\n']], ['R5'], true);
+shMutant('live_tops-in-subshell', [['common.sh', '  live_tops "$f" "$(dirname -- "$f")" "$(dirname -- "$p")"\n', '  ( live_tops "$f" "$(dirname -- "$f")" "$(dirname -- "$p")" ) || :\n']], ['R5'], true);
 
 // =====================================================================================================
 // G-SHL3 (b50, PLAN-b50-shl3 ASSERTIONS 1, 2, 4; written from the ASSERTIONS, not from lib/): file mode, fake node.

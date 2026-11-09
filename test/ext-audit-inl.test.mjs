@@ -19,7 +19,7 @@
 //   * Oracle notes (triage): F4b uses a FRESH --out and matches only "no Watch.js beside" (a reused --out would let F4's
 //     refusal mask it); every row that runs twice on one OUT expects the F4 "not empty" refusal, so a successful run is
 //     never followed by a reuse except where the refusal is the thing under test. F9 `runs 9` and F14 `--fn read.set,
-//     read.set` are U2 findings: written { todo: 'U2' } (the U2 coder removes the todo).
+//     read.set` are U2 findings (todo removed once U2 landed; also covered in test/ibd-u2.test.mjs).
 //   * F2 / F15 (A11): a refused --v8-flags run leaves nothing in OUT (the read-only preflight and the two node reads come
 //     before the first write); the rows assert OUT is absent / empty. A refusal in file / ref mode after staging CAN leave
 //     stage/ (Q-IBD-3): the leftover row asserts a rerun is refused "stage is not empty" with 0 spawns.
@@ -432,13 +432,13 @@ row('N1 a bytecode header "read.set" NUL ... is NOT counted as read.set (tr in p
     isSame(o.nul);   // the run itself completed (an early exit would also lack 777)
 }, { mutants: { 'probe tr->cat': () => MUT_PROBE } });
 
-// ---- U2 findings (todo U2) ----
-test('F9 --runs 09 prints no bash arithmetic error and runs 9 (U2)', { skip, todo: 'U2' }, () => {
+// ---- U2 findings ----
+test('F9 --runs 09 prints no bash arithmetic error and runs 9 (U2)', { skip }, () => {
     const o = withCase((c) => { drivers(c); return runIbd(ROOT_B, c, [...BASE, '--node', nodeA(c), '--runs', '09', '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']); });
     assert.doesNotMatch(o.out, /value too great for base/);
     assert.match(o.out, /\bruns 9\b/);
 });
-test('F14 --fn read.set,read.set is refused ("given twice"): rc 2, 1 die, 0 spawns (U2)', { skip, todo: 'U2' }, () => {
+test('F14 --fn read.set,read.set is refused ("given twice"): rc 2, 1 die, 0 spawns (U2)', { skip }, () => {
     const o = withCase((c) => { drivers(c); return runIbd(ROOT_B, c, ['--tiers', 'turbo', '--no-bytecode', '--fn', 'read.set,read.set', '--only-fn', '--node', nodeA(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']); });
     refused(o, /given twice/);
 });

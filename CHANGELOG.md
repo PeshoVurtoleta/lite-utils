@@ -33,6 +33,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   re-pinned to the U1 root (the bd1f283 history row retired, Q-IBD-4 (a)); test/build.test.mjs V8FL roster now
   includes inlining-budget-diff (MD-54); test/shlib.test.mjs `IBD_PRE = 2` (ibd modes.sh refusals spawn 2).
   Follow-up (LiteSignal): its vendored bench copy needs the new root, and its test/94 CHECKS moves 43 -> 54.
+- `inlining-budget-diff.sh` U2 (audit F5, F7, F8, F9, F10a, F13, F14, F16, F17, L2; Q-IBD-1 (a)). Refused exit 2 with a
+  named die, before any measured run: `--fn ""`, `--v8-flags ""` and an empty `--opt=` on any of the 12 value options
+  ("<opt> needs a non-empty value"; `--out=` no longer takes the next argument) (F8); an fn or a tier given twice ("fn 'f' is given twice",
+  "tier 'turbo' is given twice") (F14, F17); `--before` and `--after` the same file, by hard link or symlink
+  (F13); `--after` not found, now named instead of read as a `--before` git failure (L2); a report.txt in OUT that is
+  a symlink, or has another hard link (F5, 0 spawns). `--runs` takes at most 2 digits and reads base 10 (`--runs 09`
+  runs 9; 3 or more digits are refused) (F9). A dash-led `--before` / `--after` / `--driver` / `--repo` / `--out`
+  or positional path gets a `./` prefix, and the `basename` of a dash-led driver too (F7, F16). The `-p` version
+  probe runs without NODE_OPTIONS and a failed probe is a named die, `cannot run <bin> -p` (F10a). lib/common.sh
+  is in all 5 roots, so all 5 are rebuilt: `stat -L`, `dirname` and `basename` take `--` on the `refuse_live` path
+  (called by bb, dd and ibd; alloc and ic carry the text only), and an unreadable symlink in a chain dies "cannot
+  read the symlink" (class 3, race only). lib/modes.sh is ibd only: `cp` and `dirname` take `--` on its `--before` /
+  `--after` staging lines. Known limits: LEDGER #79. Tests: test/ibd-u2.test.mjs added; the A4 parity row is re-pinned.
 - Package scaffold: private, `node:test` only, no dependencies.
 - `build.sh` + `lib/` + `src/`: shipped scripts are generated from `src/` + `lib/` fragments;
   `test/build.test.mjs` fails on drift (fresh build vs committed root script), on a stray root
@@ -1125,8 +1138,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inlining-budget-diff now includes lib/tracked.sh, so ibd gets the A1a / A1b classification too. ibd also gains
   `unset CDPATH` before its prologue (blocker fix, review r1), as the other four tools have. A `-`-led dirname
   gets a `./` prefix at the three `cd` joins on the refuse_live path (resolve_links, both `is_tracked` defs),
-  because bash reads `cd -- -` as OLDPWD even after `--`. Not changed (ruled, moved to ibd U2): devino's `stat`
-  `--`, resolve_links' `readlink || die`, `dirname` `--` in refuse_live, ibd's `cp "$f"` `--`. B2a (an
+  because bash reads `cd -- -` as OLDPWD even after `--`. Not changed here (ruled, moved to ibd U2; done there, see U2):
+  devino's `stat` `--`, resolve_links' `readlink || die`, `dirname` `--` in refuse_live, ibd's `cp "$f"` `--`. B2a (an
   intermediate hop of the symlink chain is not checked) is a documented class-3 limit. No hot body changed.
   Tier: DETERMINISTIC. Tests: new rows in test/shlib.test.mjs, test/tracked.test.mjs, test/build.test.mjs,
   test/bytecode-budget-stage.test.mjs, test/deopt-diff-stage.test.mjs; test/deopt-diff-boundary.test.mjs ibd

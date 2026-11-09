@@ -315,7 +315,7 @@ sha8() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shas
 usage() { sed -n '2,/^$/{s/^# \{0,1\}//;p;}' "$0"; }
 multiset() { sort | uniq -c; }   # the ONE multiset: judge() and --self-test both use it (never sort -u)
 devino() { # device:inode, following symlinks (GNU stat, else BSD / macOS stat)
-  if stat -L -c '%d:%i' "$1" >/dev/null 2>&1; then stat -L -c '%d:%i' "$1"; else stat -L -f '%d:%i' "$1"; fi
+  if stat -L -c '%d:%i' -- "$1" >/dev/null 2>&1; then stat -L -c '%d:%i' -- "$1"; else stat -L -f '%d:%i' -- "$1"; fi
 }
 top_of() { # dir file: 0 and TOP_OF = the toplevel of the work tree around dir; 1 outside a work tree (or no git); dies
   # on any other git answer, naming file. The classifier is is_tracked's (lib/tracked.sh), copied word for word.
@@ -357,7 +357,7 @@ resolve_links() { # path: follow a symlink chain (at most 40 hops) and print its
   local p="$1" l n=0 d
   while [[ -L "$p" ]]; do
     n=$((n + 1)); [[ $n -le 40 ]] || die "symlink chain too long (or a loop) at $1"
-    l=$(readlink -- "$p")
+    l=$(readlink -- "$p") || die "cannot read the symlink $p (in the chain of $1)"
     case "$l" in /*) p="$l" ;; *) d=$(dirname -- "$p"); [[ $d != -* ]] || d="./$d"
       d=$(CDPATH= cd -P -- "$d" 2>/dev/null && pwd -P) || die "cannot resolve the directory of $p (a link in the symlink chain of $1)"; p="$d/$l" ;; esac
   done
@@ -377,10 +377,10 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
     if is_tracked "$t"; then die "$what is a git-tracked working-tree file ($t): use a FROZEN copy (untracked) or --before-ref"; fi
   done
   me=$(devino "$f")
-  live_tops "$f" "$(dirname "$f")" "$(dirname "$p")"
+  live_tops "$f" "$(dirname -- "$f")" "$(dirname -- "$p")"
   while IFS= read -r top; do
     [[ -n "$top" ]] || continue
-    for t in "$top/Signal.js" "$top/$(basename "$f")" "$top/$(basename "$p")" \
+    for t in "$top/Signal.js" "$top/$(basename -- "$f")" "$top/$(basename -- "$p")" \
       ${AFTER_FILE:+"$top/$(basename -- "$AFTER_FILE")"}; do
       if [[ -e "$t" ]] && [[ "$(devino "$t")" == "$me" ]] && is_tracked "$t"; then
         die "$what is the same file as the live $t (hard link / symlink): use a FROZEN copy or --before-ref"
@@ -737,8 +737,8 @@ need() { # value from --opt=value (returns 0) or from the next argument (returns
   v="$2"; return 1
 }
 while [[ $# -gt 0 ]]; do
-  a="$1"; v=""
-  case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}" ;; esac
+  a="$1"; v=""; EQ=0
+  case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
     -h|--help) usage; exit 2 ;;
     --self-test) if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi ;;
@@ -746,7 +746,8 @@ while [[ $# -gt 0 ]]; do
     --concurrent) CONCURRENT=1 ;;
     --no-bytecode) BYTECODE=0 ;;
     --fn|--runs|--tiers|--driver|--repo|--node|--v8-flags|--out|--before-ref|--after-ref|--before|--after)
-      if ! need "$@"; then shift; fi
+      if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
+      [[ -n "$v" ]] || die "$a needs a non-empty value"
       case "$a" in
         --fn) FNS="$v" ;; --runs) RUNS="$v" ;; --tiers) TIERS="$v" ;; --driver) DRIVER="$v" ;;
         --repo) REPO="$v" ;; --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;;
@@ -759,16 +760,29 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# a value that starts with - must never reach a tool as an option; the ./ form names the same file (--out and the path options, then POS)
+for x in BEFORE_FILE AFTER_FILE DRIVER REPO OUT; do [[ ${!x} != -* ]] || printf -v "$x" './%s' "${!x}"; done
+for ((i = 0; i < ${#POS[@]}; i++)); do [[ ${POS[$i]} != -* ]] || POS[$i]="./${POS[$i]}"; done
+
 [[ "$FNS$TIERS$V8FLAGS$OUT$NODE_BIN$DRIVER$BEFORE_FILE$AFTER_FILE$REPO${POS[*]-}" != *$'\n'* ]] \
   || die "--fn / --tiers / --v8-flags / --out / --node / --driver / --before / --after / --repo / driver paths: a newline is not allowed"
 IFS=', ' read -r -a TARGETS <<<"$FNS"
 [[ ${#TARGETS[@]} -gt 0 ]] || die "--fn is empty"
+SEEN="|"
 for t in "${TARGETS[@]}"; do
   [[ "$t" =~ ^[A-Za-z_\$][A-Za-z0-9_\$.]*$ ]] || die "--fn must name NAMED functions (e.g. m0, read.set), got '$t'"
+  [[ "$SEEN" != *"|$t|"* ]] || die "fn '$t' is given twice"
+  SEEN="$SEEN$t|"
 done
-[[ "$RUNS" =~ ^[0-9]+$ && $RUNS -ge 2 && $RUNS -le 50 ]] || die "--runs must be an integer in [2, 50] (null control), got '$RUNS'"
+[[ "$RUNS" =~ ^[0-9]{1,2}$ ]] && RUNS=$((10#$RUNS)) && [[ $RUNS -ge 2 && $RUNS -le 50 ]] \
+  || die "--runs must be an integer in [2, 50] (null control), got '$RUNS'"
 IFS=', ' read -r -a TIER_LIST <<<"$TIERS"
-for t in "${TIER_LIST[@]}"; do [[ $t == turbo || $t == maglev ]] || die "unknown tier '$t' (turbo, maglev)"; done
+SEEN="|"
+for t in "${TIER_LIST[@]}"; do
+  [[ $t == turbo || $t == maglev ]] || die "unknown tier '$t' (turbo, maglev)"
+  [[ "$SEEN" != *"|$t|"* ]] || die "tier '$t' is given twice"
+  SEEN="$SEEN$t|"
+done
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
@@ -804,9 +818,12 @@ for sub in raw dec bud ms stage; do
 done
 OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
 [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT ($OUT_UP is not a writable directory)"
+[[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
-# node version + the --v8-flags allowlist: after the read-only preflight (a bad --out stays 0 spawns), before the first write
-NODE_V=$("$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"')
+[[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
+# node version + the --v8-flags allowlist: after the read-only preflight, before the first write. The preflight refuses a
+# bad --out with 0 spawns; a path only mkdir can see through (ENAMETOOLONG) still takes these 2 spawns (LEDGER #76)
+NODE_V=$(env -u NODE_OPTIONS "$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"') || die "cannot run $NODE_BIN -p"
 v8fl_check "$NODE_BIN"
 mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage
 OUT=$(cd "$OUT" && pwd)
@@ -862,15 +879,17 @@ elif [[ -n "$BEFORE_FILE$AFTER_FILE" ]]; then
   [[ ${#POS[@]} -eq 0 ]] || die "file mode takes no driver paths"
   command -v git >/dev/null 2>&1 || die "file mode needs git to check that --before is a frozen copy (or use --before-ref)"
   [[ -f "$BEFORE_FILE" ]] || die "--before not found: $BEFORE_FILE"
+  [[ -f "$AFTER_FILE" ]] || die "--after not found: $AFTER_FILE"
   refuse_live "$BEFORE_FILE" "--before"
   if [[ -f "$(dirname "$BEFORE_FILE")/Watch.js" ]]; then refuse_live "$(dirname "$BEFORE_FILE")/Watch.js" "the Watch.js beside --before"; fi
+  [[ ! "$BEFORE_FILE" -ef "$AFTER_FILE" ]] || die "--before and --after are the same file (hard link / symlink): --before must be a FROZEN copy"
   for side in before after; do
     if [[ $side == before ]]; then f="$BEFORE_FILE"; else f="$AFTER_FILE"; fi
     [[ -f "$f" ]] || die "--$side not found: $f"
     dir="$OUT/stage/$side"; mkdir -p "$dir"
-    cp "$f" "$dir/Signal.js"     # the copy IS the freeze: edits to $f during the run cannot leak in
-    w="$(dirname "$f")/Watch.js"
-    if [[ -f "$w" ]]; then cp "$w" "$dir/Watch.js"
+    cp -- "$f" "$dir/Signal.js"     # the copy IS the freeze: edits to $f during the run cannot leak in
+    w="$(dirname -- "$f")/Watch.js"
+    if [[ -f "$w" ]]; then cp -- "$w" "$dir/Watch.js"
     elif grep -qE "['\"]\./Watch\.js['\"]" "$dir/Signal.js"; then die "no Watch.js beside $f (Signal.js re-exports it)"; fi
     write_driver "$dir"
     d="$f  sha256/8 $(sha8 "$dir/Signal.js")"
@@ -916,11 +935,12 @@ lim MG_CUM max-maglev-inlined-bytecode-size-cumulative 920
 # ---------------------------------------------------------------------------------------------
 TAG=1; [[ $CONCURRENT == 1 ]] && TAG=0   # concurrent compiles interleave: unit attribution is off
 run_trace() { # tier side k driver
-  local flag glue raw="$OUT/raw/$1.$2.$3.txt"
+  local flag glue b raw="$OUT/raw/$1.$2.$3.txt"
   if [[ $1 == turbo ]]; then flag=--trace-turbo-inlining; else flag=--trace-maglev-inlining; fi
   local -a cmd=("$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --trace-opt "$flag")
   [[ $CONCURRENT == 1 ]] || cmd+=(--no-concurrent-recompilation)
-  cmd+=("$(basename "$4")")
+  b=$(basename "$4"); [[ $b != -* ]] || b="./$b"
+  cmd+=("$b")
   if ! (cd "$(dirname "$4")" && env -u NODE_OPTIONS "${cmd[@]}") >"$raw" 2>&1; then
     tail -n 20 "$raw" >&2
     die "driver exited non-zero: ${cmd[*]} (in $(dirname "$4"); trace in $raw)"
@@ -1059,8 +1079,9 @@ done
 if [[ $BYTECODE == 1 ]]; then
   say "=== bytecode length (REPORTED: --print-bytecode, exact name; several values = several functions with that name)"
   probe() { # driver fn
+    local b; b=$(basename "$1"); [[ $b != -* ]] || b="./$b"
     (cd "$(dirname "$1")" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$2" "$(basename "$1")" 2>&1) | tr '\000' '?' | awk -v fn="$2" "$BYTECODE_AWK"
+      --print-bytecode-filter="$2" "$b" 2>&1) | tr '\000' '?' | awk -v fn="$2" "$BYTECODE_AWK"
   }
   cross() { # name op limit before after
     local b=$4 a=$5 ib ia

@@ -1,0 +1,362 @@
+// test/ibd-u2.test.mjs -- U2 (b52 / b55) rows for the built root inlining-budget-diff.sh.
+// ORACLE: .handoff/PLAN-b52-ibd-u2.md ASSERTION 1 (+ ADDENDUM A13 in PLAN-b52-ibd-u1.md: L2 and F13 take exactly 2 spawns; every
+// other refusal takes the spawn count its row states, mostly 0). No value is copied from a run. Each row = exec(build) -> observation, check(observation) -> assertions; the
+// live test runs it on a private copy of the root, and every row has a REVERSE-EDIT variant of that copy (a count-checked edit:
+// the anchor must match exactly once, else the variant is void and the test FAILS) that the same check must reject.
+//   * A fake `node` appends one line per spawn to a log: "0 spawns" is counted from the fake. It answers --version, --v8-options
+//     (a V8 table), -p (exit 9 when NODE_OPTIONS is set, or FAKE rc), --print-bytecode (a canned header), else prints a canned trace.
+//   * Env: GIT_* BASH_FUNC_* and the node / shell option vars are stripped, NODE_V8_COVERAGE = undefined, and NODE is deleted
+//     (npm exports it and the root defaults --node to $NODE). The PATH-resolved row and the NODE-exported row set them on purpose.
+//   * RETENTION (U1 A5 carve-out): F13 x20 with an EXPLICIT --out leaves that OUT with at most the skeleton (raw dec bud ms stage
+//     report.txt, all empty) and no growth across cycles, and 0 new entries elsewhere (the cwd tree minus OUT, a private TMPDIR).
+//   * Every temp dir is under one private mkdtemp root, removed on exit; each case dir is removed in its finally.
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { capSync } from './spawn-cap.mjs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, rmSync, existsSync, lstatSync, symlinkSync, linkSync, mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOTSH = join(HERE, '..', 'inlining-budget-diff.sh');
+const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
+const CAP = 120000;
+
+function cleanEnv(extra = {}) {
+    const e = { ...process.env, ...extra };
+    for (const k of Object.keys(e)) if (k.startsWith('GIT_') || k.startsWith('BASH_FUNC_')) delete e[k];
+    for (const k of ['EDITOR', 'VISUAL', 'NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'BASH_ENV', 'ENV', 'CDPATH',
+        'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT', 'OUTDIR']) delete e[k];
+    e.NODE_V8_COVERAGE = undefined;
+    delete e.NODE;
+    return e;
+}
+const ENV = cleanEnv();
+
+const PRIV = skip ? null : realpathSync(mkdtempSync(join(tmpdir(), 'ibdu2-')));
+if (PRIV) { after(() => rmSync(PRIV, { recursive: true, force: true })); mkdirSync(join(PRIV, 'cases')); mkdirSync(join(PRIV, 'builds')); }
+let nB = 0;
+function putBuild(name, text) {
+    const p = join(PRIV, 'builds', `${++nB}-${name}.sh`);
+    writeFileSync(p, text); chmodSync(p, 0o755);
+    return { name, path: p };
+}
+const ROOT_TEXT = skip ? '' : readFileSync(ROOTSH, 'latin1');
+const ROOT_B = skip ? null : putBuild('root', ROOT_TEXT);
+// variant(): edit exactly one line (the one containing `anchor`; 0 or 2+ matches fail); to === null deletes the line
+function variant(name, anchor, edit) {
+    const lines = ROOT_TEXT.split('\n');
+    const hit = lines.reduce((a, l, i) => (l.includes(anchor) ? a.concat(i) : a), []);
+    assert.equal(hit.length, 1, `variant ${name}: anchor ${JSON.stringify(anchor)} matched ${hit.length} lines (want 1)`);
+    const l = lines[hit[0]];
+    const nl = edit === null ? null : edit(l);
+    if (nl !== null) assert.notEqual(nl, l, `variant ${name}: the edit changed nothing`);
+    if (nl === null) lines.splice(hit[0], 1); else lines[hit[0]] = nl;
+    return putBuild(name, lines.join('\n'));
+}
+const rep = (from, to) => (l) => { assert.equal(l.split(from).length - 1, 1, `edit anchor ${from} not unique in line`); return l.replace(from, () => to); };
+
+// ---- fixtures ----
+const T1 = `[compiling method 0x1d8653c8 <JSFunction read.set (sfi = 0x11ec74af73f1)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]
+Considering 0x1d866858 {0x11ec74af3511 <SharedFunctionInfo markDownstream>} for inlining with 0x1d8870a0 {0x11ec74af8929 <FeedbackVector[33]>}
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #268 with frequency 0.624484, has_heapnum_param:0, 1 target(s):
+  - target: 0x1d866858 {0x11ec74af3511 <SharedFunctionInfo markDownstream>}, bytecode size: 194
+Inlining 0x1d866858 {0x11ec74af3511 <SharedFunctionInfo markDownstream>} into 0x1d8653c8 {0x11ec74af73f1 <SharedFunctionInfo read.set>}
+[completed compiling 0x1d8653c8 <JSFunction read.set (sfi = 0x11ec74af73f1)> (target TURBOFAN_JS) - took 0.1, 2.0, 0.1 ms]
+`;
+const BCHDR = '[generated bytecode for function: read.set (0x2 <SharedFunctionInfo read.set>)]\nBytecode length: 285\n';
+const V8TABLE = [
+    '  --turbofan (enable TurboFan)', '        type: bool  default: --turbofan',
+    '  --stack-size (default size of stack region v8 is allowed to use)', '        type: int  default: --stack-size=984',
+    '  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)',
+    '        type: int  default: --max-inlined-bytecode-size=460',
+    '  --max-maglev-inlined-bytecode-size (maximum size of bytecode for a single Maglev inlining)',
+    '        type: int  default: --max-maglev-inlined-bytecode-size=100',
+    '  --max-inlined-bytecode-size-small (maximum size of bytecode considered for small function inlining)',
+    '        type: int  default: --max-inlined-bytecode-size-small=30',
+    '  --reserve-inline-budget-scale-factor (scale factor of bytecode size used to calculate the inlining budget)',
+    '        type: float  default: --reserve-inline-budget-scale-factor=1.2',
+].join('\n');
+const q = (s) => JSON.stringify(s);
+const BASE = ['--tiers', 'turbo', '--no-bytecode', '--fn', 'read.set'];
+
+function withCase(fn) {
+    const dir = mkdtempSync(join(PRIV, 'cases', 'c-'));
+    const c = { dir, meta: join(dir, '.meta'), w: join(dir, 'w'), tmp: join(dir, 'tmp'), log: join(dir, '.meta', 'spawns.log') };
+    mkdirSync(c.meta); mkdirSync(c.w); mkdirSync(c.tmp);
+    try { return fn(c); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+function fakeNode(c, name = 'node', dirName = 'bin', o = {}) {
+    const d = join(c.meta, dirName); mkdirSync(d, { recursive: true });
+    const trace = join(c.meta, 'trace.txt'), bc = join(c.meta, 'bc.txt');
+    writeFileSync(trace, T1); writeFileSync(bc, BCHDR);
+    const p = join(d, name);
+    writeFileSync(p, `#!/bin/sh
+printf '%s\\n' "$*" >> ${q(c.log)}
+case "$1" in
+  --version) echo v26.0.0; exit 0 ;;
+  --v8-options) cat <<'EOT'
+${V8TABLE}
+EOT
+    exit 0 ;;
+  -p) [ -z "\${NODE_OPTIONS-}" ] || exit 9
+      ${o.pRc ? `exit ${o.pRc}` : 'echo "v26.0.0 (V8 14.0)"; exit 0'} ;;
+esac
+case " $* " in *" --print-bytecode "*) cat ${q(bc)}; exit 0 ;; esac
+cat ${q(trace)}
+`);
+    chmodSync(p, 0o755);
+    return p;
+}
+function tree(dir) {
+    const out = [];
+    (function walk(d, rel) {
+        for (const n of readdirSync(d).sort()) {
+            const p = join(d, n), st = lstatSync(p), r = rel ? `${rel}/${n}` : n;
+            out.push(`${r} ${st.isSymbolicLink() ? 'l' : st.isDirectory() ? 'd' : 'f'} ${st.isFile() ? st.size : 0}`);
+            if (st.isDirectory()) walk(p, r);
+        }
+    })(dir, '');
+    return out;
+}
+function drivers(c, names = ['a.mjs', 'b.mjs']) { for (const n of names) writeFileSync(join(c.w, n), T1); }
+function runIbd(build, c, args, o = {}) {
+    rmSync(c.log, { force: true });
+    const env = { ...ENV, TMPDIR: c.tmp, ...(o.env || {}) };
+    const r = capSync('bash', [build.path, ...args], { cwd: o.cwd || c.w, env, encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 1 << 26 }, CAP, `${build.name} ${o.what || 'ibd'}`);
+    const out = (r.stdout || '') + (r.stderr || '');
+    return {
+        rc: r.status, out,
+        dies: out.split('\n').filter((l) => /^inlining-budget-diff: /.test(l)),
+        verdicts: out.split('\n').filter((l) => /^VERDICT /.test(l)),
+        spawns: existsSync(c.log) ? readFileSync(c.log, 'utf8').split('\n').filter(Boolean) : [],
+    };
+}
+function refused(o, text, spawns = 0) {
+    assert.equal(o.rc, 2, `exit: ${o.out}`);
+    assert.equal(o.dies.length, 1, `die lines: ${o.out}`);
+    assert.equal(o.spawns.length, spawns, `spawns: ${o.spawns.join(' | ')}`);
+    if (text) assert.match(o.dies[0], text);
+}
+function red(check, obs, msg) {
+    try { check(obs); } catch (e) {
+        if (!(e instanceof assert.AssertionError)) throw e;
+        return;
+    }
+    assert.fail(msg);
+}
+// row(): live on the root copy; one test per reverse-edit variant (name -> () => build) that must make check throw
+function row(name, exec, check, variants = {}) {
+    test(name, { skip }, () => { check(exec(ROOT_B)); });
+    for (const [vn, mk] of Object.entries(variants)) {
+        test(`${name} [reverse edit ${vn} flips]`, { skip }, () => { red(check, exec(mk()), 'the reverse-edit variant passes: the row has no teeth'); });
+    }
+}
+const each = (arr, f) => arr.forEach(f);
+
+// ---- F8: --opt= is refused, not read as the next argument ----
+row('F8 --out= and --fn= are refused "needs a non-empty value": exit 2, 1 die, 0 spawns', (b) => withCase((c) => {
+    drivers(c);
+    return ['--out=', '--fn='].map((a) => {
+        const o = runIbd(b, c, [...BASE.filter((x) => x !== '--fn' && x !== 'read.set'), '--fn', 'read.set', '--node', fakeNode(c), a, 'a.mjs', 'b.mjs']);
+        o.a = a; return o;
+    });
+}), (os) => each(os, (o) => refused(o, new RegExp(`${o.a.slice(0, -1)} needs a non-empty value`))),
+{ 'drop the non-empty die': () => variant('f8', 'needs a non-empty value', null) });
+
+// ---- F13 / L2: file mode, 2 spawns (the -p probe and --v8-options), before staging ----
+function fileFix(c) {
+    writeFileSync(join(c.w, 's.js'), 'export const x = 1;\n');
+    linkSync(join(c.w, 's.js'), join(c.w, 'hard.js'));
+    symlinkSync('s.js', join(c.w, 'sym.js'));
+}
+const FILEBASE = (c, out) => [...BASE, '--node', fakeNode(c), '--out', out];
+row('F13 --before / --after the same file (hard link, symlink): "are the same file", exit 2, 1 die, 2 spawns', (b) => withCase((c) => {
+    fileFix(c);
+    return ['hard.js', 'sym.js'].map((t, i) => runIbd(b, c, [...FILEBASE(c, join(c.w, `out${i}`)), '--before', 's.js', '--after', t]));
+}), (os) => each(os, (o) => refused(o, /are the same file/, 2)),
+{ 'drop the -ef die': () => variant('f13', '--before and --after are the same file', null) });
+
+row('L2 --after missing (dir absent, file absent): "--after not found", no "git failed", 2 spawns, nothing staged', (b) => withCase((c) => {
+    fileFix(c);
+    return ['nodir/x.js', 'missing.js'].map((a, i) => { const out = join(c.w, `out${i}`); const o = runIbd(b, c, [...FILEBASE(c, out), '--before', 's.js', '--after', a]); o.staged = existsSync(join(out, 'stage')) ? readdirSync(join(out, 'stage')) : ['<no stage dir>']; return o; });
+}), (os) => each(os, (o) => {
+    refused(o, /--after not found/, 2);
+    assert.doesNotMatch(o.out, /git failed/);
+    assert.deepEqual(o.staged, [], 'the missing --after was found only after --before was staged');
+}), { 'drop the early --after check': () => variant('l2', '--after not found: $AFTER_FILE', null) });
+
+// RETENTION (U1 A5 carve-out): 20 refused F13 cycles on one EXPLICIT --out
+row('retention: F13 x20 on one explicit --out leaves at most the empty skeleton, no growth, 0 new entries elsewhere', (b) => withCase((c) => {
+    fileFix(c);
+    const out = join(c.w, 'out'), node = fakeNode(c);
+    const elsewhere0 = tree(c.w).filter((l) => !/^out(\/| )/.test(l));
+    const snaps = [], rcs = [], spawns = [];
+    for (let i = 0; i < 20; i++) {
+        const o = runIbd(b, c, [...BASE, '--node', node, '--out', out, '--before', 's.js', '--after', 'hard.js'], { what: `cycle ${i + 1}` });
+        rcs.push(o.rc); spawns.push(o.spawns.length); snaps.push(tree(out));
+    }
+    return { rcs, spawns, snaps, elsewhere0, elsewhere1: tree(c.w).filter((l) => !/^out(\/| )/.test(l)), tmp: readdirSync(c.tmp) };
+}), (o) => {
+    assert.deepEqual(o.rcs, new Array(20).fill(2));
+    assert.deepEqual(o.spawns, new Array(20).fill(2));
+    const skeleton = new Set(['bud d 0', 'dec d 0', 'ms d 0', 'raw d 0', 'report.txt f 0', 'stage d 0']);
+    for (const l of o.snaps[0]) assert.ok(skeleton.has(l), `OUT entry beyond the skeleton: ${l}`);
+    for (let i = 1; i < 20; i++) assert.deepEqual(o.snaps[i], o.snaps[0], `OUT grew at cycle ${i + 1}`);
+    assert.deepEqual(o.elsewhere1, o.elsewhere0, 'a new entry appeared outside OUT');
+    assert.deepEqual(o.tmp, [], 'TMPDIR holds leftovers');
+}, { 'drop the -ef die': () => variant('f13-ret', '--before and --after are the same file', null) });
+
+// ---- F14 / F17 ----
+row('F14 --fn read.set,read.set is refused "given twice": exit 2, 1 die, 0 spawns', (b) => withCase((c) => {
+    drivers(c);
+    return runIbd(b, c, ['--tiers', 'turbo', '--no-bytecode', '--fn', 'read.set,read.set', '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
+}), (o) => refused(o, /fn 'read\.set' is given twice/), { 'drop the fn SEEN die': () => variant('f14', "fn '$t' is given twice", null) });
+row('F17 --tiers turbo,turbo is refused "given twice": exit 2, 1 die, 0 spawns', (b) => withCase((c) => {
+    drivers(c);
+    return runIbd(b, c, ['--tiers', 'turbo,turbo', '--no-bytecode', '--fn', 'read.set', '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
+}), (o) => refused(o, /tier 'turbo' is given twice/), { 'drop the tier SEEN die': () => variant('f17', "tier '$t' is given twice", null) });
+
+// ---- F5: report.txt that would be written through (symlink, dangling, self-loop, hard link): victim unchanged, 0 spawns ----
+function f5(kind) {
+    return (b) => withCase((c) => {
+        drivers(c);
+        const out = join(c.w, 'out'), victim = join(c.dir, 'victim.txt');
+        mkdirSync(out);
+        if (kind !== 'dangling') writeFileSync(victim, 'VICTIM\n');
+        if (kind === 'symlink' || kind === 'dangling') symlinkSync(victim, join(out, 'report.txt'));
+        else if (kind === 'loop') symlinkSync('report.txt', join(out, 'report.txt'));
+        else linkSync(victim, join(out, 'report.txt'));
+        const o = runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', out, 'a.mjs', 'b.mjs']);
+        o.victim = existsSync(victim) ? readFileSync(victim, 'utf8') : null;
+        o.want = kind === 'dangling' ? null : 'VICTIM\n';
+        return o;
+    });
+}
+const ckF5 = (o) => { refused(o, /--out: .*report\.txt/); assert.equal(o.victim, o.want, 'the victim changed'); };
+const noSym = () => variant('f5-nosym', '[[ ! -L "$OUT/report.txt" ]] || die', null);
+row('F5 report.txt a symlink to a file: refused, victim unchanged, 0 spawns', f5('symlink'), ckF5, { 'drop the -L die': noSym });
+row('F5 report.txt a dangling symlink: refused, victim never created, 0 spawns', f5('dangling'), ckF5, { 'drop the -L die': noSym });
+row('F5 report.txt a self-loop symlink: refused, 0 spawns', f5('loop'), ckF5, { 'drop the -L die': noSym });
+row('F5 report.txt a hard link of another file: refused, victim unchanged, 0 spawns', f5('hard'), ckF5,
+    { 'drop the hard-link die': () => variant('f5-nohard', 'has another hard link', null) });
+
+// ---- F9: --runs 09 runs as 9; 062 and 51 are refused ----
+const runsRun = (v, o2) => (b) => withCase((c) => {
+    drivers(c);
+    const args = ['--tiers', 'turbo', '--no-bytecode', '--fn', 'read.set', '--runs', v, '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs'];
+    return runIbd(b, c, o2 ? args : ['--node', fakeNode(c), ...args]);
+});
+const RUNSLINE = '[[ "$RUNS" =~ ^[0-9]{1,2}$ ]]';
+row('F9 --runs 09 prints no bash arithmetic error, header "runs 9"', runsRun('09'), (o) => {
+    assert.doesNotMatch(o.out, /value too great for base/);
+    assert.equal(o.dies.length, 0, o.out);
+    assert.match(o.out, /\bruns 9\b/);
+}, { 'drop the 10# base': () => variant('f9-base', RUNSLINE, rep('RUNS=$((10#$RUNS)) && ', '')) });
+row('F9 --runs 062 is refused (three digits): exit 2, 1 die, 0 spawns', runsRun('062'), (o) => refused(o, /--runs must be an integer in \[2, 50\].*'062'/),
+    { 'allow 3 digits': () => variant('f9-3d', RUNSLINE, rep('{1,2}', '{1,3}')) });
+row('F9 --runs 040 is refused (three digits): exit 2, 1 die, 0 spawns', runsRun('040'), (o) => refused(o, /--runs must be an integer in \[2, 50\].*'040'/),
+    { 'unbounded digits': () => variant('f9-040', RUNSLINE, rep('{1,2}', '+')) });
+row('F9 --runs 18446744073709551618 is refused (2^64+2 must not wrap to 2): exit 2, 1 die, 0 spawns', runsRun('18446744073709551618'),
+    (o) => refused(o, /--runs must be an integer in \[2, 50\].*'18446744073709551618'/), { 'unbounded digits': () => variant('f9-huge', RUNSLINE, rep('{1,2}', '+')) });
+row('F9 --runs 51 is refused (above 50): exit 2, 1 die, 0 spawns', runsRun('51'), (o) => refused(o, /--runs must be an integer in \[2, 50\].*'51'/),
+    { 'raise the bound to 99': () => variant('f9-51', RUNSLINE, rep('-le 50', '-le 99')), 'bound 51': () => variant('f9-b51', RUNSLINE, rep('-le 50', '-le 51')) });
+
+// ---- F7 / F16: a dash-led path reaches node as ./NAME, never as an option ----
+const reached = (o) => {
+    assert.equal(o.dies.length, 0, `a refusal fired: ${o.out}`);
+    assert.doesNotMatch(o.out, /unknown option|needs a (non-empty )?value/);
+    assert.equal(o.verdicts.length, 1, `VERDICT lines: ${o.out}`);
+    assert.ok(o.spawns.length > 0, 'node never ran');
+};
+const F16LINE = 'for x in BEFORE_FILE AFTER_FILE DRIVER REPO OUT; do';
+const POSLINE = 'for ((i = 0; i < ${#POS[@]}; i++)); do';
+row('F7 dash-led POS drivers: reach node as ./-a.mjs for the trace run and the bytecode probe, 1 VERDICT, no option error', (b) => withCase((c) => {
+    drivers(c, ['-a.mjs', '-b.mjs']);
+    return runIbd(b, c, ['--tiers', 'turbo', '--fn', 'read.set', '--node', fakeNode(c), '--out', join(c.w, 'out'), '-a.mjs', '-b.mjs']);
+}), (o) => {
+    reached(o);
+    const tr = o.spawns.filter((l) => /--trace-turbo-inlining/.test(l)), pr = o.spawns.filter((l) => /--print-bytecode/.test(l));
+    assert.ok(tr.length > 0 && pr.length > 0, `trace ${tr.length} probe ${pr.length}`);
+    for (const l of [...tr, ...pr]) assert.match(l, / \.\/-[ab]\.mjs$/, `node arg is not ./-X.mjs: ${l}`);
+}, {
+    'drop the POS ./ loop': () => variant('f16-pos', POSLINE, null),
+    'drop the run_trace ./ guard': () => variant('f7-rt', 'b=$(basename "$4");', rep(' [[ $b != -* ]] || b="./$b"', '')),
+    'drop the probe ./ guard': () => variant('f7-pr', 'local b; b=$(basename "$1");', rep(' [[ $b != -* ]] || b="./$b"', '')),
+});
+row('F16 dash-led --out: OUT is ./-o, the run reaches node and writes there', (b) => withCase((c) => {
+    drivers(c);
+    const o = runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', '-o', 'a.mjs', 'b.mjs']);
+    o.made = existsSync(join(c.w, '-o', 'report.txt'));
+    return o;
+}), (o) => { reached(o); assert.ok(o.made, './-o/report.txt missing'); }, { 'drop the entry prefix loop': () => variant('f16-out', F16LINE, null) });
+row('F16 dash-led --before / --after (file mode): reach node, 1 VERDICT, header "after   ./-a.js", no option error', (b) => withCase((c) => {
+    writeFileSync(join(c.w, '-b.js'), 'export const x = 1;\n'); writeFileSync(join(c.w, '-a.js'), 'export const x = 2;\n');
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', join(c.w, 'out'), '--before', '-b.js', '--after', '-a.js']);
+}), (o) => {
+    reached(o);
+    assert.match(o.out, /^after   \.\/-a\.js  sha256\/8 /m, 'report header lacks ./-a.js');
+    assert.match(o.out, /^before  \.\/-b\.js  sha256\/8 /m, 'report header lacks ./-b.js');
+    assert.doesNotMatch(o.out, /illegal option|invalid option/);
+}, { 'drop the entry prefix loop': () => variant('f16-ba', F16LINE, null) });
+function gitIn(dir, args) {
+    const r = capSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', '-C', dir, ...args], { env: ENV, encoding: 'utf8' }, 30000, `git ${args[0]}`);
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+}
+function refFix(c, repoName) {
+    const repo = join(c.w, repoName); mkdirSync(repo);
+    gitIn(repo, ['init', '-q']);
+    writeFileSync(join(repo, 'Signal.js'), 'export const x = 1;\n'); gitIn(repo, ['add', 'Signal.js']); gitIn(repo, ['commit', '-q', '-m', 'one']);
+    writeFileSync(join(repo, 'Signal.js'), 'export const x = 2;\n'); gitIn(repo, ['add', 'Signal.js']); gitIn(repo, ['commit', '-q', '-m', 'two']);
+    writeFileSync(join(c.w, '-d.mjs'), `import { x } from './Signal.js';\n${T1}`);
+}
+row('F16 dash-led --driver (ref mode): reaches node, 1 VERDICT', (b) => withCase((c) => {
+    refFix(c, 'repo');
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', join(c.w, 'out'), '--repo', 'repo', '--before-ref', 'HEAD~1', '--after-ref', 'HEAD', '--driver', '-d.mjs']);
+}), reached, { 'drop the entry prefix loop': () => variant('f16-drv', F16LINE, null) });
+row('F16 dash-led --repo with an unknown ref: die text names "in ./-r"', (b) => withCase((c) => {
+    refFix(c, '-r');
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', join(c.w, 'out'), '--repo', '-r', '--before-ref', 'no-such-ref', '--after-ref', 'HEAD', '--driver', '-d.mjs']);
+}), (o) => refused(o, /unknown git ref 'no-such-ref' in \.\/-r /, 2), { 'drop the entry prefix loop': () => variant('f16-repodie', F16LINE, null) });
+row('F16 dash-led --repo (ref mode): reaches node, 1 VERDICT (the --repo oracle is the unknown-ref row above; this variant flips the --driver path only)', (b) => withCase((c) => {
+    refFix(c, '-r');
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', join(c.w, 'out'), '--repo', '-r', '--before-ref', 'HEAD~1', '--after-ref', 'HEAD', '--driver', '-d.mjs']);
+}), reached, { 'drop the entry prefix loop': () => variant('f16-repo', F16LINE, null) });
+
+row('F14 --fn read.set,read reaches node (a substring is not a duplicate): 1 VERDICT, no refusal', (b) => withCase((c) => {
+    drivers(c);
+    return runIbd(b, c, [...BASE, '--fn', 'read.set,read', '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
+}), reached, { 'substring match in the SEEN guard': () => variant('f14-sub', "fn '$t' is given twice", rep('*"|$t|"*', '*"$t"*')) });
+
+// ---- F10a: NODE_OPTIONS never reaches the -p probe; a failing -p is a named die ----
+row('F10a NODE_OPTIONS=--bogus is unseen by the -p probe (the fake exits 9 if it sees it)', (b) => withCase((c) => {
+    drivers(c);
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs'], { env: { NODE_OPTIONS: '--bogus' } });
+}), (o) => {
+    assert.equal(o.dies.length, 0, o.out);
+    assert.equal(o.rc, 0, o.out);
+    assert.match(o.spawns[0], /^-p /, `first spawn: ${o.spawns[0]}`);
+}, { 'drop env -u NODE_OPTIONS on -p': () => variant('f10a', 'NODE_V=$(env -u NODE_OPTIONS', rep('env -u NODE_OPTIONS ', '')) });
+row('F10a -p exiting 2 is the named die "cannot run <node> -p": exit 2, exactly 1 die line', (b) => withCase((c) => {
+    drivers(c);
+    return runIbd(b, c, [...BASE, '--node', fakeNode(c, 'node', 'bin', { pRc: 2 }), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
+}), (o) => { refused(o, /cannot run .*node -p$/, 1); assert.equal(o.verdicts.length, 1, o.out); }, { 'drop the -p die': () => variant('f10a-die', 'NODE_V=$(env -u NODE_OPTIONS', rep(' || die "cannot run $NODE_BIN -p"', '')) });
+
+// ---- node lookup: PATH-resolved and NODE-exported fakes (npm exports NODE; the root defaults --node to it) ----
+test('node lookup: a PATH-resolved fake `node` (NODE unset) and a NODE-exported fake both reach the run (regression pin)', { skip }, () => {
+    withCase((c) => {
+        drivers(c);
+        const p = fakeNode(c, 'node', 'pbin');
+        const o1 = runIbd(ROOT_B, c, [...BASE, '--out', join(c.w, 'o1'), 'a.mjs', 'b.mjs'], { env: { PATH: `${dirname(p)}:${ENV.PATH}` } });
+        assert.equal(o1.rc, 0, o1.out); assert.ok(o1.spawns.length > 0);
+        const n = fakeNode(c, 'fake-node-x', 'nbin');
+        const o2 = runIbd(ROOT_B, c, [...BASE, '--out', join(c.w, 'o2'), 'a.mjs', 'b.mjs'], { env: { NODE: n } });
+        assert.equal(o2.rc, 0, o2.out); assert.ok(o2.spawns.length > 0);
+    });
+});
+test('retention: no case dir of this file is left under the private root (runs last)', { skip }, () => {
+    assert.deepEqual(readdirSync(join(PRIV, 'cases')), []);
+});

@@ -299,43 +299,18 @@ mutant('M-no-replace', 'cat-file blob gets --no-replace-objects (the deferred fi
 
 // =====================================================================================================
 // 4. G-STAGE G1 (was a deferred refusal): a --before / --after / --driver value with a leading '-' is read as ./<value>,
-// so a dash-led file name is a clean run. The frozen 943bed4 root gave exit 2 "unexpected error (exit 1)" (dirname /
-// basename / stat read the name as an option, set -e exits 1, the EXIT trap maps it): red there and on M-dash-revert.
-// The oracle below still names that old failure (the M-dash-revert observation).
+// so a dash-led file name is a clean run. Since U2 the lib's own `--` guards make a `-b.js` name safe without G1, so
+// M-dash-revert rides the `-/b.js` row: bash reads the `cd -- -` of the dirname `-` as OLDPWD (both OLDPWD behaviours end
+// at stage.sh's -ef guard: exit 2, 0 spawns). M-trap-off is retired (nothing fails into the EXIT trap here any more);
+// test/final-trap.test.mjs A1 / A2 carry the trap.
 // =====================================================================================================
-// The option-error oracle: BSD ("dirname: illegal option -- b"), GNU ("dirname: invalid option -- 'b'") or uutils
-// ("error: unexpected argument '-b' found" ... "Usage: dirname [OPTION] NAME..."), tied to dirname / basename / stat.
-const DASH_BSD_GNU = /^(dirname|basename|stat)(: illegal option| ?: (invalid|unrecognized) option)/m;
-const DASH_UUTILS = /^error: unexpected argument '-[^']*' found$(?:\n(?!error: ).*)*\n^Usage: (dirname|basename|stat) /m;
-const dashToolErr = (s) => DASH_BSD_GNU.test(s) || DASH_UUTILS.test(s);
-test('stage boundary: 4 the leading-dash option-error oracle accepts BSD / GNU / uutils wording and rejects unrelated errors (pure JS)', () => {
-    const uu = (usage) => `error: unexpected argument '-b' found\n\n  tip: to pass '-b' as a value, use '-- -b'\n\nUsage: ${usage}\n\nFor more information, try '--help'.\n`;
-    assert.ok(dashToolErr('dirname: illegal option -- b\nusage: dirname string [...]\n'));
-    assert.ok(dashToolErr("dirname: invalid option -- 'b'\nTry 'dirname --help' for more information.\n"));
-    assert.ok(dashToolErr(uu('dirname [OPTION] NAME...')));
-    assert.ok(dashToolErr(uu('basename [-z] NAME [SUFFIX]')));
-    assert.ok(dashToolErr(uu('stat [OPTION]... FILE...')));
-    assert.ok(!dashToolErr(uu('cp [OPTION]... SOURCE DEST')), 'Usage line names another tool');
-    assert.ok(!dashToolErr("error: unexpected argument '-b' found\n\n  tip: to pass '-b' as a value, use '-- -b'\n"), 'no Usage line');
-    assert.ok(!dashToolErr(uu('cp [OPTION]... SOURCE DEST') + "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: dirname [OPTION] NAME...\n"), 'cp error block, then a dirname missing-operand block');
-    assert.ok(!dashToolErr('Usage: dirname [OPTION] NAME...\nerror: something else\n'), 'Usage without the unexpected-argument line');
-    assert.ok(!dashToolErr('cp: illegal option -- b\n'), 'BSD wording for another tool');
-    assert.ok(!dashToolErr(''));
-});
-const dashOld = (c, r) => {   // the pre-G1 failure: exit 2 via the EXIT trap, a tool's option error, 0 spawns, no OUT
-    assert.equal(r.status, 2, msg(r));
-    assert.match(r.stderr, /^bytecode-budget: unexpected error \(exit 1\)\nVERDICT NO-VERDICT$/m, msg(r));
-    assert.ok(dashToolErr(r.stderr), msg(r));
-    assert.equal(c.spawns().length, 0, c.spawns().join('\n'));
-    assert.ok(!existsSync(c.out), 'OUT was created');
-};
 const dashRun = (side, text) => (c, r) => {
     verdict(1, 'DIFF')(r);
     assert.equal(r.stderr, '', msg(r));
     assert.equal(c.spawns().length, 7, c.spawns().join('\n'));   // --version, 2 x --v8-options, 1 fn x 2 runs x 2 sides
     assert.equal(readFileSync(join(c.out, 'stage', side, side === 'before' ? 'mod.js' : '-mod.js'), 'utf8'), text);
 };
-const CS_DASH_B = row('4 --before -b.js (a readable file in cwd) -> read as ./-b.js: exit 1 DIFF, 7 spawns, empty stderr, stage/before/mod.js = 211', {
+row('4 --before -b.js (a readable file in cwd) -> read as ./-b.js: exit 1 DIFF, 7 spawns, empty stderr, stage/before/mod.js = 211', {
     prep: (c) => writeFileSync(join(c.cwd, '-b.js'), '211\n'),
     args: (c) => fileO(c, { '--before': '-b.js' }),
     check: dashRun('before', '211\n'),
@@ -347,10 +322,13 @@ row('4 --after -mod.js (driver imports ./-mod.js) -> read as ./-mod.js: exit 1 D
     check: dashRun('after', '212\n'),
 });
 const G1_LINE = '[[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"';
-mutant('M-dash-revert', 'the G1 ./ rewrite line removed', [[G1_LINE, ':']], CS_DASH_B, dashOld);
-// re-carried (PLAN A5 (2): M-trap-off was HOLLOW once G1 made row 4 a clean run): G1 removed AND the EXIT trap off -> rc 1 escapes
-mutant('M-trap-off', 'G1 line removed + EXIT trap condition -> false (rc 1 escapes)', [[G1_LINE, ':'], ['[[ -z $FINAL ]]', 'false']], CS_DASH_B,
-    (c, r) => { assert.equal(r.status, 1, `exit 1 (= DIFF) escapes without the trap: ${msg(r)}`); assert.equal(c.spawns().length, 0, c.spawns().join('\n')); });
+const CS_DASH_SL = row('4 --before -/b.js (a dash-named dir in cwd) -> read as ./-/b.js: exit 1 DIFF, 7 spawns, empty stderr, stage/before/mod.js = 211', {
+    prep: (c) => { mkdirSync(join(c.cwd, '-')); writeFileSync(join(c.cwd, '-', 'b.js'), '211\n'); },
+    args: (c) => fileO(c, { '--before': '-/b.js' }),
+    check: dashRun('before', '211\n'),
+});
+mutant('M-dash-revert', 'the G1 ./ rewrite line removed: `cd -- -` (OLDPWD) trips the -ef guard', [[G1_LINE, ':']], CS_DASH_SL,
+    refuses(() => reEsc("--before: cannot resolve the directory of -/b.js (a symlink before '..'?)")));
 // ext-audit (B1e): a dash-led --out is a supported DIR name (read as ./-o9, never as an option), so this is a clean run
 row('4 adversarial: --out -o9 (leading dash) in ref mode -> exit 1 DIFF, 7 spawns, report.txt + raw/ + stage/ under cwd/-o9, out line <cwd>/-o9', {
     args: (c) => refO(c, { '--out': '-o9' }),

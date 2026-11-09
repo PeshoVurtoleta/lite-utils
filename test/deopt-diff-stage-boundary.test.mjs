@@ -553,7 +553,7 @@ const CS_LIT = row("13 A6 blocker 2: --module ':x.js' (a tracked symlink -> othe
 mutant('M-literal-off', 'git --literal-pathspecs -C -> git -C', [['git --literal-pathspecs -C "$REPO" ls-tree', 'git -C "$REPO" ls-tree']], CS_LIT, (c, r) => assert.equal(c.spawns(), 8, msg(r)));
 // G1: a dash-led --before / --after / --driver is a name, never an option (read as ./NAME)
 const G1_LINE = '  [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"\n';
-const CS_G1 = row('13 G1: --before -b.txt --after -trace.txt --driver -drv.js (cwd-relative, dash-led) -> exit 1 DIFF, 8 spawns, empty stderr, staged as -trace.txt + -drv.js', {
+row('13 G1: --before -b.txt --after -trace.txt --driver -drv.js (cwd-relative, dash-led) -> exit 1 DIFF, 8 spawns, empty stderr, staged as -trace.txt + -drv.js', {
     prep: (c) => {
         c.dash = join(c.dir, 'dash'); mkdirSync(c.dash);
         writeFileSync(join(c.dash, '-b.txt'), T_R1); writeFileSync(join(c.dash, '-trace.txt'), T_R2); writeFileSync(join(c.dash, '-drv.js'), "import './-trace.txt';\n");
@@ -569,7 +569,27 @@ const CS_G1 = row('13 G1: --before -b.txt --after -trace.txt --driver -drv.js (c
         assert.deepEqual(files(join(c.out, 'stage')), ['after/-drv.js', 'after/-trace.txt', 'before/-drv.js', 'before/-trace.txt']);
     },
 });
-mutant('M-dash-revert', 'the G1 ./ line removed', [[G1_LINE, '']], CS_G1, (c, r) => { assert.equal(r.status, 2, msg(r)); assert.equal(c.spawns(), 0, msg(r)); });
+// Since U2 the lib's own `--` guards make a `-b.txt` name safe without G1, so M-dash-revert rides the `-/` row: bash reads
+// the `cd -- -` of the dirname `-` as OLDPWD (both OLDPWD behaviours end at stage.sh's -ef guard)
+const CS_G1_SL = row('13 G1: --before -/b.js (a dash-named dir, cwd-relative) -> read as ./-/b.js: exit 1 DIFF, 8 spawns, empty stderr, staged as trace.txt + drv.js', {
+    prep: (c) => {
+        c.dash = join(c.dir, 'dash'); mkdirSync(join(c.dash, '-'), { recursive: true });
+        writeFileSync(join(c.dash, '-', 'b.js'), T_R1); writeFileSync(join(c.dash, 'trace.txt'), T_R2); writeFileSync(join(c.dash, 'drv.js'), "import './trace.txt';\n");
+    },
+    cwd: (c) => c.dash,
+    args: (c) => [...flat({ '--before': '-/b.js', '--after': 'trace.txt', '--driver': 'drv.js', '--out': c.out }), ...TAIL(c)],
+    check: (c, r) => {
+        verdict(r, 1, 'DIFF');
+        assert.equal(c.spawns(), 8, c.log().join('\n'));
+        assert.equal(r.stderr, '', msg(r));
+        assert.equal(has(r, '    before=0 after=1  [add@TURBOFAN_JS] deopt-eager (not a Smi)'), 1, msg(r));
+        assert.deepEqual(files(join(c.out, 'stage')), ['after/drv.js', 'after/trace.txt', 'before/drv.js', 'before/trace.txt']);
+    },
+});
+mutant('M-dash-revert', 'the G1 ./ line removed: `cd -- -` (OLDPWD) trips the -ef guard', [[G1_LINE, '']], CS_G1_SL, (c, r) => {
+    assert.equal(r.status, 2, msg(r)); assert.equal(c.spawns(), 0, msg(r));
+    assert.match(r.stderr, /--before: cannot resolve the directory of -\/b\.js/, msg(r));
+});
 
 // Q-DD6a (i): U1 / U2 in file and ref mode, U3 (non-ASCII module + ASCII driver), U2 under a UTF-8 locale (the root's
 // LC_ALL=C still decides [:print:]), and an ASCII control that runs
