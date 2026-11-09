@@ -19,7 +19,14 @@
 #   --repo DIR       ref mode: the git repo (default: the repo around the current directory)
 #   --node BIN       node binary (default: $NODE, else node)
 #   --v8-flags STR   extra V8 flags for BOTH sides, e.g. "--max-maglev-inlined-bytecode-size=120"
+#                    Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never
+#                    --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot
+#                    / file flags. Refused, exit 2 at the latest after one --v8-options read and before any
+#                    measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
+#                    --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
 #   --out DIR        artifact dir (default: $OUTDIR, else $TMPDIR/inl-diff-<timestamp>); always kept
+#                    Must be new or empty: a symlinked, non-writable or non-empty raw/ dec/ bud/ ms/ stage/ is refused, exit 2.
+#                    A refusal in ref / file mode can leave staged files in stage/, and a rerun needs a fresh --out.
 #   --no-bytecode    skip the --print-bytecode length probe for each <fn>
 #   --self-test      check the normalizer / multiset / guard on canned trace text, then exit
 #
@@ -36,6 +43,7 @@
 #     --only-fn gives one diff per <fn>.
 #   * Null control: all before runs must match each other, and all after runs, else NO-VERDICT.
 #   * A driver that exits non-zero, or a tier that prints no trace at all, is NO-VERDICT.
+#   * Driver output glued to a V8 compile line (no newline before it) is NO-VERDICT, exit 2; not checked under --concurrent.
 #
 # Budget report (REPORTED from run 1, NEVER part of the verdict):
 #   * bytecode length of each <fn> (from --print-bytecode) and every limit it crosses;
@@ -191,6 +199,19 @@ only != 1 { print; next }
 index(l, tok) > 0 || u == fn || ((f[1] == "SKIP" || f[1] ~ /^INLINE/) && f[2] == fn) { print }
 '
 
+# raw trace (NUL read as ?) -> prints "glued" if driver text is glued in front of a V8 compile line, else "clean", after the same ANSI +
+# compilation-id strip NORMALIZE_AWK does. No early exit: awk leaving first under pipefail is a SIGPIPE, a fail-open.
+# shellcheck disable=SC2016
+GLUE_AWK='
+{
+  l = $0
+  gsub(/\033\[[0-9;]*[mK]/, "", l)
+  sub(/^\[(ML|TLV):[0-9]+\] */, "", l)
+  if (index(substr(l, 2), "[compiling method ") || index(substr(l, 2), "[completed compiling ")) f = 1
+}
+END { print (f ? "glued" : "clean") }
+'
+
 # @include lib/msdiff.sh
 
 # @include lib/v8probe.sh
@@ -253,6 +274,7 @@ END {
 
 # @include lib/common.sh
 # @include lib/tracked.sh
+# @include lib/v8flags.sh
 
 # ---------------------------------------------------------------------------------------------
 # --self-test: canned node 26 / newer-V8 text through the same awk programs
@@ -333,6 +355,11 @@ EOF
   awk -v fn=f -v want=TF -v tfcum=920 -v mgcum=920 -v scale=1.2 -F '\t' "$BUDGET_AWK" side=before "$d/t4.bud" side=after "$d/t4.bud" >"$d/b4.tsv"
   check "turbo budget model: V8 printed more than the model charged -> MISMATCH" \
     "$(awk -F '\t' '$1=="before"{print $13}' "$d/b4.tsv")" "MISMATCH(model 100 < printed 500)"
+  local fk="$d/fake" rc2
+  mkdir -p "$fk"
+  printf '%s\n' '#!/bin/sh' 'case "$1" in --v8-options) echo "  --turbofan (enable TurboFan)"; echo "        type: bool  default: --turbofan"; echo "  --stack-size (stack size)"; echo "        type: int  default: --stack-size=984"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; -p) echo "v0 (V8 0)"; exit 0 ;; esac' \
+    'for a; do last="$a"; done' 'cat "$last"' >"$fk/node"
+  chmod +x "$fk/node"
   if command -v git >/dev/null 2>&1; then
     local rc out x
     mkdir -p "$d/repo/sub" "$d/alias" "$d/alias2" "$d/sym" "$d/frozen" "$d/frozen3" "$d/frozen4" "$d/after"
@@ -343,9 +370,11 @@ EOF
     ln "$d/repo/Signal.js" "$d/alias/Signal.js"; ln "$d/repo/Signal.js" "$d/alias2/Signal.js"
     ln "$d/repo/Signal.js" "$d/repo/sub/Signal.js"; ln -s ../repo/Signal.js "$d/sym/Signal.js"
     ln -s "$d/repo/Watch.js" "$d/frozen3/Watch.js"; ln "$d/repo/Watch.js" "$d/frozen4/Watch.js"
-    refusal() { # cwd pattern args... -> "rc|lines matching pattern" (--node false: no node is ever spawned)
+    # failnode (the frozen row only): -p and the first --v8-options (v8fl_check) succeed, the second (the lib/v8limits.sh read) exits 1
+    printf '%s\n' '#!/bin/sh' 'case "$1" in -p) echo "v0 (V8 0)" ;; --v8-options) [ ! -e "$0.read" ] || exit 1; : >"$0.read"; echo "  --turbofan (enable TurboFan)"; echo "        type: bool  default: --turbofan" ;; esac' >"$d/failnode"; chmod +x "$d/failnode"
+    refusal() { # cwd pattern args... -> "rc|lines matching pattern" (the fake node answers -p and --v8-options; the driver is never spawned)
       local cwd="$1" pat="$2"; shift 2
-      out=$(cd "$cwd" && "$BASH" "$SELF" --node false "$@" 2>&1) && rc=0 || rc=$?
+      out=$(cd "$cwd" && "$BASH" "$SELF" --node "$fk/node" "$@" 2>&1) && rc=0 || rc=$?
       printf '%s|%s' "$rc" "$(printf '%s\n' "$out" | grep -c -- "$pat" || true)"
     }
     check "file mode: a git-tracked --before is refused (exit 2)" \
@@ -362,17 +391,23 @@ EOF
       "$(refusal "$d" 'Watch.js beside --before is a git-tracked' --before "$d/frozen3/Signal.js" --after "$d/after/Signal.js" --out "$d/o7")" "2|1"
     check "file mode: a hard-linked Watch.js beside --before is refused (cwd in the repo)" \
       "$(refusal "$d/repo" 'Watch.js beside --before is the same file' --before "$d/frozen4/Signal.js" --after "$d/after/Signal.js" --out "$d/o8")" "2|1"
-    out=$(cd "$d/repo" && "$BASH" "$SELF" --node false --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o3" 2>&1) && rc=0 || rc=$?
+    out=$(cd "$d/repo" && "$BASH" "$SELF" --node "$d/failnode" --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o3" 2>&1) && rc=0 || rc=$?
     check "file mode: a frozen copy passes the check; an unexpected failure exits 2, never 1" \
-      "$rc|$(printf '%s\n' "$out" | grep -ci 'frozen' || true)|$(printf '%s\n' "$out" | grep -c 'unexpected error' || true)" "2|0|1"
+      "$rc|$(printf '%s\n' "$out" | grep -ci 'frozen' || true)|$(printf '%s\n' "$out" | grep -c 'cannot run' || true)" "2|0|1"
+    check "options: --node resolving to a builtin (false) is refused (exit 2, named die)" \
+      "$(refusal "$d" 'is not a file on PATH' --node false --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f11")" "2|1"
+    check "options: a newline in an input (--fn) is refused (exit 2, named die)" \
+      "$(refusal "$d" 'a newline is not allowed' --fn $'read.set\nx' --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f3")" "2|1"
+    check "options: a --v8-flags shape token and a non-numeric limit value are refused (exit 2, named dies)" \
+      "$(refusal "$d" 'takes flags only' --v8-flags x.js --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f12a")/$(refusal "$d" 'needs =N' --v8-flags=--max-inlined-bytecode-size=abc --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f12b")" "2|1/2|1"
+    check "--v8-flags: a refused node option (--snapshot-blob) exits 2 with a named die and OUT not created" \
+      "$(refusal "$d" 'must not set --snapshot-blob' --v8-flags=--snapshot-blob=./s --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f2")|$([[ -e "$d/o-f2" ]] && echo present || echo absent)" "2|1|absent"
+    mkdir -p "$d/fw"; printf "export * from './Watch.js';\n" >"$d/fw/Signal.js"
+    check "file mode: a single-quoted ./Watch.js re-export with no Watch.js beside --before is refused (exit 2)" \
+      "$(refusal "$d" 'no Watch.js beside' --before "$d/fw/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f4b")" "2|1"
   else
     check "git available (the file-mode frozen-copy checks need it)" "missing" "present"
   fi
-  local fk="$d/fake" rc2
-  mkdir -p "$fk"
-  printf '%s\n' '#!/bin/sh' 'case "$1" in --v8-options) exit 0 ;; -p) echo "v0 (V8 0)"; exit 0 ;; esac' \
-    'for a; do last="$a"; done' 'cat "$last"' >"$fk/node"
-  chmod +x "$fk/node"
   cp "$d/t1" "$fk/before.trace"; cp "$d/t2" "$fk/same.trace"
   grep -v '^Inlining 0x1d866858' "$d/t1" >"$fk/drop.trace"      # markDownstream no longer inlined into read.set
   printf '%s\n' '[compiling method 0x1 <JSFunction read.set (sfi = 0x2)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]' \
@@ -394,6 +429,25 @@ EOF
   check "ASSUMED fallbacks are the node 26 defaults (TurboFan small 30, Maglev eager 30)" \
     "$(grep 'ASSUMED' "$d/fake-same.trace.out" | grep -o -e ' max-inlined-bytecode-size-small=[0-9]*' -e ' max-maglev-eager-inlined-bytecode-size=[0-9]*' | tr -d '\n')" \
     " max-inlined-bytecode-size-small=30 max-maglev-eager-inlined-bytecode-size=30"
+  check "driver mode (fake node): a SAME run leaves all.turbo.diff.txt at 0 bytes" \
+    "$([[ -f "$d/o-same.trace/all.turbo.diff.txt" ]] && wc -c <"$d/o-same.trace/all.turbo.diff.txt" | tr -d ' ')" 0
+  check "--out: a reused non-empty subdir is refused (exit 2, named die)" \
+    "$(refusal "$d" 'is not empty' --tiers turbo --no-bytecode --fn read.set --out "$d/o-same.trace" "$fk/before.trace" "$fk/same.trace")" "2|1"
+  sed '1s/^/driver text/' "$d/t1" >"$fk/glued.trace"; sed '1s/^/driver text/' "$d/t2" >"$fk/glued2.trace"
+  sed '1s/^/[ML:7] /' "$d/t2" >"$fk/idprefix.trace"
+  check "driver mode (fake node): driver output glued to a compile line is refused (exit 2, named die, not DIFF)" \
+    "$(refusal "$d" 'driver output glued to a V8 compile line' --tiers turbo --no-bytecode --fn read.set --out "$d/o-n2" "$fk/before.trace" "$fk/glued.trace")" "2|1"
+  check "driver mode (fake node): a legal [ML:7] compilation-id prefix is not read as glue" "$(fake before.trace idprefix.trace)" "0|VERDICT SAME"
+  # awk PATH shim: exits 2 on the GLUE program only (keyed on code the live and parked forms share, not on the word "glued")
+  mkdir -p "$d/shim"
+  printf '%s\n' '#!/bin/sh' 'case "$*" in *"index(substr(l, 2)"*) exit 2 ;; esac' "exec \"$(command -v awk)\" \"\$@\"" >"$d/shim/awk"; chmod +x "$d/shim/awk"
+  check "driver mode (fake node): a failing glue scan is refused (exit 2, named die), never read as no glue" \
+    "$(PATH="$d/shim:$PATH"; refusal "$d" 'cannot scan' --tiers turbo --no-bytecode --fn read.set --out "$d/o-scan" "$fk/glued.trace" "$fk/glued2.trace")" "2|1"
+  cat "$d/t1" "$d/bc" >"$fk/bcb.trace"; cat "$d/t2" "$d/bc" >"$fk/bca.trace"
+  "$BASH" "$SELF" --node "$fk/node" --tiers turbo --fn read.set --v8-flags=--max-inlined-bytecode-size=09 --out "$d/o-09" "$fk/bcb.trace" "$fk/bca.trace" \
+    >"$d/o-09.out" 2>&1 && rc2=0 || rc2=$?
+  check "--v8-flags: a leading-zero limit (=09) reads as base 10 in the bytecode report (SAME, no unexpected error)" \
+    "$rc2|$(grep '^VERDICT ' "$d/o-09.out" || true)|$(grep -c 'unexpected' "$d/o-09.out" || true)" "0|VERDICT SAME|0"
 
   # --- 2026-10-30 fixes, each from a real node v26.8.2 trace shape -------------------------------------------
   bud() { # canned-trace tag want fn [tier] -> BUDGET_AWK rows for side=before
@@ -520,6 +574,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+[[ "$FNS$TIERS$V8FLAGS$OUT$NODE_BIN$DRIVER$BEFORE_FILE$AFTER_FILE$REPO${POS[*]-}" != *$'\n'* ]] \
+  || die "--fn / --tiers / --v8-flags / --out / --node / --driver / --before / --after / --repo / driver paths: a newline is not allowed"
 IFS=', ' read -r -a TARGETS <<<"$FNS"
 [[ ${#TARGETS[@]} -gt 0 ]] || die "--fn is empty"
 for t in "${TARGETS[@]}"; do
@@ -529,12 +585,44 @@ done
 IFS=', ' read -r -a TIER_LIST <<<"$TIERS"
 for t in "${TIER_LIST[@]}"; do [[ $t == turbo || $t == maglev ]] || die "unknown tier '$t' (turbo, maglev)"; done
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true
-command -v "$NODE_BIN" >/dev/null 2>&1 || die "node binary not found: $NODE_BIN"
+for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
+  [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
+  g="${f//_/-}"; g="${g#--}"; g="${g%%=*}"; g="${g#no}"; g="${g#-}"
+  case "$g" in
+    max*inlined*bytecode*)
+      [[ "$f" =~ ^--[^=]+=[0-9]{1,9}$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =N (an integer of 1..9 digits)" ;;
+    reserve*inline*budget*)
+      [[ "$f" =~ ^--[^=]+=[0-9]{1,9}(\.[0-9]{1,9})?$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =X (a decimal number, e.g. 1.2)" ;;
+  esac
+done
+NODE_RES=$NODE_BIN
+if [[ "$NODE_BIN" != */* ]]; then NODE_RES=$(command -v -- "$NODE_BIN" 2>/dev/null) || die "node binary not found: $NODE_BIN"; fi
+[[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH (a function, alias or builtin?): $NODE_BIN -> $NODE_RES"
+[[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve the directory of $NODE_RES"
+NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+[[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 
 # ---------------------------------------------------------------------------------------------
 # stage BEFORE / AFTER
 # ---------------------------------------------------------------------------------------------
 OUT="${OUT:-${TMPDIR:-/tmp}/inl-diff-$(date +%Y%m%d-%H%M%S)-$$}"
+for sub in raw dec bud ms stage; do
+  [[ ! -L "$OUT/$sub" ]] || die "--out: $OUT/$sub is a symlink (refused: the writes would follow it)"
+  if [[ -e "$OUT/$sub" ]]; then
+    [[ -d "$OUT/$sub" && -r "$OUT/$sub" && -w "$OUT/$sub" && -x "$OUT/$sub" ]] || die "--out: $OUT/$sub is not a readable, writable directory"
+    n=$(ls -A -- "$OUT/$sub") || die "--out: cannot list $OUT/$sub"
+    [[ -z "$n" ]] || die "--out: $OUT/$sub is not empty (give a new or empty DIR)"
+  fi
+done
+OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
+[[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT ($OUT_UP is not a writable directory)"
+[[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
+# node version + the --v8-flags allowlist: after the read-only preflight (a bad --out stays 0 spawns), before the first write
+NODE_V=$("$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"')
+v8fl_check "$NODE_BIN"
 mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage
 OUT=$(cd "$OUT" && pwd)
 REPORT="$OUT/report.txt"; : >"$REPORT"
@@ -551,7 +639,7 @@ REPORT="$OUT/report.txt"; : >"$REPORT"
 # ---------------------------------------------------------------------------------------------
 TAG=1; [[ $CONCURRENT == 1 ]] && TAG=0   # concurrent compiles interleave: unit attribution is off
 run_trace() { # tier side k driver
-  local flag raw="$OUT/raw/$1.$2.$3.txt"
+  local flag glue raw="$OUT/raw/$1.$2.$3.txt"
   if [[ $1 == turbo ]]; then flag=--trace-turbo-inlining; else flag=--trace-maglev-inlining; fi
   local -a cmd=("$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --trace-opt "$flag")
   [[ $CONCURRENT == 1 ]] || cmd+=(--no-concurrent-recompilation)
@@ -560,7 +648,11 @@ run_trace() { # tier side k driver
     tail -n 20 "$raw" >&2
     die "driver exited non-zero: ${cmd[*]} (in $(dirname "$4"); trace in $raw)"
   fi
-  awk -v tier="$1" -v tag="$TAG" -v dec="$OUT/dec/$1.$2.$3.tsv" -v bud="$OUT/bud/$1.$2.$3.tsv" "$NORMALIZE_AWK" "$raw"
+  if [[ $TAG == 1 ]]; then
+    glue=$(tr '\000' '?' <"$raw" | awk "$GLUE_AWK") || die "cannot scan $raw for driver output glued to a V8 compile line"
+    [[ "$glue" == clean ]] || die "driver output glued to a V8 compile line ($raw): end driver writes with a newline"
+  fi
+  tr '\000' '?' <"$raw" | awk -v tier="$1" -v tag="$TAG" -v dec="$OUT/dec/$1.$2.$3.tsv" -v bud="$OUT/bud/$1.$2.$3.tsv" "$NORMALIZE_AWK"
   touch "$OUT/dec/$1.$2.$3.tsv" "$OUT/bud/$1.$2.$3.tsv"
 }
 
@@ -583,6 +675,7 @@ judge() {
   fi
   if [[ -n $fn ]]; then label="$fn (--only-fn)"; else label="all decision lines"; fi
   say "  $label: $v -- $why  (lines before/after run 1: $nb/$na)"
+  : >"$OUT/$key.$tier.diff.txt"
   if [[ -n "$shown" ]]; then
     printf '%s\n' "$shown" >"$OUT/$key.$tier.diff.txt"
     printf '%s\n' "$shown" | awk 'NR <= 60' | tee -a "$REPORT"
@@ -592,8 +685,7 @@ judge() {
   VERDICT=$(worst "$VERDICT" "$v")
 }
 
-NODE_V=$("$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"')
-say "inlining-budget-diff  node $NODE_V  $(command -v "$NODE_BIN")  (same binary both sides, NODE_OPTIONS stripped)"
+say "inlining-budget-diff  node $NODE_V  $NODE_BIN  (same binary both sides, NODE_OPTIONS stripped)"
 say "before  $DESC_B"
 say "after   $DESC_A"
 if [[ $STAGED == 1 ]] && cmp -s "$DRV_B" "$DRV_A" && cmp -s "$(dirname "$DRV_B")/Signal.js" "$(dirname "$DRV_A")/Signal.js"; then
@@ -684,11 +776,11 @@ if [[ $BYTECODE == 1 ]]; then
   say "=== bytecode length (REPORTED: --print-bytecode, exact name; several values = several functions with that name)"
   probe() { # driver fn
     (cd "$(dirname "$1")" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$2" "$(basename "$1")" 2>&1) | awk -v fn="$2" "$BYTECODE_AWK"
+      --print-bytecode-filter="$2" "$(basename "$1")" 2>&1) | tr '\000' '?' | awk -v fn="$2" "$BYTECODE_AWK"
   }
   cross() { # name op limit before after
     local b=$4 a=$5 ib ia
-    if [[ $2 == "<=" ]]; then ib=$((b <= $3)); ia=$((a <= $3)); else ib=$((b < $3)); ia=$((a < $3)); fi
+    if [[ $2 == "<=" ]]; then ib=$((b <= 10#$3)); ia=$((a <= 10#$3)); else ib=$((b < 10#$3)); ia=$((a < 10#$3)); fi
     if [[ $ib != "$ia" ]]; then printf '      CROSSES %s (%s%s): %s -> %s\n' "$1" "$2" "$3" \
       "$([[ $ib == 1 ]] && echo inside || echo outside)" "$([[ $ia == 1 ]] && echo inside || echo outside)"; fi
   }

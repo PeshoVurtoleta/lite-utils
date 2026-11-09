@@ -60,7 +60,7 @@ elif [[ -n "$BEFORE_FILE$AFTER_FILE" ]]; then
     cp "$f" "$dir/Signal.js"     # the copy IS the freeze: edits to $f during the run cannot leak in
     w="$(dirname "$f")/Watch.js"
     if [[ -f "$w" ]]; then cp "$w" "$dir/Watch.js"
-    elif grep -q '"./Watch.js"' "$dir/Signal.js"; then die "no Watch.js beside $f (Signal.js re-exports it)"; fi
+    elif grep -qE "['\"]\./Watch\.js['\"]" "$dir/Signal.js"; then die "no Watch.js beside $f (Signal.js re-exports it)"; fi
     write_driver "$dir"
     d="$f  sha256/8 $(sha8 "$dir/Signal.js")"
     if [[ $side == before ]]; then DESC_B="$d"; else DESC_A="$d"; fi

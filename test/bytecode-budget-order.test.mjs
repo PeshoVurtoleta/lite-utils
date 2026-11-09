@@ -155,7 +155,7 @@ const REP = '  REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "-
 const STW = 'if [[ $STAGED == 1 ]]; then\n  stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver\n' +
     '  DRV_B_DIR=$(dirname "$DRV_B"); DRV_B_BASE=$(basename "$DRV_B")\n  DRV_A_DIR=$(dirname "$DRV_A"); DRV_A_BASE=$(basename "$DRV_A")\nfi\n';
 const HEADDEF = 'bb_head() { # 1 = the run head after stage_write;';
-const SPAWN = 'GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\nv8fl_check "$NODE_BIN"\n';
+const SPAWN = 'GOT_VER=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\nv8fl_check "$NODE_BIN"\n';
 const OUTIF = '\nif [[ -n "$OUT" ]]; then\n  # refuse before any write:';
 const STCHK = 'if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then\n  stage_check   #';
 const MUTANTS = {

@@ -238,7 +238,7 @@ test('bytecode-budget-awk mutant: tr dropped on the no-out branch -> E3 exits 0 
     { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbawk-m2-'));
     try {
-        const p = variant(dir, BB, 'tr-plain-off', '2>&1) | tr \'\\000\' \'?\' | awk', '2>&1) | awk');
+        const p = variant(dir, BB, 'tr-plain-off', '2>&1) | tr \'\\000\' \'?\' | awk', '2>&1) | cat | awk');
         const g = gate(p, 'E3', { env: mutEnv() });
         assert.equal(g.r.status, 0, g.text);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -269,7 +269,7 @@ const GAP_MUT = [
     ['orphan-digits: the orphan rule matches a digit prefix', COUNT_O, '!hdr && /^Bytecode length: [0-9]+/ { n++ }', 'O1', null],
     ['orphan-digits: a digits-to-the-end orphan rule misses 12x', COUNT_O, '!hdr && /^Bytecode length: [0-9]+$/ { n++ }', 'O3', null],
     ['tr-delete: tr -d NUL on the no-out branch', TR_PLAIN, '2>&1) | tr -d \'\\000\' | awk', 'E5', null],
-    ['tr-off: no tr on the no-out branch', TR_PLAIN, '2>&1) | awk', 'E5', null],
+    ['tr-off: no tr on the no-out branch', TR_PLAIN, '2>&1) | cat | awk', 'E5', null],
     ['tr-delete: tr -d NUL on the --out branch', TEE, '| tee "$OUT/raw/$5" | tr -d \'\\000\'', 'E5', 'out'],
     ['tr-off: no tr on the --out branch', TEE, '| tee "$OUT/raw/$5"', 'E5', 'out'],
     ['orphan-cap: the orphan rule capped like the good rule misses a 10-digit orphan', COUNT_O, '!hdr && /^Bytecode length:/ && length($3) <= 9 { n++ }', 'O4', null],

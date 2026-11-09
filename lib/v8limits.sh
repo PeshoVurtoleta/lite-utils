@@ -1,7 +1,7 @@
 #: lib/v8limits.sh -- this node binary's inlining limits (one `--v8-options` spawn), then --v8-flags overrides.
 #: Reads NODE_BIN V8_EXTRA[@] LIMITS_AWK (lib/v8probe.sh). Sets LIMITS ASSUMED f, defines lim(), and sets
 #: TF_SMALL TF_SMALL_HN TF_ONE TF_CUM SCALE MG_SMALL MG_ONE MG_EAGER MG_CUM (node 26 defaults when unreported).
-LIMITS=$("$NODE_BIN" --v8-options 2>/dev/null | awk "$LIMITS_AWK")
+LIMITS=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$NODE_BIN" --v8-options 2>/dev/null | awk "$LIMITS_AWK") || die "cannot run $NODE_BIN --v8-options"
 for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   case "$f" in --max*inlined*bytecode*=*|--reserve*inline*budget*=*)
     f="${f#--}"; f="${f//_/-}"; LIMITS=$(printf '%s\n%s\n' "$LIMITS" "$f") ;;

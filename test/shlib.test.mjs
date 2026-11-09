@@ -4,7 +4,7 @@
 // (audit/2026-11-07-deopt-diff/argon_reproduction.mjs),
 // never a copy of what the new code prints. Rows:
 //   D1-D4  drift gate (ASSERTION 4) + its must-fail twins (5e570f0 pre-G-SHLIB common.sh, a one-byte-mutated copy)
-//   I1-I5  inlining-budget-diff.sh (shared lib via refuse_live): A1b + A2 refuse (exit 2, 0 node spawns); the same
+//   I1-I5  inlining-budget-diff.sh (shared lib via refuse_live): A1b + A2 refuse (exit 2, IBD_PRE node spawns); the same
 //          two rows do NOT refuse on the 5e570f0 (git history) ibd
 //   I6     (b50 N1) A1a is refused on ibd (it includes lib/tracked.sh); I6t twin: the bd0192f ibd does not refuse
 //   I6f    fallback build: ibd built WITHOUT its tracked.sh include still refuses A1a (common.sh's is_tracked is
@@ -233,28 +233,30 @@ function a2Fixture(broken) {  // argon A2: Signal.js tracked in repo/, hard link
     return { d, args: ['--node', fakeNode(), '--fn', 'm0', '--out', join(d, 'out'), '--before', join(d, 'frz', 'Signal.js'), '--after', join(d, 'repo', 'after', 'Signal.js')] };
 }
 const IBD = join(ROOT, 'inlining-budget-diff.sh');
-// null iff the script refuses the A1b row the specified way (exit 2, "git-tracked" die, 0 node spawns)
+// Q-IBD-7: every lib/modes.sh refusal of ibd now comes after the hoisted checks, 2 node spawns (-p, one --v8-options)
+const IBD_PRE = 2;
+// null iff the script refuses the A1b row the specified way (exit 2, "git-tracked" die, IBD_PRE node spawns)
 function a1bVerdict(script) {
     const f = a1bFixture(); const r = runScript(script, f.d, f.args);
-    if (r.rc !== 2 || r.spawns !== 0 || !/--before is a git-tracked working-tree file \(/.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+    if (r.rc !== 2 || r.spawns !== IBD_PRE || !/--before is a git-tracked working-tree file \(/.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
     return null;
 }
 function a2Verdict(script) {
     const f = a2Fixture(true); const r = runScript(script, f.d, f.args);
-    if (r.rc !== 2 || r.spawns !== 0 || !/--before: git failed while checking whether /.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+    if (r.rc !== 2 || r.spawns !== IBD_PRE || !/--before: git failed while checking whether /.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
     return null;
 }
 
 // ---------------------------------------------------------------- I: inlining-budget-diff via the shared lib
-test('I1 ibd A1b (relative link inside a symlinked dir -> a tracked file): exit 2 "git-tracked", 0 node spawns', { skip }, () => {
+test('I1 ibd A1b (relative link inside a symlinked dir -> a tracked file): exit 2 "git-tracked", IBD_PRE node spawns', { skip }, () => {
     assert.equal(a1bVerdict(IBD), null);
 });
-test('I2 ibd A2 (`[broken` .git/config around --after, hard-linked --before): exit 2 "git failed while checking whether", 0 node spawns', { skip }, () => {
+test('I2 ibd A2 (`[broken` .git/config around --after, hard-linked --before): exit 2 "git failed while checking whether", IBD_PRE node spawns', { skip }, () => {
     assert.equal(a2Verdict(IBD), null);
 });
-test('I3 ibd A2 control: healthy repo around --after -> the hard link is refused ("is the same file as the live"), 0 spawns', { skip }, () => {
+test('I3 ibd A2 control: healthy repo around --after -> the hard link is refused ("is the same file as the live"), IBD_PRE spawns', { skip }, () => {
     const f = a2Fixture(false); const r = runScript(IBD, f.d, f.args);
-    assert.equal(r.rc, 2, r.out); assert.equal(r.spawns, 0); assert.match(r.out, /is the same file as the live/);
+    assert.equal(r.rc, 2, r.out); assert.equal(r.spawns, IBD_PRE); assert.match(r.out, /is the same file as the live/);
 });
 test('I4 twin: the 5e570f0 (git history) ibd does NOT refuse the A1b row (gets past refuse_live: node spawned, no refusal text)', { skip: HSKIP() }, () => {
     const f = a1bFixture(); const r = runScript(hist().ibd, f.d, f.args);
@@ -281,20 +283,22 @@ function a1aFixture() {
         `${d}/ext/L/../trace.txt`,
         '--after', join(d, 'after', 'trace.txt')] };
 }
-// null iff the script refuses the A1a row (exit 2, "git-tracked" die, 0 node spawns)
+// null iff the script refuses the A1a row (exit 2, "git-tracked" die, IBD_PRE node spawns)
 function a1aVerdict(script) {
     const f = a1aFixture(); const r = runScript(script, f.d, f.args);
-    if (r.rc !== 2 || r.spawns !== 0 || !/--before is a git-tracked working-tree file \(/.test(r.out)) {
+    if (r.rc !== 2 || r.spawns !== IBD_PRE || !/--before is a git-tracked working-tree file \(/.test(r.out)) {
         return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
     }
     return null;
 }
 // the script gets past refuse_live: no refusal text, node spawned
-function passes(r) {
+function passes(r, floor = 1) {
     assert.doesNotMatch(r.out, REFUSALS, r.out.slice(-400));
-    assert.ok(r.spawns >= 1, `never reached node: exit ${r.rc}: ${r.out.slice(-300)}`);
+    assert.ok(r.spawns >= floor, `never reached node (spawns ${r.spawns}, floor ${floor}): exit ${r.rc}: ${r.out.slice(-300)}`);
 }
-test('I6 ibd A1a (N1): --before ext/L/../trace.txt (L -> repo/m/sub) is refused: exit 2, "git-tracked", 0 ' +
+// an ibd row: the IBD_PRE reads (Q-IBD-7) do not count as reaching node, so the run must spawn past them
+const passesIbd = (r) => passes(r, IBD_PRE + 1);
+test('I6 ibd A1a (N1): --before ext/L/../trace.txt (L -> repo/m/sub) is refused: exit 2, "git-tracked", IBD_PRE ' +
     'node spawns', { skip }, () => {
     // ASSERTION 3: ibd includes lib/tracked.sh, whose is_tracked resolves the directory physically (cd -P), so it
     // inspects repo/m (tracked), not the decoy ext/. On the bd0192f ibd (I6t) this row is not refused.
@@ -303,7 +307,7 @@ test('I6 ibd A1a (N1): --before ext/L/../trace.txt (L -> repo/m/sub) is refused:
 test('I6t twin: the bd0192f (git history) ibd does NOT refuse the A1a row (node spawned, no refusal text)',
     { skip: HSKIP3() }, () => {
     const f = a1aFixture(); const r = runScript(hist3().ibd, f.d, f.args);
-    passes(r);
+    passesIbd(r);
     assert.notEqual(a1aVerdict(hist3().ibd), null);
 });
 test('I6f fallback: ibd built WITHOUT its tracked.sh include still refuses A1a; the same copy with the ' +
@@ -315,7 +319,7 @@ test('I6f fallback: ibd built WITHOUT its tracked.sh include still refuses A1a; 
     const old = privBuild('fb-old', [noInc, ['lib', 'common.sh', null, readFileSync(hist3().common, 'utf8')]]);
     assert.notEqual(a1aVerdict(join(old, 'inlining-budget-diff.sh')), null,
         'the bd0192f common.sh must not refuse A1a');
-    const f = a1aFixture(); passes(runScript(join(old, 'inlining-budget-diff.sh'), f.d, f.args));
+    const f = a1aFixture(); passesIbd(runScript(join(old, 'inlining-budget-diff.sh'), f.d, f.args));
 });
 
 // ---------------------------------------------------------------- I7 / I8: B2b and B2c on ibd (ASSERTIONS 1, 2)
@@ -347,11 +351,11 @@ function b2cFixture(src) {
         'out'),
         '--before', join(d, 'frz', 'before.js'), '--after', join(d, 'repo', 'sub', 'Store.js')] };
 }
-function refusesSame(script, f) {   // null iff exit 2, 0 spawns, "--before is the same file as the live <f.live> ("
+function refusesSame(script, f) {   // null iff exit 2, IBD_PRE spawns, "--before is the same file as the live <f.live> ("
     const r = runScript(script, f.d, f.args);
     const rx = new RegExp(`--before is the same file as the live ${f.live.replace(/[.*+?^${}()|[\]\\]/g,
         '\\$&')} \\(`);
-    if (r.rc !== 2 || r.spawns !== 0
+    if (r.rc !== 2 || r.spawns !== IBD_PRE
         || !rx.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
     return null;
 }
@@ -360,46 +364,47 @@ const B2B_LINE = '  if [[ -L "$AFTER_FILE" && -e "$AFTER_FILE" ]]; then\n'
     + '    if top_of "$(dirname -- "$r")" "$f"; then t="$t$TOP_OF"$\'\\n\'; fi\n  fi\n';
 const B2C_TOKEN = ' \\\n      ${AFTER_FILE:+"$top/$(basename -- "$AFTER_FILE")"}; do';
 test('I7 ibd B2b (--after work/F -> repo/sub/F, --before hard link of tracked repo/F, cwd outside): exit 2 ' +
-    '"same file as the live repo/F", 0 spawns', { skip }, () => {
+    '"same file as the live repo/F", IBD_PRE spawns', { skip }, () => {
     assert.equal(refusesSame(IBD, b2bFixture(true)), null);
 });
 test('I7t twin: the bd0192f ibd does NOT refuse the B2b row', { skip: HSKIP3() }, () => {
-    const f = b2bFixture(true); passes(runScript(hist3().ibd, f.d, f.args));
+    const f = b2bFixture(true); passesIbd(runScript(hist3().ibd, f.d, f.args));
     assert.notEqual(refusesSame(hist3().ibd, f), null);
 });
 test('I7c control: the same shape with an independent copy as --before (clean frozen copy) is not refused',
     { skip }, () => {
-    const f = b2bFixture(false); passes(runScript(IBD, f.d, f.args));
+    const f = b2bFixture(false); passesIbd(runScript(IBD, f.d, f.args));
 });
 test('I7m MUTANT B2b line deleted: the B2b row is not refused (exit 0 path: node spawned), the unmutated ' +
     'build refuses it', { skip: skip || (NESTED ? 'nested retention run: mutant skipped (time)' : false) }, () => {
     const out = privBuild('b2b-del', [['lib', 'common.sh', B2B_LINE, '']]);
-    const f = b2bFixture(true); passes(runScript(join(out, 'inlining-budget-diff.sh'), f.d, f.args));
-    assert.equal(refusesSame(IBD, f), null);
+    const f = b2bFixture(true); passesIbd(runScript(join(out, 'inlining-budget-diff.sh'), f.d, f.args));
+    // a fresh fixture: the mutant run left raw/ non-empty under f's --out, which F4 refuses before the row under test
+    assert.equal(refusesSame(IBD, b2bFixture(true)), null);
 });
 test('I8 ibd B2c (--after repo/sub/Store.js, --before frz/before.js hard link of tracked repo/Store.js): exit ' +
-    '2 "same file as the live repo/Store.js", 0 spawns', { skip }, () => {
+    '2 "same file as the live repo/Store.js", IBD_PRE spawns', { skip }, () => {
     assert.equal(refusesSame(IBD, b2cFixture('Store.js')), null);
 });
 test('I8t twin: the bd0192f ibd does NOT refuse the B2c row', { skip: HSKIP3() }, () => {
-    const f = b2cFixture('Store.js'); passes(runScript(hist3().ibd, f.d, f.args));
+    const f = b2cFixture('Store.js'); passesIbd(runScript(hist3().ibd, f.d, f.args));
     assert.notEqual(refusesSame(hist3().ibd, f), null);
 });
 test('I8r residual (accepted by design): a hard link to repo/src/Store.js is NOT refused, on the new and the ' +
     'bd0192f ibd', { skip: HSKIP3() }, () => {
-    for (const root of [IBD, hist3().ibd]) { const f = b2cFixture('src/Store.js'); passes(runScript(root, f.d,
+    for (const root of [IBD, hist3().ibd]) { const f = b2cFixture('src/Store.js'); passesIbd(runScript(root, f.d,
         f.args)); }
 });
 test('I8m MUTANT B2c token dropped: the B2c row is not refused (node spawned), the unmutated build refuses it',
     { skip: skip || (NESTED ? 'nested retention run: mutant skipped (time)' : false) }, () => {
     const out = privBuild('b2c-drop', [['lib', 'common.sh', B2C_TOKEN, '; do']]);
-    const f = b2cFixture('Store.js'); passes(runScript(join(out, 'inlining-budget-diff.sh'), f.d, f.args));
-    assert.equal(refusesSame(IBD, f), null);
+    const f = b2cFixture('Store.js'); passesIbd(runScript(join(out, 'inlining-budget-diff.sh'), f.d, f.args));
+    assert.equal(refusesSame(IBD, b2cFixture('Store.js')), null);   // a fresh fixture, as I7m (F4)
 });
 
 // I7e (b52 reviewer gap): a DANGLING --after symlink. Expected from the modes.sh contract, not from a run: refuse_live
 // runs first and must not trip over it (the B2b guard is `-L && -e`), so the run ends at the "--after not found" die
-// (exit 2, 0 node spawns). The mutant without `-e` resolves the dead chain in live_tops and dies elsewhere ("cannot
+// (exit 2, IBD_PRE node spawns). The mutant without `-e` resolves the dead chain in live_tops and dies elsewhere ("cannot
 // resolve its symlink chain" / a git failure): same exit 2, other text.
 function danglingFixture() {
     const d = mk('b2b-dangling');
@@ -409,14 +414,14 @@ function danglingFixture() {
     return { d, args: ['--node', fakeNode(), '--fn', 'm0', '--out', join(d, 'out'),
         '--before', join(d, 'frz', 'Signal.js'), '--after', join(d, 'work', 'Signal.js')] };
 }
-function danglingVerdict(script) {   // null iff exit 2, 0 spawns, "--after not found: <path>", no symlink-chain die
+function danglingVerdict(script) {   // null iff exit 2, IBD_PRE spawns, "--after not found: <path>", no symlink-chain die
     const f = danglingFixture(), r = runScript(script, f.d, f.args);
-    if (r.rc !== 2 || r.spawns !== 0 || !/--after not found: /.test(r.out) || /symlink chain|git failed/.test(r.out)) {
+    if (r.rc !== 2 || r.spawns !== IBD_PRE || !/--after not found: /.test(r.out) || /symlink chain|git failed/.test(r.out)) {
         return `exit ${r.rc}, spawns ${r.spawns}: ${r.out}`;
     }
     return null;
 }
-test('I7e ibd dangling --after symlink: exit 2 "--after not found", 0 spawns (B2b guard has -e)', { skip }, () => {
+test('I7e ibd dangling --after symlink: exit 2 "--after not found", IBD_PRE spawns (B2b guard has -e)', { skip }, () => {
     assert.equal(danglingVerdict(IBD), null);
 });
 test('I7em MUTANT B2b guard without -e: the dangling --after dies elsewhere, the row is red; the live build is green',
@@ -597,11 +602,11 @@ function dashAfter(t, kind) {
 const SYMCHAIN = /--after: cannot resolve its symlink chain/;
 
 test('L1 A2/A3 ibd: a `-/`-led symlinked --after (relative and absolute target) is no longer refused by a stray die: ' +
-    'exit 2 (ibd\'s own cp failure), 0 node spawns, exactly ONE VERDICT NO-VERDICT, no "symlink chain" text', { skip }, () => {
+    'exit 2 (ibd\'s own cp failure), IBD_PRE node spawns, exactly ONE VERDICT NO-VERDICT, no "symlink chain" text', { skip }, () => {
     for (const kind of ['rel', 'abs']) {
         const f = dashAfter('ibd', kind); const r = runScript(IBD, f.d, f.args, { OLDPWD: decoy() });
         assert.equal(r.rc, 2, `${kind}: ${r.out.slice(-400)}`);
-        assert.equal(r.spawns, 0, kind);
+        assert.equal(r.spawns, IBD_PRE, kind);
         assert.equal(nverd(r), 1, `${kind}: ${r.out.slice(-400)}`);
         assert.match(r.out, /^VERDICT NO-VERDICT$/m);
         assert.doesNotMatch(r.out, /symlink chain|cannot resolve the directory of|git failed while checking/, kind);
@@ -643,12 +648,12 @@ function chainFixture(t) {
     return { d, args: toolArgs(t, d, join(d, 'frz', nm), 'lnk/a'), env: { PATH: `${join(d, 'shim')}:${ENV.PATH}` } };
 }
 test('K1 A2 new die: a symlinked --after whose chain resolve_links cannot finish (shimmed readlink loops it) -> ' +
-    'exit 2, 0 node spawns, "--after: cannot resolve its symlink chain: lnk/a", exactly one VERDICT, on all three roots',
+    'exit 2, IBD_PRE node spawns on ibd (0 on bb / dd), "--after: cannot resolve its symlink chain: lnk/a", exactly one VERDICT, on all three roots',
     { skip }, () => {
     for (const t of Object.keys(TOOLS)) {
         const f = chainFixture(t); const r = runScript(join(ROOT, TOOLS[t][0]), f.d, f.args, f.env);
         assert.equal(r.rc, 2, `${t}: ${r.out.slice(-400)}`);
-        assert.equal(r.spawns, 0, t);
+        assert.equal(r.spawns, t === 'ibd' ? IBD_PRE : 0, t);
         assert.match(r.out, /--after: cannot resolve its symlink chain: lnk\/a/, t);
         assert.equal(nverd(r), 1, `${t}: ${r.out.slice(-400)}`);
     }
@@ -659,7 +664,7 @@ test('K1t twin: the r1 build (resolve_links in $( )) prints the "symlink chain t
         const f = chainFixture(t); const r = runScript(join(mR1(), TOOLS[t][0]), f.d, f.args, f.env);
         assert.match(r.out, /symlink chain too long \(or a loop\) at lnk\/a/, t);
         assert.doesNotMatch(r.out, SYMCHAIN, t);
-        assert.ok(r.spawns > 0 || nverd(r) > 1, `${t}: the run must go on: spawns ${r.spawns}, ${r.out.slice(-400)}`);
+        assert.ok(r.spawns > (t === 'ibd' ? IBD_PRE : 0) || nverd(r) > 1, `${t}: the run must go on: spawns ${r.spawns}, ${r.out.slice(-400)}`);
     }
 });
 
@@ -674,14 +679,14 @@ test('C1 A2 ibd: CDPATH=. and CDPATH=<dir holding frz/> with a clean frozen rela
     'refuse_live passes (node spawned, no "git failed while checking")', { skip }, () => {
     for (const mode of ['dot', 'base']) {
         const f = cdFixture(); const r = runScript(IBD, f.d, f.args, { CDPATH: mode === 'dot' ? '.' : f.cdbase });
-        passes(r); assert.doesNotMatch(r.out, /git failed while checking/, mode);
+        passesIbd(r); assert.doesNotMatch(r.out, /git failed while checking/, mode);
     }
 });
-test('C1t twin: ibd without its `unset CDPATH` line (the r1 root) exits 2, 0 spawns, "git failed while checking ' +
+test('C1t twin: ibd without its `unset CDPATH` line (the r1 root) exits 2, IBD_PRE spawns, "git failed while checking ' +
     'whether frz/Signal.js is tracked"', { skip: mskip }, () => {
     for (const mode of ['dot', 'base']) {
         const f = cdFixture(); const r = runScript(join(mCD(), TOOLS.ibd[0]), f.d, f.args, { CDPATH: mode === 'dot' ? '.' : f.cdbase });
-        assert.equal(r.rc, 2, `${mode}: ${r.out.slice(-400)}`); assert.equal(r.spawns, 0, mode);
+        assert.equal(r.rc, 2, `${mode}: ${r.out.slice(-400)}`); assert.equal(r.spawns, IBD_PRE, mode);
         assert.match(r.out, /git failed while checking whether frz\/Signal\.js is tracked/, mode);
     }
 });
@@ -703,13 +708,13 @@ function fxBeforeTracked() {   // cwd = the repo root, which tracks the plain fi
     return { d: r, args: ibdArgs(d, '-/Signal.js', join(d, 'after', 'Signal.js')) };
 }
 const GITTRACKED = /--before is a git-tracked working-tree file \(/;
-function trackedDie(root, fx) {   // null iff exit 2, 0 spawns, the git-tracked die (OLDPWD set to a decoy `cd -` would pick)
+function trackedDie(root, fx) {   // null iff exit 2, IBD_PRE spawns, the git-tracked die (OLDPWD set to a decoy `cd -` would pick)
     const f = fx(); const r = runScript(root, f.d, f.args, { OLDPWD: decoy() });
-    if (r.rc !== 2 || r.spawns !== 0 || !GITTRACKED.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
+    if (r.rc !== 2 || r.spawns !== IBD_PRE || !GITTRACKED.test(r.out)) return `exit ${r.rc}, spawns ${r.spawns}: ${r.out.slice(-400)}`;
     return null;
 }
 test('D1 A3 ibd before-link: --before -/Signal.js -> ../repo/Signal.js (tracked), cwd outside: "git-tracked" die, ' +
-    '0 spawns', { skip }, () => {
+    'IBD_PRE spawns', { skip }, () => {
     assert.equal(trackedDie(IBD, fxBeforeLink), null);
 });
 test('D1t twin: resolve_links without its `./` prefix (the r2-before build) dies "cannot resolve the directory of" on ' +
@@ -721,7 +726,7 @@ test('D1t twin: resolve_links without its `./` prefix (the r2-before build) dies
     assert.notEqual(trackedDie(join(mRL(), TOOLS.ibd[0]), fxBeforeLink), null);
     assert.notEqual(trackedDie(join(mRLK(), TOOLS.ibd[0]), fxBeforeLink), null, 'readlink `--` mutant survived');
 });
-test('D2 A3 ibd before-tracked: cwd = repo root tracking -/Signal.js, --before -/Signal.js: "git-tracked" die, 0 spawns',
+test('D2 A3 ibd before-tracked: cwd = repo root tracking -/Signal.js, --before -/Signal.js: "git-tracked" die, IBD_PRE spawns',
     { skip }, () => {
     assert.equal(trackedDie(IBD, fxBeforeTracked), null);
 });

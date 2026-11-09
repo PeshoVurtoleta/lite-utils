@@ -33,7 +33,9 @@ const GITC = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', '-
 
 function cleanEnv() {   // no editor vars, none of the six GIT_* location vars, global / system git config off
     const e = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS', 'GIT_CONFIG_PARAMETERS']) delete e[k];
+    // FILLERS A6: the node vars as test/deopt-diff.test.mjs:36-37; NODE_V8_COVERAGE = undefined, not a delete (node re-inserts a missing key)
+    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'GIT_CONFIG_PARAMETERS']) delete e[k];
+    e.NODE_V8_COVERAGE = undefined;
     return e;
 }
 function git(cwd, ...a) {

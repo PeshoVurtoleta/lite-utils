@@ -49,8 +49,12 @@ function variant(dir, name, from, to) {
 }
 
 // Same, but replaces EVERY occurrence (at least one); then each [from, to] of `extra` once (anchor exactly once).
-function variantAll(dir, name, from, to, extra = []) {
+function variantAll(dir, name, from, to, extra = [], first = []) {
     let src = readFileSync(SCRIPT, 'utf8');
+    for (const [a, b] of first) {   // replace-alls that must run before `from` (a text that contains `from`)
+        assert.ok(src.includes(a), `mutant ${name}: first-pass anchor not found`);
+        src = src.split(a).join(b);
+    }
     assert.ok(src.includes(from), `mutant ${name}: anchor not found`);
     for (const [a, b] of extra) {
         const n = src.split(a).length - 1;
@@ -327,13 +331,14 @@ test('bytecode-budget teeth: a script that leaks NODE_OPTIONS to the probe is ca
         const good = gate('add=6', NV, {}, SCRIPT, { env });
         assert.equal(good.r.status, 0, good.r.stdout + good.r.stderr);
         // G-ENV (PLAN-b42-genv A4): the top unset line strips NODE_OPTIONS for every spawn, so the mutant also deletes it.
-        // Without that delete NODE_OPTIONS never reaches the fake; the mutant still exits 2, but only because the edit also
-        // breaks v8fl_read's `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE` ("cannot run ... --v8-options"): census.txt b45-genv-bb
-        const p = variantAll(dir, 'leak-node-options', 'env -u NODE_OPTIONS ', '', [[TOPLINE, '']]);
+        // FILLERS task 4: the two-`-u` form is collapsed FIRST. Deleting `env -u NODE_OPTIONS ` from it would leave a bare
+        // `-u NODE_COMPILE_CACHE "$NODE_BIN"`, which dies on `-u: command not found` and passes this row for the wrong reason.
+        const p = variantAll(dir, 'leak-node-options', 'env -u NODE_OPTIONS ', '', [[TOPLINE, '']],
+            [['env -u NODE_OPTIONS -u NODE_COMPILE_CACHE ', 'env -u NODE_OPTIONS ']]);
         const bad = gate('add=6', NV, {}, p, { env });
         assert.equal(bad.r.status, 2, 'mutant survived: ' + bad.r.stdout + bad.r.stderr);
-        // the fake node's --version arm exits 7 too, so the script dies at the version probe (the leak path, not the
-        // collateral --v8-options break)
+        // the fake node's --version arm exits 7 too, so the script dies at the version probe (the leak path, not a
+        // broken `-u` command)
         assert.match(bad.r.stdout + bad.r.stderr, /cannot run .* --version$/m);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });

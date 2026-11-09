@@ -7,6 +7,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- FILLERS (bb audit B4b / N1 / B4a; ibd inherits the limits read). `bytecode-budget.sh`: a failure of the
+  driver-output pipeline (awk, tr or tee, not the driver) is NO-VERDICT, exit 2, naming the stage: `cannot read driver
+  output in run <k> (<tee|tr|awk> exited <rc>)`; precedence as deopt-diff (awk > tr > tee > driver rc). The --version
+  and the --v8-options limits reads strip NODE_COMPILE_CACHE. A failed limits read is a named die, exit 2, `cannot run
+  <bin> --v8-options` (bytecode-budget and inlining-budget-diff), no longer "unexpected error". bytecode-budget no
+  longer lists the 3 limits it does not use (cumulative inlined size, reserve-inline-budget scale factor, maglev
+  cumulative) as ASSUMED; inlining-budget-diff keeps all nine. Tests: test/bytecode-budget-fillers.test.mjs added; the
+  no-exit-trap self-test mutant is retired (the final-trap rows cover ibd's trap); the A4 parity row is re-pinned to
+  the post-FILLERS ibd root.
+- `inlining-budget-diff.sh` U1 (MD-54; audit F1, F2, F3, F4, F4b, F11, F12, F15, N1 tr, N2). U1 lifts MD-3 for ibd (MD-54). Refused exit 2 with a named
+  die, before any measured run: a `--node` that is a builtin, directory or non-executable file, resolved once to an
+  absolute path (F1, F11); a newline in `--fn` / `--tiers` / `--v8-flags` / `--out` / `--node` / `--driver` /
+  `--before` / `--after` / `--repo` / a driver path (F3); a `--v8-flags` token that is not `--` plus a letter, and a
+  `max*inlined*bytecode*` / `reserve*inline*budget*` flag without a numeric `=N` (F12); a `--v8-flags` flag outside the
+  `--v8-options` allowlist (lib/v8flags.sh, now included; one `--v8-options` read, after the --out preflight, before
+  the first write) (F2, F15); a symlinked, non-writable or non-empty raw/ dec/ bud/ ms/ stage/, an uncreatable --out
+  and an unwritable report.txt (F4 preflight, 0 spawns); a `'./Watch.js'` single-quoted re-export with no Watch.js
+  beside a file-mode input (F4b, lib/modes.sh grep). After the traced run: driver output glued to a V8 compile line is
+  refused exit 2 (N2, not under `--concurrent`). judge() always writes the diff file, so a SAME run leaves a 0-byte `all.<tier>.diff.txt`. `NUL` reads as
+  `?` in the trace and the bytecode probe (N1 tr). A `=09` limit reads base 10. A refusal in ref / file mode can
+  leave staged files in stage/ and a rerun needs a fresh --out; modes.sh refusals take 2 node spawns (Q-IBD-7). Known
+  limits: LEDGER #76.
+- `inlining-budget-diff.sh --self-test`: 43 -> 54 checks; test/ext-audit-inl.test.mjs added (T-U1); the A4 parity row is
+  re-pinned to the U1 root (the bd1f283 history row retired, Q-IBD-4 (a)); test/build.test.mjs V8FL roster now
+  includes inlining-budget-diff (MD-54); test/shlib.test.mjs `IBD_PRE = 2` (ibd modes.sh refusals spawn 2).
+  Follow-up (LiteSignal): its vendored bench copy needs the new root, and its test/94 CHECKS moves 43 -> 54.
 - Package scaffold: private, `node:test` only, no dependencies.
 - `build.sh` + `lib/` + `src/`: shipped scripts are generated from `src/` + `lib/` fragments;
   `test/build.test.mjs` fails on drift (fresh build vs committed root script), on a stray root
@@ -14,7 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `src/build.sh`, an OUTDIR of `src/` or `lib/`, a `bash -n` failure, a later script failing) does not
   abort closed (exit 2, file named on stderr, no output changed, no temp leftovers). The drift check
   also compares the exec bits.
-- `test/inlining-budget-diff.test.mjs`: `--self-test` exact count (43), an unmodified-copy
+- `test/inlining-budget-diff.test.mjs`: `--self-test` exact count (43; 54 after U1), an unmodified-copy
   baseline, and 12 mutant rows that must each turn the self-test red.
 - `bytecode-budget.sh`: V8 bytecode length of named functions on one node binary. Report mode
   (`--fn A,B`, exit 0 REPORTED) or gate mode (`--max fn=N[,fn=N]` plus a required

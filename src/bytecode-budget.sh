@@ -118,6 +118,10 @@
 # NO-VERDICT reasons, one line per fn ("  <fn>: NO-VERDICT -- <reason>"):
 #   node version mismatch: <bin> --version is <v>, the maxima are for <v>     (gate mode)
 #   node version mismatch: <bin> --version is <v>, --node-version is <v>      (report and diff mode)
+#   cannot read driver output in run <k> (<tee|tr|awk> exited <rc>)
+#                                    (in one run the first failure in the order awk > tr > tee > driver exit is named:
+#                                    a failed awk before a failed tr, a failed tr before a failed tee, a failed tee
+#                                    before the driver exit)
 #   driver exited <rc> in run <k>
 #   null control: run <k> differs from run 1 (run <k>: <line> | run 1: <line>)
 #   no function named '<fn>' in run 1 (not compiled: never called / lazy, or no such name)
@@ -173,7 +177,7 @@
 #   walk cannot finish (a race) exits 2 too: "--after: cannot resolve its symlink chain: FILE" (--after is a symlink)
 #   and "cannot resolve the directory of P (a link in the symlink chain of ARG)" (ARG = the --before value).
 # Not detected: a driver that reaches the live module by another path (an absolute path, or a package
-#   self-reference) instead of './NAME'; and a hard link of --before to a tracked file that is not --after,
+#   self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a hard link under another name or in a subdirectory
 #   stays undetected); a tracked link inside --before's symlink chain (only --before and the end of its chain are
 #   checked, not the intermediate hops); and a .git that git does not recognise as a
@@ -229,6 +233,7 @@ END { bad = n - good; print n + 0, bad + 0, (out == "" ? "-" : out) }
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 LINE_RE='^0 [0-9]+ [0-9]+ (-|[0-9]+(,[0-9]+)*)$'   # a probe line "<driver exit> <count> <bad> <lengths>" of a clean run
+ST_RE='^@ ([0-9]+)( [0-9]+)? ([0-9]+) ([0-9]+)$'   # the probe pipeline's last line: "@ node [tee] tr awk" (tee only with --out)
 
 vworst() { local a; for a in NO-VERDICT OVER; do if [[ $1 == "$a" || $2 == "$a" ]]; then echo "$a"; return 0; fi; done; echo "$1"; }
 
@@ -246,6 +251,7 @@ judge() {
   k=0
   for line in "$@"; do
     k=$((k + 1)); rc="${line%% *}"
+    if [[ "$rc" == *:* ]]; then JWHY="cannot read driver output in run $k (${rc%%:*} exited ${rc#*:})"; return 0; fi
     if [[ "$rc" != 0 ]]; then JWHY="driver exited $rc in run $k"; return 0; fi
   done
   k=0
@@ -878,7 +884,7 @@ bb_head() { # 1 = the run head after stage_write; 0 = the mismatch exit (a ref /
 # node version (S-6): checked before any probe
 # ---------------------------------------------------------------------------------------------
 # --- every pre-spawn refusal is above this line (so are raw/ and the empty report.txt; raw/before, raw/after and stage/ are made below, after the version check); spawns start here: --version, --v8-options (the --v8-flags allowlist: refusals exit 2 here, 0 measured runs), --v8-options (limits), then the runs ---
-GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
+GOT_VER=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 v8fl_check "$NODE_BIN"
 if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; elif [[ $DIFFMODE == 1 ]]; then MODE="diff"; else MODE="report"; fi
 if [[ $STAGED == 1 ]]; then MODE="diff ($STAGE_MODE)"; fi
@@ -903,6 +909,7 @@ bb_head 1
 # limits (from this node binary, then --v8-flags overrides)
 # ---------------------------------------------------------------------------------------------
 # @include lib/v8limits.sh
+a=""; for f in $ASSUMED; do case "$f" in max-inlined-bytecode-size-cumulative=*|reserve-inline-budget-scale-factor=*|max-maglev-inlined-bytecode-size-cumulative=*) ;; *) a="$a $f" ;; esac; done; ASSUMED=$a
 for f in TF_SMALL TF_SMALL_HN TF_ONE MG_EAGER MG_SMALL MG_ONE; do
   [[ "${!f}" =~ ^[0-9]{1,9}$ ]] || die "inlining limit $f='${!f}' is not an integer (check --v8-flags)"
   printf -v "$f" '%s' "$((10#${!f}))"
@@ -917,15 +924,21 @@ say ""
 # probe: fn x runs, each reduced to "<driver exit> <count> <bad> <lengths>"
 # ---------------------------------------------------------------------------------------------
 probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the raw output goes to $OUT/raw/<rawrel>
-  local rc=0 line
+  local rc line st n t r a
   if [[ -n "$OUT" ]]; then
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
       --print-bytecode-filter="$1" "./$4" 2>&1) | tee "$OUT/raw/$5" | tr '\000' '?' \
-      | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
   else
     line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" 2>&1) | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK") || rc=$?
+      --print-bytecode-filter="$1" "./$4" 2>&1) | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
   fi
+  # the pipeline's exits ride on a last "@ node [tee] tr awk" line, so a tee / tr / awk failure is never reported as the driver's
+  st=${line##*$'\n'}
+  if [[ "$line" == *$'\n'* ]]; then line=${line%$'\n'*}; else line=""; fi
+  [[ "$st" =~ $ST_RE ]] || die "cannot read the exit status of the run of $3/$4 (got '$st')"
+  n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]# }; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
+  if [[ $a != 0 ]]; then rc="awk:$a"; elif [[ $r != 0 ]]; then rc="tr:$r"; elif [[ -n $t && $t != 0 ]]; then rc="tee:$t"; else rc=$n; fi
   printf '%s %s\n' "$rc" "$line"
 }
 

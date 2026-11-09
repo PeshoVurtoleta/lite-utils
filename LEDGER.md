@@ -169,13 +169,13 @@ values was out of scope; the maintainer ruled "Record as known". See #66. Eviden
 **#21 Node binary re-looked-up after each `cd` (FAIL-OPEN; inlining F1).** Before and after could run different
 binaries. Fix: node is resolved once to an absolute path; `--node` naming a builtin, directory or non-executable
 file is refused exit 2 before any spawn (inlining F11 is the same class). Evidence: CHANGELOG "external-audit group
-(bb, dd)" lines 693, 696; audit FINDINGS F1, F11 (local, untracked).
+(bb, dd)" lines 693, 696; audit FINDINGS F1, F11 (local, untracked). ibd: closed by U1 (F1 / F11).
 
 **#22 `--v8-flags` unchecked passthrough (FAIL-OPEN; F2, F15, A3, A5, B19, D4).** Flags that load code (`--require*`,
 `--import*`, `--loader*`, `--snapshot-blob`), read files (`--env-file*`, `--experimental-config-file*`), run code
 (`--eval*`, `--print*`) or write files ran inside the measured process. Fix: prefix-matched refusal before any spawn
 (MD-39, 40, 42, 43, 44, 45), later the runtime allowlist (MD-50, see #6). Evidence: CHANGELOG "B-four" lines 787,
-788; "allocation-diff.sh, external-audit group" line 827; audit FINDINGS (local, untracked).
+788; "allocation-diff.sh, external-audit group" line 827; audit FINDINGS (local, untracked). ibd: closed by U1 (F2 / F15).
 
 **#23 Malformed `--v8-flags` entries accepted.** `---x` and `--=1` passed (ic-diff); each flag must now be `--` plus a
 letter. Related: a non-numeric inlining limit in `--v8-flags` died only after spawns (F12). Evidence: CHANGELOG
@@ -364,6 +364,12 @@ Related, burst 27: a test file died silently (OOM and timeouts ruled out; cause 
 signal and sync files buffer events, so a death-reporter plus death-signature gate (7 tests) was added. Evidence:
 HISTORY b19, b27; `.handoff/evidence/b27/u2-file-death-investigation.md` (local, untracked); CHANGELOG lines 663-670.
 
+**#78 npm exports NODE into test children; a PATH-resolved fake node passes under `node --test` (b55).** The roots
+default `--node` to `$NODE`, which npm sets for its scripts, so a row that puts a fake `node` first on PATH ran the
+real node under `npm test` and failed only there (test/ext-audit-inl.test.mjs:285, T-U1, `PATH=bin:`). Rule: a test's cleanEnv for a root
+drops `NODE` (its cleanEnv is at test/ext-audit-inl.test.mjs:57); run each new row under both `node --test` and
+`npm test`.
+
 ---
 
 ## E. Process lessons
@@ -401,6 +407,16 @@ merely mentions a history-changing verb via heredoc/echo is denied as a whole: u
 3-4-criterion sweeps returned only SPLIT (burst 17); one criterion per sweeper, orchestrator saves tables. The
 maintainer strips `Co-Authored-By` from `.handoff/COMMIT_MSG*.txt` (burst 29). Evidence: `CLAUDE.md` (Git section);
 memory `haiku-sweeper-one-criterion`, `commit-msg-no-coauthor` (local, untracked).
+
+**#75 ibd U1 reject lessons (b52-b55).** (a) Exit-status overload: a tool error was read as "no glue" (the glue scan's
+failure and its "clean" answer shared one status); the scan now prints `clean` / `glued` and a scan failure dies exit 2.
+(b) Base-8 arithmetic on a user digit string: `=09` in `(( ))` is an error; the bytecode report now reads the limit
+as `10#$3`. (c) A ruling whose premise was false (Q-IBD-3 (a), "a rerun works", REVIEW-b1-r1 blocker 3) and a ruling
+option that misstated its model (Q-IBD-6 as first worded misstated bb's order; corrected by the maintainer the same
+sitting): read the cited script before writing "as X does" into option text. (d) Hoist past an unvetted write: moving a
+spawn above a write must carry the write's failure modes into the preflight; addendum A1's "Nothing else moves" missed
+it (REVIEW-b1r-r2 blocker 1). Evidence: `.handoff/evidence/u1/REVIEW-b1-r1.md`, `REVIEW-b1r-r2.md`,
+`REVIEW-b1r2-r1.md` (local, untracked).
 
 ---
 
@@ -471,19 +487,43 @@ Q-IBD-2). Test-gate lesson: a plan's "anchors stay" claim checked only one subst
 sibling anchor (M-prefix-match) displaced by the spec's own text.
 Evidence: `.handoff/PLAN-b50-bbawk.md` (A1, A2), `.handoff/evidence/b52-bbawk/` (local, untracked).
 
-**#74 G-FILL-DD (b54): dd audit argon 2026-11-07 A6.2-A6.6 dispositions (A6.4 PARTLY closed).**
+**#74 G-FILL-DD (b54): dd audit argon 2026-11-07 A6.2-A6.6 dispositions (A6.4 closed by FILLERS B2).**
 A6.2 lib/common.sh:82,85 NOT edited: no reach in dd or bb (lib/stage.sh:28 normalizes a dash-led path to
 ./NAME; refuse_live is reached in dd only via lib/stage.sh:62, after that line), and an edit would move all 5
 roots. ibd's unnormalized path (lib/modes.sh:54, `refuse_live "$BEFORE_FILE"`) is open for ibd triage. A6.3
 lib/v8flags.sh:25 unchanged (its `env -u` strips only NODE_OPTIONS and NODE_COMPILE_CACHE): the top unsets at
-src/bytecode-budget.sh:194 and src/deopt-diff.sh:229 cover the shipped paths, the other two includers also
-unset at the top (src/allocation-diff.sh:125, src/ic-diff.sh:137); standalone sourcing is test-only. A6.5 /
+src/bytecode-budget.sh:194 and src/deopt-diff.sh:229 cover bb and dd, the other two b54 includers also
+unset at the top (src/allocation-diff.sh:125, src/ic-diff.sh:137); ibd, a later includer, has no such unset; standalone sourcing is test-only. A6.5 /
 A6.6 CLOSED as NOT REPRODUCED: the text argon cites never existed. At the audited 5e570f0,
 test/deopt-diff-stage-boundary.test.mjs:551 is a `mutant(` row, test/deopt-diff.test.mjs:16 is an import and
 CHECKS is the constant 99 at :20, not a 95-row array; `git log --all -S` finds no `33 checks` / `27 teeth`,
-and no version of test/deopt-diff.test.mjs has a trailing `// N` ordinal. A real count drift of that class is
-OPEN, in no task: the test/deopt-diff.test.mjs:20 comment sums 53 + 21 + 13 = 87 rows for CHECKS = 99. A6.4
-PARTLY closed: the env strip is done for test/deopt-diff-stage.test.mjs and test/deopt-diff-live.test.mjs
-(harness only, no gate); test/deopt-diff-boundary.test.mjs:24 waits for the FILLERS B2 batch, and
-test/deopt-diff-stage-boundary.test.mjs:36 has the same gap (found by the b54 review, in no task yet).
+and no version of test/deopt-diff.test.mjs has a trailing `// N` ordinal. A6.4
+was closed in two steps: the env strip for test/deopt-diff-stage.test.mjs and test/deopt-diff-live.test.mjs (harness
+only, no gate), then FILLERS B2 (ADDENDUM A6) for test/deopt-diff-boundary.test.mjs and
+test/deopt-diff-stage-boundary.test.mjs (the latter found by the b54 review).
 Evidence: `.handoff/PLAN-b54-audit-fillers.md` (local, untracked).
+
+**#76 ibd U1 (b52-b55): known limits; only the F7 / F5 shapes of (3) are OPEN until U2.**
+(1) Q-IBD-3 RESTATED (maintainer, 2026-11-08): "a refusal in ref / file mode can leave staged files in stage/, and a
+rerun needs a fresh --out". Class 2 (awkward but closed): the lib/modes.sh refusal exits 2 after the staging copies, a
+rerun on the same --out is refused ("stage ... is not empty", exit 2). Also in the -h text of `--out`.
+(2) Q-IBD-7 carve-out from law 3: every lib/modes.sh refusal of ibd now exits 2 after 2 node spawns (`-p` and one
+`--v8-options`; neither carries the driver), was 0. The node version read and `v8fl_check` sit after the read-only
+--out preflight and before the first write (Q-IBD-6 CORRECTED).
+(3) Law-3 exceptions still live after U1 (REVIEW-b1r2-r1 NITs), all exit 2, neither spawn carries the driver: `--out -foo`
+and `--out -` (F7; mkdir exit 64; fixed in U2 with its `./` rewrite); report.txt dangling-symlink shapes (F5; U2,
+the `! -L` check stays above the hoist, PLAN A13). ENAMETOOLONG (a 300-char basename) is not predictable by a
+preflight, like ENOSPC, takes 2 spawns, no planned fix. Until U2 the source comment "a bad --out stays 0 spawns" at
+src/inlining-budget-diff.sh (the line above the node version read) overclaims: it holds for the shapes the preflight
+walks, not for these.
+Evidence: `.handoff/PLAN-b52-ibd-u1.md` (A5, A8), `.handoff/evidence/b5x-ibd-triage.md`,
+`.handoff/evidence/u1/` (local, untracked).
+
+**#77 FILLERS docs (b54-b55): bb / dd audit dispositions (B5a, B5b, B2a; A6.2, A6.3, A6.5 / A6.6 see #74).**
+B5a: not a defect; the gate is test/bytecode-budget-stage.test.mjs, `--self-test` never claimed lib coverage.
+B5b: the resolve_links-only mutant is RETIRED as equivalent (test/shlib.test.mjs); argon's 2-hop row is not adopted
+(a row that cannot fail breaks law 6). A6.2: not edited, no reach in bb / dd (lib/stage.sh normalizes a dash-led
+path), an edit would move all 5 roots. A6.3: lib/v8flags.sh unchanged, the top unsets cover bb and dd; ibd has no such unset.
+A6.5 / A6.6: NOT REPRODUCED, not "gone" (PLAN-b54 A8): the text argon cited never existed; A6.4: closed by FILLERS B2 (A6). B2a: the
+symlink hop walk is left out (not trivial); see #71. Evidence: `.handoff/PLAN-b54-audit-fillers.md` (CLOSED,
+task 8, A5, A8), `.handoff/evidence/fillers/REVIEW-b1-r1.md` (local, untracked).

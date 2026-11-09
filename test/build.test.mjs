@@ -295,18 +295,19 @@ test('N4: a failing chmod aborts with status 2 and "unexpected error"', { skip }
 
 // ---- MD-46 G1 TASK 7 / G4 TASK 7: the roster of src files that include lib/v8flags.sh ----
 // ORACLE: .handoff/PLAN-md46.md G1 TASK 7 (subset) as tightened by G4 TASK 7 (equality, after G5 B1 landed): the set
-// must EQUAL {deopt-diff, bytecode-budget, ic-diff, allocation-diff}; inlining-budget-diff never includes it. Marker
-// grammar: build.sh header (the WHOLE line). The controls prove the predicate has teeth both ways: ibd's src with the
-// marker appended (an extra member) and an ic src copy with the marker removed (a missing member) each fail it.
+// must EQUAL {deopt-diff, bytecode-budget, ic-diff, allocation-diff, inlining-budget-diff} (ibd joined under MD-54, U1
+// b55). Marker grammar: build.sh header (the WHOLE line). The controls prove the predicate has teeth both ways: a
+// fictitious x.sh holding the marker (an extra member) and an ic src copy with the marker removed (a missing member)
+// each fail it.
 const V8FL_MARKER = '# @include lib/v8flags.sh';
-const V8FL_ALLOWED = new Set(['deopt-diff', 'bytecode-budget', 'ic-diff', 'allocation-diff']);
+const V8FL_ALLOWED = new Set(['deopt-diff', 'bytecode-budget', 'ic-diff', 'allocation-diff', 'inlining-budget-diff']);
 function includesV8fl(text) { return text.split('\n').includes(V8FL_MARKER); }
 function v8flRoster(srcTexts) { // Map<file, text> -> sorted names (no .sh) of the files that include the fragment
     return [...srcTexts].filter(([, t]) => includesV8fl(t)).map(([f]) => f.replace(/\.sh$/, '')).sort();
 }
 function v8flRosterOk(srcTexts) {
     const set = v8flRoster(srcTexts);
-    return set.length === V8FL_ALLOWED.size && set.every((n) => V8FL_ALLOWED.has(n)) && !set.includes('inlining-budget-diff');
+    return set.length === V8FL_ALLOWED.size && set.every((n) => V8FL_ALLOWED.has(n));
 }
 const liveSrc = () => new Map(GEN.map((f) => [f, readFileSync(join(ROOT, 'src', f), 'utf8')]));
 
@@ -314,18 +315,17 @@ function assertV8flRoster(m) {
     assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
     const set = v8flRoster(m);
     for (const n of set) assert.ok(V8FL_ALLOWED.has(n), `${n} may not include lib/v8flags.sh`);
-    assert.ok(!set.includes('inlining-budget-diff'), 'inlining-budget-diff must never include lib/v8flags.sh');
-    assert.deepEqual(set, [...V8FL_ALLOWED].sort(), 'the lib/v8flags.sh roster must equal {dd, bb, ic, alloc}');
+    assert.deepEqual(set, [...V8FL_ALLOWED].sort(), 'the lib/v8flags.sh roster must equal {dd, bb, ic, alloc, ibd}');
     assert.equal(v8flRosterOk(m), true);
 }
-test('G4 T7 roster: src files including lib/v8flags.sh are exactly {dd, bb, ic, alloc}; ibd never', { skip }, () => {
+test('G4 T7 roster: src files including lib/v8flags.sh are exactly {dd, bb, ic, alloc, ibd} (MD-54)', { skip }, () => {
     assertV8flRoster(liveSrc());
 });
 
-test('G1 / G4 T7 controls: ibd src with the marker appended, an ic src copy with it removed, each fail the roster row (must-fail controls)', { skip }, () => {
+test('G1 / G4 T7 controls: a fictitious x.sh with the marker, an ic src copy with it removed, each fail the roster row (must-fail controls)', { skip }, () => {
     const m = liveSrc();
-    m.set(NAME, m.get(NAME) + '\n' + V8FL_MARKER + '\n');
-    assert.deepEqual(v8flRoster(m).includes('inlining-budget-diff'), true);
+    m.set('x.sh', V8FL_MARKER + '\n');
+    assert.equal(v8flRoster(m).includes('x'), true);
     assert.equal(v8flRosterOk(m), false);
     assert.throws(() => assertV8flRoster(m), assert.AssertionError);
     // G4 T7: an ic src copy (private temp dir) with the marker line removed -> the roster lacks ic -> the row fails
@@ -345,9 +345,12 @@ test('G1 / G4 T7 controls: ibd src with the marker appended, an ic src copy with
     const m2 = liveSrc();
     m2.set('ic-diff.sh', m2.get('ic-diff.sh') + '\n' + V8FL_MARKER + '\n');
     assert.equal(v8flRosterOk(m2), true);
-    // a near-miss (trailing space) is not a marker: build.sh would abort it, the roster does not count it
+    // a near-miss (trailing space) is not a marker: build.sh would abort it, the roster does not count it. The ibd src
+    // holds the real marker since MD-54, so the near-miss goes on a NAME copy with that line removed.
     const m3 = liveSrc();
-    m3.set(NAME, m3.get(NAME) + '\n' + V8FL_MARKER + ' \n');
+    const nearLines = m3.get(NAME).split('\n');
+    assert.equal(nearLines.filter((l) => l === V8FL_MARKER).length, 1, 'ibd src holds the marker line exactly once');
+    m3.set(NAME, nearLines.filter((l) => l !== V8FL_MARKER).join('\n') + '\n' + V8FL_MARKER + ' \n');
     assert.equal(v8flRoster(m3).includes('inlining-budget-diff'), false);
 });
 
