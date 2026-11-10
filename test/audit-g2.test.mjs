@@ -7,8 +7,11 @@
 //       TMPDIR; TMPDIR = a regular file -> "mktemp exited N", 2 spawns
 //   A2  retention: 9 invocations x 6 mktemp calls, template $TMPDIR/deopt-diff.XXXXXX, 0 files left; mutant no run_side rm
 //   A3  SIGTERM during the 3rd driver run: TMPDIR empty (MUTANT-CONTROLLED: the before build never makes the file, so the
-//       row alone is green there; the mutant "no trap rm" leaves exactly 1 file); stderr "unexpected error (exit 143)" +
-//       exactly one VERDICT NO-VERDICT (the before build says "(exit 0)"); mutant: drop $old from the RUN_TMP trap line
+//       row alone is green there; the mutant "no trap rm" leaves exactly 1 file); exactly one VERDICT NO-VERDICT and one
+//       "unexpected error (exit N)" line: bash 3.2 says "(exit 143)" (the before build says "(exit 0)"); bash >= 4 says
+//       "(exit 0)" and re-raises SIGTERM, so there the row asserts any N + the SIGTERM end (Q-B65-SIGTERM). bash 3.2 also
+//       ends by SIGTERM here (measured, b65), so the signal check does not separate the bashes; the bash-3 branch keeps
+//       today's assertions. Mutant: drop $old from the RUN_TMP trap line -> no "unexpected error (exit N)" line on any bash
 //   A4  torn bailout head (T2.2): NO-VERDICT 'bailout: torn trace line'; controls (other fn, anonymous, '[bailout end.') SAME
 //       (the controls are a regression pin); mutant: drop the '[bailout (kind: ' guard
 //   A5  kConcurrent compile line (T2.3): NO-VERDICT; kSynchronous + [marking kConcurrent SAME; --v8-flags name refusal,
@@ -25,7 +28,7 @@
 //   A12 greedy torn head (bare and glued) and A13 torn head glued after "[bailout end." (ADDENDUM A2 item 5): NO-VERDICT
 //       'bailout: torn trace line'; mutants revert each half of the A2 item 1 fix
 // Fixtures: private dirs under one mkdtemp top (removed in after()); no git fixtures. Every child is capSync'd: a timed-out
-// child is a named failure before any other check. No timing assertions, no timed gate. Results: bash 3.2 macOS host.
+// child is a named failure before any other check. No timing assertions, no timed gate. Results: bash 3.2 macOS host (the A3 bash >= 4 branch runs on CI only).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnAsync } from 'node:child_process';
@@ -289,15 +292,35 @@ async function sigtermRun(root) {
     return { c, ...r, stdout: so, stderr: se };
 }
 // the chained trap (A1 item 1 / review r1 blocker 3): the script's fail-closed EXIT trap (root :278) still runs after the
-// RUN_TMP trap, so SIGTERM (128 + 15 = 143) is reported on STDERR (the :278 printf goes >&2) as an unexpected error with
-// exactly one VERDICT NO-VERDICT line. The before build has no RUN_TMP trap and reports `(exit 0)` there.
+// RUN_TMP trap, so SIGTERM is reported on STDERR (the :278 printf goes >&2) as an unexpected error with exactly one
+// VERDICT NO-VERDICT line. bash 3.2 runs that trap with $? = 143 (128 + 15): "(exit 143)". bash >= 4 runs it with $? = 0
+// (SIGTERM lands while bash waits for the driver) and then re-raises SIGTERM, so the process ends by the signal (status
+// null) and stderr says "(exit 0)" -- an open limit (Q-B65-SIGTERM, RULINGS-b65-ci.md; LEDGER #105 (b65)), the verdict
+// stays fail-closed. bash 3.2 also ends by SIGTERM (status null) on this mac (measured, b65), so the signal check does not
+// separate the bashes; the bash-3 branch keeps today's assertions ("(exit 143)"). The before build has no RUN_TMP trap and
+// reports `(exit 0)` there (seen on bash 3.2).
 const VNV = /^VERDICT NO-VERDICT$/gm;
 const nVerdicts = (s) => (s.match(/^VERDICT \S+$/gm) || []).length;
-test('A3 SIGTERM during the 3rd driver run: TMPDIR has 0 entries; stderr "unexpected error (exit 143)" + exactly one VERDICT NO-VERDICT', { skip }, async () => {
+const UNEXP_ANY = /^deopt-diff: unexpected error \(exit \d+\)$/m;
+let BASH_MAJOR = null;   // the major of the BASH binary every row spawns, read once (fail closed on an unreadable answer)
+function bashMajor() {
+    if (BASH_MAJOR !== null) return BASH_MAJOR;
+    const r = capSync(BASH, ['-c', 'echo "${BASH_VERSINFO[0]}"'], { encoding: 'utf8', env: cleanEnv() }, 10000, 'bash major');
+    const n = Number(String(r.stdout).trim());
+    assert.ok(r.status === 0 && Number.isInteger(n) && n >= 3, `cannot read the bash major of ${BASH}: rc=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+    return (BASH_MAJOR = n);
+}
+test('A3 SIGTERM during the 3rd driver run: TMPDIR has 0 entries, exactly one VERDICT NO-VERDICT; bash 3: stderr "unexpected error (exit 143)"; bash >= 4: "unexpected error (exit N)" + ended by SIGTERM (Q-B65-SIGTERM)', { skip }, async () => {
+    const major = bashMajor();
     const r = await sigtermRun(TOOL);
-    const m = `rc=${r.status} sig=${r.signal}\n--- stdout\n${r.stdout}--- stderr\n${r.stderr}`;
+    const m = `bash ${major} rc=${r.status} sig=${r.signal}\n--- stdout\n${r.stdout}--- stderr\n${r.stderr}`;
     assert.deepEqual(ls(r.c.tmp), [], 'TMPDIR left files');
-    assert.match(r.stderr, /^deopt-diff: unexpected error \(exit 143\)$/m, m);
+    if (major === 3) {
+        assert.match(r.stderr, /^deopt-diff: unexpected error \(exit 143\)$/m, m);
+    } else {
+        assert.match(r.stderr, UNEXP_ANY, m);
+        assert.equal(r.signal, 'SIGTERM', `bash >= 4 re-raises SIGTERM after the EXIT trap\n${m}`);
+    }
     assert.equal((r.stderr.match(VNV) || []).length, 1, `stderr VERDICT NO-VERDICT lines\n${m}`);
     assert.equal(nVerdicts(r.stdout) + nVerdicts(r.stderr), 1, `VERDICT lines over both streams\n${m}`);
 });
@@ -308,12 +331,13 @@ test('A3 mutant (no trap rm): SIGTERM during the 3rd run leaves exactly 1 file',
 });
 // must-fail: drop `$old` from the main-shell trap line (the self-test trap has the same `(exit \$st_rc); $old" EXIT` tail,
 // so the anchor includes the RUN_TMP rm unique to the main-shell line): no chain -> no unexpected-error line, no VERDICT.
+// The check is ANY "(exit N)": "(exit 143)" alone is vacuous on bash >= 4, where the live line says "(exit 0)" (Q-B65-SIGTERM).
 const A_TRAPOLD = '|| rm -f -- \\"\\$RUN_TMP\\"; set +e; (exit \\$st_rc); $old" EXIT';
-test('A3 mutant (drop $old from the RUN_TMP trap): SIGTERM loses the "unexpected error (exit 143)" line and the VERDICT line', { skip }, async () => {
+test('A3 mutant (drop $old from the RUN_TMP trap): SIGTERM loses every "unexpected error (exit N)" line and the VERDICT line (any bash)', { skip }, async () => {
     const mp = mutant('a3-noold', [[A_TRAPOLD, '|| rm -f -- \\"\\$RUN_TMP\\"; set +e; (exit \\$st_rc)" EXIT']]);
     const r = await sigtermRun(mp);
     const m = `rc=${r.status} sig=${r.signal}\n--- stdout\n${r.stdout}--- stderr\n${r.stderr}`;
-    assert.doesNotMatch(r.stderr, /^deopt-diff: unexpected error \(exit 143\)$/m, m);
+    assert.doesNotMatch(r.stderr, UNEXP_ANY, m);
     assert.equal((r.stderr.match(VNV) || []).length, 0, m);
 });
 

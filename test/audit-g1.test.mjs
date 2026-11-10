@@ -8,7 +8,8 @@
 //   A2  --no-flush-bytecode after every --v8-flags token and before --print-bytecode (3 of 3 argv lines + the mode line); real
 //       --stress-flush-code row; DIFF contract (one mid vs two copies); mutants M-len and token-before-flags
 //   A3  one baseline spawn per run (filter '*'): fake name hit, real BB-opus-2 (diff + gate), five shim rows, spawn counts, raw/ files
-//   A4  pre-spawn refusals (newline, case-equal fn with --out, '=' in the node path) and the -h sentences
+//   A4  pre-spawn refusals (newline, case-equal fn with --out, '=' in the node path, a prerelease --node-version) and the -h sentences
+//   Q-B65-NODEPRE: every row that passes process.version as --node-version skips on a prerelease node (not vX.Y.Z)
 //   A6  full TMPDIR (ulimit -f, XFSZ ignored): the 64 KiB append fails -> NO-VERDICT (append exited N); mutant drop-append
 //   A5  parity against ff6108b on the fake matrix; retention (20 runs: no TMPDIR leftovers, 60 mktemp, 120 spawns)
 // Fixtures: private dirs under one mkdtemp top (removed in after()); no git fixtures at all (nothing here needs a repo).
@@ -36,6 +37,10 @@ const OLD_SHA = 'ff6108b', OLD_SHA8 = '0bd4de54';
 const CI_STRICT = process.env.CI === 'true';
 const histSkip = (have) => (have === true || CI_STRICT ? false : have);
 const NODE_REAL = process.execPath;
+// Q-B65-NODEPRE (RULINGS-b65-ci.md): a row that passes process.version as --node-version skips on a prerelease node
+// (setup-node `latest` = v27.0.0-alpha.0.0.0 in nightly 42817727624); the tool keeps refusing it (pinned in A4 below).
+const NODEPRE = /^v\d+\.\d+\.\d+$/.test(process.version) ? false
+    : `Q-B65-NODEPRE: node ${process.version} is a prerelease; bytecode-budget refuses a --node-version that is not vX.Y.Z`;
 
 // child env: no inherited steering of git / node / editors; no global git config; V8 coverage undefined (a delete is not a strip)
 function cleanEnv(extra = {}) {
@@ -282,14 +287,14 @@ function holdRuns(root) {   // 3 attempts: [{status, over, within}]
 // OVER, or NO-VERDICT from a torn record: the worker thread's newlines can land between V8's header and length lines on
 // the regular file too, which the bad / orphan rules and the null control refuse (seen under a full-suite load). Never WITHIN.
 const HOLD_TORN = /null control: run \d+ differs from run 1|matched header\(s\) not followed by/;
-test('A1 real BB-opus-1 (a held-full stdout pipe): 3 of 3 attempts are exit 1 `VERDICT OVER` or a torn-record NO-VERDICT, never WITHIN (truth: f = 3,50 > 10)', { skip: skip || holdSkip() }, () => {
+test('A1 real BB-opus-1 (a held-full stdout pipe): 3 of 3 attempts are exit 1 `VERDICT OVER` or a torn-record NO-VERDICT, never WITHIN (truth: f = 3,50 > 10)', { skip: skip || NODEPRE || holdSkip() }, () => {
     const x = holdRuns(TOOL);
     x.forEach((a, i) => {
         assert.ok(!a.within && a.status !== 0, `attempt ${i + 1} lost the record: ${msg(a.r)}`);
         assert.ok(a.over ? a.status === 1 : (a.status === 2 && HOLD_TORN.test(a.r.stdout)), `attempt ${i + 1}: ${msg(a.r)}`);
     });
 });
-test(`A1 real BB-opus-1 twin: the ${OLD_SHA} root says WITHIN exit 0 in at least 1 of 3 attempts (local only; red-on-old pin of the row above)`, { skip: skip || OLDSKIP || (CI_STRICT ? 'local only: the old root pipe drop depends on the host' : false) || holdSkip() }, () => {
+test(`A1 real BB-opus-1 twin: the ${OLD_SHA} root says WITHIN exit 0 in at least 1 of 3 attempts (local only; red-on-old pin of the row above)`, { skip: skip || OLDSKIP || NODEPRE || (CI_STRICT ? 'local only: the old root pipe drop depends on the host' : false) || holdSkip() }, () => {
     const x = holdRuns(oldRoot());
     assert.ok(x.some((a) => a.status === 0 && a.within), `old root never lost the record in 3 attempts: ${x.map((a) => a.status).join(',')}`);
 });
@@ -342,7 +347,7 @@ function flushFix() {
     return (FLUSHFIX = { d, flushed, pinned, ok: flushed === 2 && pinned === 1 });
 }
 const flushSkip = () => { const f = flushFix(); return f.ok ? false : `this node does not show the flush (direct run: ${f.flushed} records, want 2; with ${TOK}: ${f.pinned}, want 1)`; };
-test('A2 real node, `mid` under --expose-gc --stress-flush-code: `mid: 1 match(es)` (old: 2 match(es): 6,6)', { skip: skip || flushSkip() }, () => {
+test('A2 real node, `mid` under --expose-gc --stress-flush-code: `mid: 1 match(es)` (old: 2 match(es): 6,6)', { skip: skip || NODEPRE || flushSkip() }, () => {
     const f = flushFix(); const t = mk('flushtmp');
     const r = spawn(BASH, [TOOL, '--node', NODE_REAL, '--node-version', process.version, '--runs', '2', '--v8-flags', '--expose-gc --stress-flush-code', '--fn', 'mid', 'driver.mjs'], { cwd: f.d, env: cleanEnv({ TMPDIR: t }) }, 'A2 real flush', 120000);
     assert.equal(r.status, 0, msg(r));
@@ -402,7 +407,7 @@ test('A3 real BB-opus-2 (diff half): a never-called driver `get`, two different 
     assert.ok(!hasLine(r.stdout, 'VERDICT SAME'), msg(r));
     assert.ok(all(r).includes(BASE_MSG), msg(r));
 });
-test('A3 real BB-opus-2 (gate half): a driver with no `get`, --max get=1 -> exit 2 NO-VERDICT (old: OVER exit 1)', { skip: skip || getSkip() }, () => {
+test('A3 real BB-opus-2 (gate half): a driver with no `get`, --max get=1 -> exit 2 NO-VERDICT (old: OVER exit 1)', { skip: skip || NODEPRE || getSkip() }, () => {
     const g = getFix(); const t = mk('gettmp');
     const r = spawn(BASH, [TOOL, '--node', NODE_REAL, '--max', 'get=1', '--node-version', process.version, 'c/driver.mjs'], { cwd: g.d, env: cleanEnv({ TMPDIR: t }) }, 'BB-opus-2 gate', 120000);
     assert.equal(r.status, 2, msg(r));
@@ -523,6 +528,16 @@ function eqRow(how) {
 test('A4 `=` in an absolute --node path: exit 2 "node binary: ... =", 0 spawns', { skip }, () => { eqRow('abs'); });
 test('A4 `=` from the cwd (`--node ./node` in an a=b directory): exit 2 "node binary: ... =", 0 spawns', { skip }, () => { eqRow('cwd'); });
 test('A4 `=` from PATH (`--node node` found in a dir with `=`): exit 2 "node binary: ... =", 0 spawns', { skip }, () => { eqRow('path'); });
+// Q-B65-NODEPRE "keep refusal": a prerelease --node-version (setup-node `latest` printed v27.0.0-alpha.0.0.0) is refused
+// before any spawn, fail closed; the NODEPRE skips above rely on it
+test('A4 --node-version v27.0.0-alpha.0.0.0 (a prerelease, Q-B65-NODEPRE): exit 2, "--node-version must be vX.Y.Z", VERDICT NO-VERDICT, 0 spawns', { skip }, () => {
+    const c = mkCase(); const d = drv(c, 'a');
+    const r = run(TOOL, c, ['--node', c.node, '--max', 'f=1', '--node-version', 'v27.0.0-alpha.0.0.0', d]);
+    assert.equal(r.status, 2, msg(r));
+    assert.ok(all(r).includes('--node-version must be vX.Y.Z'), msg(r));
+    assert.match(all(r), /^VERDICT NO-VERDICT$/m, msg(r));
+    assert.equal(c.argv().length, 0, `spawns: ${c.argv().join(' | ')}`);
+});
 test('A4 -h (exit 2) holds "nearest package.json above DIR", the raw path DIR/raw/<side>/<fn>.<k>.txt and the flush token (whitespace collapsed: the text wraps)', { skip }, () => {
     const r = spawn(BASH, [TOOL, '-h'], { cwd: mk('h') }, `${TOOLNAME} -h`, 30000);
     assert.equal(r.status, 2, msg(r));

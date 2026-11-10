@@ -154,8 +154,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   appended to the file with the bash builtin (no spawn, raw/ unchanged); a failure is NO-VERDICT `append exited N`;
   precedence awk > tr > tee > append > driver exit. Q-B61-DD-TRAP: one EXIT trap in the main shell removes the temp
   file on every exit path (residual: LEDGER #95 b) and chains the script's fail-closed EXIT trap, so an unexpected
-  error still prints its VERDICT line; on SIGTERM the report now says `unexpected error (exit 143)` where the before
-  build said `(exit 0)`. R7 (Q-B57-C1): a line starting `[bailout (kind: ` that names no function and is not a whole
+  error still prints its VERDICT line; on SIGTERM the report now says `unexpected error (exit 143)` (bash 3.2; bash 5
+  prints `(exit 0)`, see LEDGER #106) where the before build said `(exit 0)`. R7 (Q-B57-C1): a line starting `[bailout (kind: ` that names no function and is not a whole
   bailout line, or holds a second `[bailout (kind: ` after its own, is X "bailout: torn trace line" for every fn
   (another thread wrote into the line). Q-B61-DD-GLUE + Q-B61-DD-TORN2: the same refusal for a torn `[bailout (kind: `
   glued after other text on a line (a `[bailout end. ..` prefix included), and for a second head after it; a glued
@@ -1070,6 +1070,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `test/death-signature.test.mjs` (7 tests, DETERMINISTIC).
 
 ### Fixed
+
+- CI triage (burst 65, test-only, no tool changed; LEDGER #105, #106): four red rows (three causes) fixed. (a) `bb-fillers A1
+  precedence` failed on ubuntu node 26.8.2 (cause READ from the uutils tee source, race not reproduced: its 1 MiB F_SETPIPE_SZ holds the 400 KB pad): the pad now exceeds 2x the pipe max
+  and the new row `bb-fillers A1 pad` pins it (fillers 25 -> 26). (b) Q-B65-NODEPRE: audit-g1 rows that pass
+  process.version as --node-version skip on a prerelease node (v27.0.0-alpha.0.0.0); a new A4 row pins bb's exit-2
+  refusal (audit-g1 64 -> 65). (c) Q-B65-SIGTERM: audit-g2 A3 keeps `(exit 143)` on bash 3.2 and asserts an
+  `unexpected error (exit N)` line, one VERDICT and an empty TMPDIR on bash >= 4 (bash 5 prints `(exit 0)`, open limit
+  #106; audit-g2 37 tests, 36 pass, 1 skip, unchanged). The bash 5 and uutils branches are UNPROVEN until the next
+  ubuntu CI run.
 
 - `bytecode-budget.sh` read any digit run after `Bytecode length:` as a length. awk doubles lose
   precision past 2^53 and bash `(( ))` wraps past 2^63, so diff mode read 2^53 | 2^53+1 as SAME and
