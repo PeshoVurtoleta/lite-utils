@@ -17,11 +17,14 @@ import { probeAwk, buildNulCutAwk, buildNulCleanAwk, nulTmpDir } from './nul-awk
 import { capSync, armCap, noTimeout, timeoutMsg } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'deopt-diff.sh');
-const CHECKS = 99;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
+const CHECKS = 107;   // every `check` call in self_test(): 53 driver-mode rows + 21 ref/file rows (S1-S4, R1-R17) + 13 tier rows (T1-T13)
                      // + 5 B-four dd refusal rows (checks 88-92: MD-36, MD-37, MD-39, MD-42, MD-44) + 3 MD-46 --v8-flags
                      // allowlist rows (checks 93-95: MD-50 accepted, MD-50 refused after the read, MD-56 a failing read;
                      // PLAN-md46 G2 TASK 3) + 2 G-ENV rows (checks 96-97: Q-ENV e2e, T14 D5; PLAN-b42-genv TASK 3) + 2 G-TRACKED
-                     // staged rows (checks 98-99: GT1, GT2, after R17, need git; PLAN-b42-gtracked TASK 4);
+                     // staged rows (checks 98-99: GT1, GT2, after R17, need git; PLAN-b42-gtracked TASK 4) + 8 b61 G2 rows
+                     // (4 records rows: a torn line-start bailout head, a torn head glued after driver text, a torn head followed
+                     // by a whole other-fn bailout, a torn head glued after `[bailout end. `; 2 R6 kConcurrent e2e rows, the R6
+                     // stress-concurrent-inlining refusal, the R26 '=' refusal; PLAN-b61-g2 TASK 5: 99 -> 105, A2 item 1: 105 -> 107);
                      // a new check moves this literal.
                      // The S-9 fixture rows F1-F17 (FIXTURE_ROWS below) run only under --self-test --fixtures DIR: not counted here
 // P3G4 T4: the node v26.8.2 real-trace fixture set; --self-test --fixtures FIX adds FIXTURE_ROWS "ok fixture F<n> ..." rows
@@ -113,7 +116,7 @@ const R = {
     r305: 'records: exact names -- fn=add on an addX trace',
 };
 const PREC = 'if [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else RUN_RC=$n; fi';
-const RS = '| tee "${3:-/dev/null}" | tr \'\\000\' \'?\' | awk "$KEEP_AWK";';
+const RS = 'tee "${3:-/dev/null}" | tr \'\\000\' \'?\' | awk "$KEEP_AWK";';
 const KEEP = 'KEEP_AWK=\'/^\\[/ || index($0, "[bailout") > 0 || index($0, "[completed compiling") > 0\'';
 const AWK0 = "DEOPT_AWK='\nfunction names(";
 const REC_NEW = 'rec() { printf \'%s\\n\' "$2" | { awk -v fn="$1" "$DEOPT_AWK" || echo "!awk exited $?"; } | tr \'\\t\\n\' \'|;\'; }';
@@ -197,14 +200,14 @@ const MUTANTS = [
     ['K4-trailing-space-restored', [[KEEP, 'KEEP_AWK=\'/^\\[/ || index($0, "[bailout") > 0 || index($0, "[completed compiling ") > 0\'']], [R.ge]],
     ['K7-tee-before-awk', [[PREC, 'if [[ $t != 0 ]]; then RUN_RC="tee $t"; elif [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; else RUN_RC=$n; fi']],
         [R.awk]],
-    ['T1-tr-replaced-by-cat', [[RS, '| tee "${3:-/dev/null}" | cat | awk "$KEEP_AWK";']], [R.nul, R.nul0]],
-    ['T2-tr-maps-NUL-to-newline', [[RS, '| tee "${3:-/dev/null}" | tr \'\\000\' \'\\n\' | awk "$KEEP_AWK";']], [R.nul, R.nul0]],
+    ['T1-tr-replaced-by-cat', [[RS, 'tee "${3:-/dev/null}" | cat | awk "$KEEP_AWK";']], [R.nul, R.nul0]],
+    ['T2-tr-maps-NUL-to-newline', [[RS, 'tee "${3:-/dev/null}" | tr \'\\000\' \'\\n\' | awk "$KEEP_AWK";']], [R.nul, R.nul0]],
     ['T3-tr-failure-ignored', [['elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif', 'elif false; then RUN_RC="tr $r"; elif']], [R.tr]],
     ['T4-tr-before-awk', [[PREC, 'if [[ $r != 0 ]]; then RUN_RC="tr $r"; elif [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else RUN_RC=$n; fi']],
         [R.awk]],
     ['T5-tee-before-tr', [[PREC, 'if [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; else RUN_RC=$n; fi']],
         [R.tr]],
-    ['T6-tr-before-tee', [[RS, '| tr \'\\000\' \'?\' | tee "${3:-/dev/null}" | awk "$KEEP_AWK";']], [R.nul]],
+    ['T6-tr-before-tee', [[RS, 'tr \'\\000\' \'?\' | tee "${3:-/dev/null}" | awk "$KEEP_AWK";']], [R.nul]],
     ['W1-awk-exits-3-for-ad', [W1], [R.r304]],
     ['W2-awk-exits-3-for-value', [W2], [R.r305]],
     ['Ra-node-between-awk-and-tr', [['elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif',
@@ -213,8 +216,8 @@ const MUTANTS = [
         'elif [[ $n != 0 ]]; then RUN_RC=$n; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else']], [R.tee]],
     ['Rc-r-read-from-field-2', [['r=${BASH_REMATCH[3]}', 'r=${BASH_REMATCH[2]}']], [R.tr]],
     ['Rd-a-read-from-field-3', [['a=${BASH_REMATCH[4]}', 'a=${BASH_REMATCH[3]}']], [R.awk]],
-    ['Re-tr-deletes-NUL', [[RS, '| tee "${3:-/dev/null}" | tr -d \'\\000\' | awk "$KEEP_AWK";']], [R.nul0]],
-    ['Rf-tr-after-awk', [[RS, '| tee "${3:-/dev/null}" | awk "$KEEP_AWK" | tr \'\\000\' \'?\';']], [R.nul0]],
+    ['Re-tr-deletes-NUL', [[RS, 'tee "${3:-/dev/null}" | tr -d \'\\000\' | awk "$KEEP_AWK";']], [R.nul0]],
+    ['Rf-tr-after-awk', [[RS, 'tee "${3:-/dev/null}" | awk "$KEEP_AWK" | tr \'\\000\' \'?\';']], [R.nul0]],
     ['Rn-glued-E-clause-dropped', [[GE_X, 'else if (index($0, "[bailout") > 0) x(']], [R.ge]],
 ];
 // The REPORTED tier section's mutant table (P3G3 PLAN TASK 6 + A9 (4)): G1-G6, V1-V3 of ASSERTIONS A1-A3, TW1-TW7 =
@@ -724,8 +727,8 @@ const V8FL_HELP = 'Accepted: V8 flags this node lists in --v8-options -- bool as
 function assertHelp(r) {
     assert.equal(r.status, 2, r.stdout + r.stderr);
     assert.match(r.stdout, /^deopt-diff\.sh -- the DEOPTIMIZATIONS of NAMED functions/m);
-    assert.match(r.stdout, /cannot read driver output in run <k> \(<tee\|tr\|awk> exited <rc>\)/);
-    assert.match(r.stdout, /the first failure in the order awk > tr > tee > driver exit is named/);
+    assert.match(r.stdout, /cannot read driver output in run <k> \(<mktemp\|tee\|tr\|awk\|append> exited <rc>\)/);
+    assert.match(r.stdout, /the first failure in the order awk > tr > tee > append > driver exit\s+is named/);
     const flat = r.stdout.replace(/\s+/g, ' ');
     assert.equal(flat.split(V8FL_HELP).length - 1, 1, 'the shared MD-46 -h text exactly once (whitespace collapsed)');
     assert.ok(flat.includes('-r / -e / -p are refused as non-flags. ' + V8FL_HELP), 'the shared text follows the -r / -e / -p sentence');

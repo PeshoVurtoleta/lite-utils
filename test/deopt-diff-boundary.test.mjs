@@ -102,8 +102,9 @@ const STD = {
 };
 
 // =====================================================================================================================
-// A5 retention: 3 cycles of SAME, DIFF and NO-VERDICT without --out; cwd, a private TMPDIR and the mktemp shim log
-// hold 0 entries afterwards, the driver dirs are unchanged, every run spawns 2 + 2 x 3 = 8 times.
+// A5 retention: 3 cycles of SAME, DIFF and NO-VERDICT without --out; cwd and a private TMPDIR hold 0 entries afterwards,
+// the driver dirs are unchanged, every run spawns 2 + 2 x 3 = 8 times. run_side's driver output goes to ONE temp file per
+// run (b61 G2 T2.1): the mktemp shim logs exactly 9 x 6 = 54 paths, each $TMPDIR/deopt-diff.XXXXXX, and none is live.
 // =====================================================================================================================
 const CYCLE = [
     // [label, before, after, exit, VERDICT, own line]
@@ -128,7 +129,7 @@ function cycles(script) {
         }
         const paths = sh.paths();
         return {
-            runs, cwd: readdirSync(g.cwd), tmpdir: readdirSync(td), shim: paths, live: paths.filter((p) => existsSync(p)),
+            runs, cwd: readdirSync(g.cwd), tmpdir: readdirSync(td), td, shim: paths, live: paths.filter((p) => existsSync(p)),
             drvSame: snap() === before, real: sh.real,
         };
     } finally { for (const p of sh.paths()) rmAll(p); rmAll(dir, td); }
@@ -144,24 +145,29 @@ function assertCycles(c) {
     });
     assert.deepEqual(c.cwd, [], 'cwd holds entries after 9 runs without --out');
     assert.deepEqual(c.tmpdir, [], 'the private TMPDIR holds entries');
-    assert.deepEqual(c.shim, [], 'driver mode called mktemp');
+    // the live leg first: a leaked path (any mktemp, run temp file or not) reds the row by name
+    assert.deepEqual(c.live, [], `a logged mktemp path survived: ${c.live.join(' ')}`);
+    assert.equal(c.shim.length, 54, `driver mode: 9 runs x 2 sides x 3 driver runs = 54 run temp files\n${c.shim.join('\n')}`);
+    const tre = new RegExp('^' + c.td.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/deopt-diff\\.[A-Za-z0-9]{6}$');
+    for (const p of c.shim) assert.match(p, tre, 'a run temp file outside $TMPDIR/deopt-diff.XXXXXX');
     assert.ok(c.drvSame, 'a driver dir changed');
 }
-test('A5: 3 cycles x SAME / DIFF / NO-VERDICT without --out -> exits 0/1/2, 8 spawns each; cwd, TMPDIR, mktemp log empty', { skip }, () => {
+test('A5: 3 cycles x SAME / DIFF / NO-VERDICT without --out -> exits 0/1/2, 8 spawns each; cwd and TMPDIR empty, 54 logged run temp files, none live', { skip }, () => {
     assertCycles(cycles(SCRIPT));
 });
-// teeth 1: tee keeps the raw output in cwd when --out is absent (the "nothing is written without --out" claim)
+// teeth 1: tee keeps the raw output in cwd when --out is absent (no raw file outlives a run without --out)
 test('A5 teeth: mutant tee-default-to-cwd turns the cycle row red (cwd holds run.<k>.txt; verdicts unchanged)', { skip }, () => {
     const dir = tmp('dd-a5m-');
     try {
-        const c = cycles(variant(dir, 'tee_cwd', [['| tee "${3:-/dev/null}" |', '| tee "${3:-run.$k.txt}" |']]));
+        const c = cycles(variant(dir, 'tee_cwd', [['tee "${3:-/dev/null}" |', 'tee "${3:-run.$k.txt}" |']]));
         assert.throws(() => assertCycles(c), /cwd holds entries/);
         assert.deepEqual(c.cwd.sort(), ['run.1.txt', 'run.2.txt', 'run.3.txt']);
         c.runs.forEach((r, i) => assert.equal(r.status, CYCLE[i % 3][3]));   // red for retention only
     } finally { rmAll(dir); }
 });
-// teeth 2: a bare `mktemp -d` in driver mode that is never removed; the shim sees it (macOS: the TMPDIR does not)
-test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim log (and, where mktemp honours TMPDIR, the TMPDIR)', { skip }, () => {
+// teeth 2: a bare `mktemp -d` in driver mode that is never removed; the shim logs it and it is still live (macOS: the
+// TMPDIR does not see it). The 54 run temp files are logged too, but removed: only the 9 leaked dirs are live.
+test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through a live logged path (and, where mktemp honours TMPDIR, the TMPDIR)', { skip }, () => {
     const dir = tmp('dd-a5m-');
     try {
         const c = cycles(variant(dir, 'mktemp_leak', [['RUN_RC=0; RUN_TX=""\n', 'mktemp -d >/dev/null\nRUN_RC=0; RUN_TX=""\n']]));
@@ -177,14 +183,15 @@ test('A5 teeth: mutant bare-mktemp-leak turns the cycle row red through the shim
             // the TMPDIR check in assertCycles fires first: exactly the 9 leaked dirs, named as the shim logged them
             assert.throws(() => assertCycles(c), /the private TMPDIR holds entries/);
             assert.equal(c.tmpdir.length, 9);
-            assert.deepEqual(c.tmpdir.slice().sort(), c.shim.map((p) => basename(p)).sort(), 'the TMPDIR entries are the leaked dirs');
-            assert.throws(() => assertCycles({ ...c, tmpdir: [] }), /driver mode called mktemp/, 'the shim leg is red on its own');
+            assert.deepEqual(c.tmpdir.slice().sort(), c.live.map((p) => basename(p)).sort(), 'the TMPDIR entries are the leaked dirs');
+            assert.throws(() => assertCycles({ ...c, tmpdir: [] }), /a logged mktemp path survived/, 'the live leg is red on its own');
         } else {
-            assert.throws(() => assertCycles(c), /driver mode called mktemp/);
+            assert.throws(() => assertCycles(c), /a logged mktemp path survived/);
             assert.deepEqual(c.tmpdir, [], 'a mktemp that ignores TMPDIR (macOS BSD) leaves the TMPDIR empty');
         }
-        assert.equal(c.shim.length, 9);
+        assert.equal(c.shim.length, 54 + 9, '54 run temp files + the 9 leaked dirs');
         assert.equal(c.live.length, 9, 'every leaked dir was still on disk when the row read it');
+        for (const p of c.live) assert.doesNotMatch(basename(p), /^deopt-diff\./, 'only the bare mktemp -d dirs are live');
     } finally { rmAll(dir); }
 });
 

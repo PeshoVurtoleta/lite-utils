@@ -7,6 +7,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G2 deopt-diff (audit R2 = BB-opus-1 reach, R6 = DD-fable-2 / cross-opus R2, R7 = DD-opus-1 / cross-opus R1, R26 =
+  ICD-opus-3, R24 = DD-fable-1, R25 = DD-opus-3; Q-B57-PIPE, Q-B57-FLAG, Q-B57-C1, Q-B57-MINOR, Q-B57-DOC,
+  Q-B60-TMPFULL, Q-B61-DD-TRAP, Q-B61-DD-GLUE, Q-B61-DD-TORN2). R2: each driver run's stdout and stderr go to one
+  regular file, `mktemp "${TMPDIR:-/tmp}/deopt-diff.XXXXXX"`, never a pipe (a full pipe dropped V8's own writes while
+  the run still ended cleanly, so a deopt could vanish and read as SAME); the file is read through `tee | tr | awk`
+  (the `@ n t r a` status line is kept), then removed. A failing mktemp is NO-VERDICT `cannot read driver output in
+  run k (mktemp exited N)` and that run's driver never starts. Q-B60-TMPFULL: after the read, 64 KiB of spaces are
+  appended to the file with the bash builtin (no spawn, raw/ unchanged); a failure is NO-VERDICT `append exited N`;
+  precedence awk > tr > tee > append > driver exit. Q-B61-DD-TRAP: one EXIT trap in the main shell removes the temp
+  file on every exit path (residual: LEDGER #95 b) and chains the script's fail-closed EXIT trap, so an unexpected
+  error still prints its VERDICT line; on SIGTERM the report now says `unexpected error (exit 143)` where the before
+  build said `(exit 0)`. R7 (Q-B57-C1): a line starting `[bailout (kind: ` that names no function and is not a whole
+  bailout line, or holds a second `[bailout (kind: ` after its own, is X "bailout: torn trace line" for every fn
+  (another thread wrote into the line). Q-B61-DD-GLUE + Q-B61-DD-TORN2: the same refusal for a torn `[bailout (kind: `
+  glued after other text on a line (a `[bailout end. ..` prefix included), and for a second head after it; a glued
+  WHOLE bailout with no second head keeps its old path. R6 (Q-B57-FLAG): a `[compiling method ` line with `, mode:
+  ConcurrencyMode::kConcurrent` is X "background compile (--no-concurrent-recompilation overridden by a V8 flag
+  implication)" for every fn (the compile line only: `[marking ... kConcurrent` is on every normal run); `--v8-flags`
+  holding `*stress-concurrent-inlining*` (every spelling, `_` read as `-`, the `--no-` form included) is refused, exit
+  2, 0 spawns. R26: an `=` in the resolved node path is refused, exit 2, 0 spawns. R24 / R25 (Q-B57-DOC): -h only: the
+  staged copies take the `type` of the nearest package.json above DIR (DD-fable-1 stays RED by design: a documented
+  behaviour); a driver that closes fd 1 is Not detected (DD-opus-3 GREEN). On normal trace text the records are
+  byte-identical to the before build ff6108b / sha256/8 050e01e1: golden parity at the first coder stage (root
+  8eb49219: self-test and fixtures output, SAME / DIFF / NO-VERDICT reports and raw/ files; the other four roots
+  unchanged) and again on the final root 2ce1d32e (REPRO-b61-final.txt: gold.sh byte-identical to GOLDEN-b61-g2/after,
+  which equals before/), plus reviewer r2's corpus check (node 26.8.2 traces, 8 files x 8 fn names = 64 pairs, record
+  output byte-identical to the before build, 0 X; REVIEW-b61-g2-r2.md). Spawns: node spawns unchanged (8 at --runs 3);
+  mktemp +1 per run; temp files left after a run: 0. Measured on macOS, bash 3.2.57, node 26.8.2, host PRELIMINARY
+  (load1 2.2-2.8, sibling sessions, not under the quiet lock; demonstrations, not gates): the b57-rpipe held-full-pipe
+  driver pair, 8 rounds each: before build ff6108b / sha256/8 050e01e1 gave 4 wrong SAME, 4 NO-VERDICT, 0 DIFF; the G2
+  r1 root 114324af gave DIFF 7, NO-VERDICT 1 (`bailout: torn trace line`), 0 wrong SAME; the final root 2ce1d32e gave
+  DIFF 6, NO-VERDICT 2 (`bailout: torn trace line` and `bailout: after code tier`), 0 wrong SAME
+  (REPRO-b61-final.txt). The audit repro rows are GREEN on the r1 root 114324af and on the final root 2ce1d32e
+  (REPRO-b61-final.txt): cross-opus R1 R2 R3, DD-fable-2, DD-opus-1 / -2 / -3 (DD-opus-2 is G0's); DD-fable-1 RED by
+  design (before build: R1 R2 DD-fable-1 DD-fable-2 DD-opus-1 DD-opus-3 RED). The r2 fix touched the torn rules and
+  the `--no-` die text. Tests: test/audit-g2.test.mjs added (37 rows, mutants included; A1 is the R2 row run on the
+  before build, A8 the real-node "never the wrong verdict" row with no old-code tooth of its own); `--self-test` 99 ->
+  107 checks, `--fixtures` 116 -> 124; the pins in deopt-diff / -boundary / -stage / -stage-boundary tests move with
+  the run_side text, and final-trap's deopt-diff raw `exit 0` census 18 -> 19. `npm test` (final tree): 2671 tests,
+  2663 pass, 0 fail, 8 skip (one run on the final tree in a private copy with .git, quiet lock, host PRELIMINARY,
+  load1 1.73 -> 6.14). Local proof is bash 3.2.57 / macOS / node 26.8.2 only. Known limits: LEDGER #95.
 - G1 bytecode-budget (audit R2 = BB-opus-1, R5 = BB-fable-1, R3 = BB-opus-2, R22 = BB-opus-5, R23 = BB-opus-6, R26 =
   ICD-opus-3, R24 = DD-fable-1; Q-B57-PIPE, Q-B57-C1, Q-B57-BB2, Q-B57-MINOR, Q-B57-DOC, Q-B60-TMPFULL). R2: the
   driver's stdout and stderr go to a per-probe mktemp regular file, never a pipe (a full pipe dropped V8's own writes

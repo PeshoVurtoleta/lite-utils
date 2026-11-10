@@ -326,17 +326,18 @@ mutant('M-order', 'stage_write before the --version spawn',
     (c, r) => { assert.equal(r.status, 2, msg(r)); assert.ok(existsSync(join(c.out, 'stage')), 'stage not written before --version'); });
 
 // =====================================================================================================
-// A5 retention: 20 staged ref runs, each into a new --out. The budget is spawns and files (no GC in bash, S-12).
+// A5 retention: 20 staged ref runs, each into a new --out. The budget is spawns and files (no GC in bash, S-12). Each
+// run makes ONE run_side temp file per driver run (b61 G2 T2.1): 20 x 2 sides x 3 runs = 120 logged, every one removed.
 // =====================================================================================================
 const repoState = () => ({ head: git(REPO, 'rev-parse', 'HEAD'), refs: git(REPO, 'for-each-ref'), status: git(REPO, 'status', '--porcelain') });
 function realMktemp() { for (const d of (process.env.PATH || '').split(':')) { if (d && existsSync(join(d, 'mktemp'))) return join(d, 'mktemp'); } return '/usr/bin/mktemp'; }
-test('deopt-diff stage A5 retention: 20 ref runs give exactly 160 spawns and 11 files per OUT; TMPDIR, cwd and mktemp stay untouched; the repo is unchanged', { skip }, () => {
+test('deopt-diff stage A5 retention: 20 ref runs give exactly 160 spawns and 11 files per OUT; 120 run temp files ($TMPDIR/deopt-diff.XXXXXX, 6 per run), none live; TMPDIR and cwd empty; the repo is unchanged', { skip }, () => {
     let c;
     try {
         c = mkCase();
         const shim = join(c.dir, 'shim'), mlog = join(c.dir, 'mktemp.log');
         mkdirSync(shim);
-        writeFileSync(join(shim, 'mktemp'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(mlog)}\nexec ${JSON.stringify(realMktemp())} "$@"\n`); chmodSync(join(shim, 'mktemp'), 0o755);
+        writeFileSync(join(shim, 'mktemp'), `#!/bin/sh\np=$(${JSON.stringify(realMktemp())} "$@") || exit $?\nprintf '%s\\t%s\\n' "$*" "$p" >> ${JSON.stringify(mlog)}\nprintf '%s\\n' "$p"\n`); chmodSync(join(shim, 'mktemp'), 0o755);
         const before = repoState();
         assert.equal(before.status, '');
         for (let i = 0; i < 20; i++) {
@@ -347,7 +348,14 @@ test('deopt-diff stage A5 retention: 20 ref runs give exactly 160 spawns and 11 
             assert.equal(files.length, 11, `run ${i}: ${files.join(' ')}`);   // report.txt + raw 3 + 3 + stage 2 + 2
         }
         assert.equal(c.spawns().length, 20 * 8, 'node spawns over 20 runs');
-        assert.equal(existsSync(mlog) ? readFileSync(mlog, 'utf8') : '', '', 'the staged run called mktemp');
+        const ml = (existsSync(mlog) ? readFileSync(mlog, 'utf8') : '').split('\n').filter(Boolean).map((l) => l.split('\t'));
+        const live = ml.map(([, p]) => p).filter((p) => p && existsSync(p));
+        assert.deepEqual(live, [], 'a logged mktemp path survived');
+        assert.equal(ml.length, 20 * 6, 'run temp files over 20 runs (2 sides x 3 driver runs each)');
+        for (const [a, p] of ml) {
+            assert.equal(a, `${c.tmp}/deopt-diff.XXXXXX`, 'a mktemp call that is not the run_side template');
+            assert.ok(p.startsWith(`${c.tmp}/deopt-diff.`), p);
+        }
         assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR kept entries');
         assert.deepEqual(readdirSync(c.cwd), [], 'cwd kept entries');
         assert.deepEqual(repoState(), before, 'the repo changed (status / HEAD / refs)');
@@ -435,12 +443,12 @@ test('deopt-diff stage A3/A4: --self-test (host env) exits 0, no FAIL, each of t
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 1, `check "${n}"`);
     assert.equal(ST_NAMES.length, 23);
 });
-test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 23 staged checks; host-env ok count = pre-G2 count + 46 (23 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2 + 2 G-ENV Q-ENV / T14)', { skip: baseSkip }, async () => {
+test('deopt-diff stage A3 teeth: the pre-G2 build (221ff2ec) has none of the 23 staged checks; host-env ok count = pre-G2 count + 54 (23 staged + 13 G3 B2 + 5 B-four dd + 3 MD-50..56 G2 + 2 G-ENV Q-ENV / T14 + 8 b61 G2)', { skip: baseSkip }, async () => {
     histGate(haveBase);
     const r = await ST.pre;
     assert.equal(r.status, 0, r.out + r.err);
     for (const n of ST_NAMES) assert.equal(countOf(r.out, n), 0, n);
-    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3 + 2); // 99 = 53 + 46 = 53 + 23 + 13 + 5 + 3 + 2 (spec: CHECKS 97 -> 99)
+    assert.equal(okLines((await ST.base).out).length, okLines(r.out).length + ST_NAMES.length + 13 + 5 + 3 + 2 + 8); // 107 = 53 + 54 = 53 + 23 + 13 + 5 + 3 + 2 + 8 (spec: CHECKS 97 -> 99; b61 G2 TASK 5: 99 -> 105; A2 item 1: 105 -> 107)
 });
 for (const [label, key] of [['GIT_EDITOR / EDITOR / VISUAL = true', 'editor'], ['the six GIT_* vars set to missing paths', 'missing'], ["GIT_CONFIG_PARAMETERS=\"'tag.gpgsign'='true'\"", 'params']]) {
     test(`deopt-diff stage A4 env: --self-test with ${label} -> exit 0, same ok count as the host-env run, all 23 staged checks once`, { skip }, async () => {

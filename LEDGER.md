@@ -24,23 +24,23 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 3. **Refuse before the first spawn or write.** Every unverified input (node binary, `--out`, symlinks, hard links)
    is refused exit 2 with 0 spawns; accepting it and failing later is a fail-open. A `--v8-flags` refusal comes at
    the latest after one `--v8-options` read (#10, #33; gap #66). *(#2, #3, #21, #22,
-   #24, #26, #27, #29, #31)*
+   #24, #26, #27, #29, #31, #93)*
 4. **Allowlist, never denylist.** A denylist of dangerous flags missed one (`--run`, `--prof`, `--report-*`,
    `--require-module`); the runtime V8 allowlist is the winner, and its one known gap is recorded, not hidden.
    *(#6, #8, #9, #22, #66)*
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
    could not have run; check the exit first. Size caps to the slowest CI leg, and `--test-timeout` to the slowest
    FILE. *(#40, #42, #43)*
 9. **A history pin must be reachable from a ref, and a CI view must include `.git`.** Otherwise it passes locally
-   and dies (or silently skips) in CI. *(#11, #38, #55)*
+   and dies (or silently skips) in CI. *(#11, #38, #55, #94)*
 10. **Never kill by pattern, never share a scratch dir, never run a test on the live tree.** Lanes work in private
-    `mktemp -d` dirs, kill only their own PIDs, and test in an overlay. *(#57-#61)*
+    `mktemp -d` dirs, kill only their own PIDs, and test in an overlay. *(#57-#61, #93)*
 11. **A literal REJECT gets one in-burst fix round; a design REJECT stops the unit.** Rejected diffs are parked
     against the overlay base, never reset to HEAD. *(#25, #62, #63)*
 
@@ -282,6 +282,50 @@ reviewer (r1b, APPROVED) built the five mutants with its own edits: each turns e
 
 ---
 
+**#93 G2 deopt-diff (b61): six mechanisms and what proves each.** Hex labels in #93-#94 are sha256/8 of the named file, not commits: before build = commit ff6108b / sha256/8 050e01e1 (frozen); 8eb49219 = the B1 root; 114324af = the r1 root (src ea07f9d5); 2ce1d32e / 95364e21 = the final roots after r2. (a) R2 regular file (Q-B57-PIPE): run_side writes
+the driver's output to one `mktemp "${TMPDIR:-/tmp}/deopt-diff.XXXXXX"` file per run, read through tee | tr | awk with
+the `@ n t r a` status line kept; a `mktemp N` token reads "cannot read driver output in run k (mktemp exited N)".
+Proved by audit-g2 A1 (a fake logging `[ -p /dev/stdout ]`: 6 file, 0 pipe, 8 spawns, with and without --out; relative
+TMPDIR; TMPDIR a regular file) -- A1 is the R2 row run on the before build (r1 review and the B1 proof rows, before build: 6 pipe, TMPDIR-file row exit 0 SAME) --
+A2 (retention: 6 mktemp calls per invocation, 54 logged over 9, 0 left; a no-`rm` mutant leaves 54) and A8 (real node,
+the b57-rpipe pair, 3 attempts: never exit 0 / SAME; no old-code tooth of its own, its drivers are inlined strings).
+MEASURED demonstration, not a gate (macOS, bash 3.2.57, node 26.8.2, host PRELIMINARY, load1 2.45 -> 2.54 before and
+2.42 -> 2.79 after (r1 root) and 2.77 -> 2.18 final, not under the quiet lock, 8 rounds each): before build ff6108b / 050e01e1 gave 4 wrong SAME, 4 NO-VERDICT, 0
+DIFF; the r1 root 114324af gave DIFF 7, NO-VERDICT 1 ("bailout: torn trace line"), 0 wrong SAME; the final root 2ce1d32e gave DIFF 6, NO-VERDICT 2 ("bailout: torn trace line" and "bailout: after code tier"), 0 wrong SAME (`RPIPE-b61-before.txt`,
+`REPRO-b61-after.txt`, `REPRO-b61-final.txt`). (b) T2.6 Q-B60-TMPFULL: 64 KiB appended after the read; precedence awk > tr > tee > append >
+driver exit; proved by A7 under `ulimit -f 32` with SIGXFSZ ignored (`append exited N`, 0 `driver exited`, raw/ bytes
+equal the fake's output; a driver rc 3 still reads `append exited N` (append before driver exit) and a tr exit 6 keeps `tr exited 6` (tr before append)) and three mutants (drop the append, drop the
+`!= *' '*` guard, append before the precedence line). (c) Q-B61-DD-TRAP: one chained EXIT trap removes the temp file on
+every exit path (residual: #95 b) and runs the script's fail-closed trap after it; proved by A3 (SIGTERM during the 3rd driver run:
+TMPDIR empty, stderr `unexpected error (exit 143)`, exactly one VERDICT NO-VERDICT), the a3-noold mutant (drop `$old`),
+the no-rm mutant (leaves exactly 1 file) and deopt-diff-stage-boundary row 12; SIGTERM / SIGINT / SIGHUP to the process
+group during run 3 MEASURED by reviewer r1 on the r1 root 114324af and base 050e01e1 (TMPDIR empty, one VERDICT line; the r1 root reported (exit 143 / 130 / 129), base reported (exit 0)). (d) R7 / Q-B61-DD-GLUE / Q-B61-DD-TORN2: a torn `[bailout (kind: ` line is X "bailout: torn trace
+line" for every fn: at line start when it is not a whole bailout line or holds a second head after column 16; glued
+after other text (a `[bailout end. ..` prefix included, no line-start exclusion) when the text from the head is not a
+whole bailout line or holds a second head; a glued WHOLE bailout keeps its old path. Proved by self-test rows (the plan's labels (a) (f)
+(g) (h)) and audit-g2 A4 (+ controls and the guard mutant), A11, A12, A12-glued, A13, each with a mutant that turns its
+own row red (drop the T2.2 second-head term: row (g) + A12; drop the glue second-head term: row (g) + A12-glued;
+restore the r1 `substr($0, 1, 8) != "[bailout"` conjunct: row (h) + A13). Argued, not run, by reviewer r2: in any
+interleaving of two or more writers the earliest head is followed by a second head or by text that fails the full
+shape, so at least one line is refused for every fn. (e) R6 kConcurrent: a `[compiling method ` line with `, mode:
+ConcurrencyMode::kConcurrent` is X "background compile (...)" for every fn, and any `*stress-concurrent-inlining*`
+flag (every spelling, `--no-` included) is refused before any spawn. Proved by audit-g2 A5 (R2 fake exit 2; a compile
+line naming `other` still blocks add; R3 kSynchronous plus `[marking .. kConcurrent` stays SAME; the name refusal rows
+0 spawns) and the whole-condition mutant (widened to index($0, "ConcurrencyMode::kConcurrent")): R3 turns NO-VERDICT
+and the canned self-test rows go red; repro rows cross-opus R1 R2 R3 and DD-fable-2 GREEN on the r1 root 114324af and on the final root 2ce1d32e (`REPRO-b61-final.txt`). (f) R26 `=` in the resolved
+node path refused, 0 spawns (A6); R24 / R25 are -h sentences (A9: `closes fd 1`, `nearest package.json above DIR`;
+DD-opus-3 GREEN on 114324af and on 2ce1d32e, DD-fable-1 RED by design). Parity: golden vectors from the frozen before build 050e01e1 (B1 stage,
+root 8eb49219 / src d5d76e75): self-test and fixtures output (99 / 116 ok), and the SAME, DIFF and NO-VERDICT reports
+and raw/ trees, byte-identical; the other four roots unchanged (`.handoff/evidence/GOLDEN-b61-g2/`); on the final root 2ce1d32e gold.sh is byte-identical to GOLDEN-b61-g2/after, which equals before/ (`REPRO-b61-final.txt`). Counts: self-test
+99 -> 107 checks, fixtures 116 -> 124 (exact pins), audit-g2 37 rows, the deopt-diff / -boundary / -stage /
+-stage-boundary pins re-pinned, final-trap's deopt-diff raw `exit 0` census 18 -> 19. `npm test` (final tree): 2671 tests, 2663 pass, 0 fail, 8 skip (one run on the final tree in a private copy with .git, quiet lock, host PRELIMINARY, load1 1.73 -> 6.14) (`NPMTEST-b61-g2.txt`).
+Roots after r2: deopt-diff.sh 2ce1d32e, src 95364e21; build.sh regenerates every root byte-identical (reviewer r2).
+Evidence: `.handoff/PLAN-b61-g2.md`, `.handoff/RULINGS-b61-g2.md`, `.handoff/evidence/REVIEW-b61-g2-r1.md`,
+`REVIEW-b61-g2-r2.md`, `REPRO-b61-before.txt`, `REPRO-b61-after.txt`, `REPRO-b61-final.txt`, `RPIPE-b61-before.txt`,
+`NPMTEST-b61-g2.txt`, `NPMTEST-b61-g2-prereview.txt` (local, untracked).
+
+---
+
 ## C. CI / platform lessons
 
 **#38 History pins reachable only via the local reflog (burst 35).** Review of `ci.yml` found 4 of 5 history-test
@@ -430,6 +474,31 @@ is guarded by hand with `||`. (g) r1 blocker 1: a row titled "local only" must s
 clause tests CI_STRICT, or it runs on all legs. Evidence: `.handoff/evidence/REVIEW-b60-g1-r1.md`,
 `REVIEW-b60-g1-r1b.md`; for (a) also `.handoff/evidence/NPMTEST-b60-g1.txt` (the pre-review run, rc 1, the one red
 row) (local, untracked).
+
+---
+
+**#94 G2: defects and gate lessons the unit caught.** (a) Review r1 REJECTED (1 DESIGN + 2 LITERAL), one fix round
+under the maintainer's waiver (Q-B61-WAIVE of the design-REJECT stop rule; a second REJECT would have parked the
+unit); r2 APPROVED. (b) Two torn forms gave a wrong SAME on 114324af: a torn head followed on the same line by a whole
+bailout of another function (the greedy `.*` matched it), and a torn head glued after a real `[bailout end. ..` prefix
+(the glue rule's line-start exclusion skipped it); fixed by Q-B61-DD-TORN2 with the reviewer's text. The orchestrator's
+by-reading assumption "only the main thread prints bailouts" was challenged by the reviewer's argument (not reproduced): V8 flags are process-wide
+and a Worker isolate prints its own bailouts to the shared fd 1 in several PrintF calls; ARGUED from V8's printing,
+NOT reproduced on real node. (c) The planner's widened-index A5 mutant was verdict-equivalent (the `[compiling method ` guard still keeps the
+`[marking` line out, so widening the index alone changes nothing); only the whole-condition mutant is a tooth, and the
+guard-only mutant is equivalent too (the `[marking` line has no `, mode: `): a mutant needs a row that can tell it apart before it counts. (d) audit-g2 A8
+copied its drivers from the gitignored `audit/` tree: it passed locally and would die ENOENT on CI; a test never reads
+an untracked path, the drivers are now string constants. (e) The drop-`$old` trap mutant survived r1: chaining the
+fail-closed trap needs its own must-fail row (A3's stderr / single-VERDICT assertions and a3-noold). (f) The first full
+`npm test` caught final-trap's deopt-diff raw `exit 0` census (18 -> 19): any new `exit 0` text in a root moves it;
+that run (pre-review, private copy with .git, root 114324af, host PRELIMINARY, load1 6.44 -> 5.91): 2664 tests, 2655
+pass, 1 fail, 8 skip, the one fail that census. (g) A SIGTERM during a run now ends `unexpected error (exit 143)`
+where the before build printed `(exit 0)`; on bash 3.2 the trap's `(exit $st_rc)` subshell also prints a cosmetic
+`Terminated: 15 ( exit $st_rc )` (or `Hangup: 1`) line to stderr (reviewer r1: exit code and the single VERDICT line
+are right). (h) Leads checked, no change: `grep -c ... || true` at the count sites feeds printed counts only; the
+verdict is the d_ms comparison, so a grep exit 2 can blank a printed count and never move a verdict (by reading).
+Evidence: `.handoff/evidence/REVIEW-b61-g2-r1.md`, `REVIEW-b61-g2-r2.md`, `NPMTEST-b61-g2-prereview.txt` (local,
+untracked).
 
 ---
 
@@ -710,3 +779,18 @@ torn-record sentences at src lines 108-111 sit before "No address reaches that l
 spawns, fails closed (r1 NIT, measured). UNVERIFIED: Linux, bash 5, node 22 / 24, uutils `mktemp`. Evidence:
 `.handoff/evidence/REVIEW-b60-g1-r1.md`, `REVIEW-b60-g1-r1b.md` (local, untracked).
 
+**#95 G2 open limits.** Measured, read or argued is stated per item. (a) TMPFULL: a TMPDIR full during a run and freed
+before the append check is not caught, and a real full disk was not run: only `ulimit -f` with SIGXFSZ ignored was
+tested, so node's exit status on a real full disk is unproven (READ; -h). (b) A signal inside `$(mktemp)` before the
+script has the file's name can leak one `deopt-diff.XXXXXX`; SIGKILL leaks the file in flight (by reading; -h; the
+Q-B61-DD-TRAP residual). (c) Tearing by a Worker isolate (V8 printing a bailout in several PrintF calls to a shared fd
+1) is ARGUED by the reviewer, not reproduced on real node; the Q-B61-DD-TORN2 second-head terms and the `[bailout end. ..` glue case are built on that argument (a line-start torn head is reproduced on real node: R7 / DD-opus-1, cross-opus R1, rpipe round 5). (d) R24
+(staged copies inherit `type` from the nearest package.json above DIR; DD-fable-1 stays RED by design) and R25 (a driver
+that closes fd 1 and 2 loses V8's trace with exit 0; DD-opus-3) are documented in -h only (Q-B57-DOC). (e) bash 5,
+Linux, uutils `mktemp`, mawk / gawk, and node 22 / 24 are proved only by CI; local proof is bash 3.2.57, macOS, node
+26.8.2 (the A3 stderr text on bash 5 is UNVERIFIED). (f) A driver that itself prints trace-like text stays "Not
+detected" (a plain line a hostile or careless driver writes can read as a record). (g) Open FILLERS from the r2 NIT
+(READ, no wrong verdict): the -h X list says a glued WHOLE bailout naming fn gives X "trace text not at line start";
+after a `[bailout end. ..` prefix it gives "bailout: no (kind: prefix", after a `[completed compiling ` prefix
+"completed compiling: function name" (still refusals; wording predates r2, deopt-diff.sh:124-127). Evidence:
+`.handoff/evidence/REVIEW-b61-g2-r1.md`, `REVIEW-b61-g2-r2.md` (local, untracked).

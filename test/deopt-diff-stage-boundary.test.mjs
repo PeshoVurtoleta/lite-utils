@@ -673,9 +673,10 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     }
 
     // =================================================================================================
-    // 11. retention (A5 extension): 3 cycles each of SAME / DIFF / NO-VERDICT / a refusal in staged mode leave cwd,
-    // TMPDIR and the real temp dir (logging mktemp shim) untouched and the repo's HEAD / refs / status unchanged.
-    // Control: M-mktemp (a bare `mktemp -d` before the --version spawn, never removed) must turn it red.
+    // 11. retention (A5 extension): 3 cycles each of SAME / DIFF / NO-VERDICT / a refusal in staged mode leave cwd and
+    // TMPDIR empty, no logged mktemp path live, and the repo's HEAD / refs / status unchanged. run_side makes ONE temp file
+    // per driver run (b61 G2 T2.1): 9 verdict runs x 2 sides x 3 runs = 54 logged, each $TMPDIR/deopt-diff.*, 0 for a refusal.
+    // Control: M-mktemp (a bare `mktemp -d` before the --version spawn, never removed) must turn it red through the live leg.
     // =================================================================================================
     const CYC = [
         ['SAME', 0, (c, o) => refO({ ...c, out: o }, { '--after-ref': 'r1' })],
@@ -703,21 +704,22 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
             const made = sh.made();
             const leaked = made.filter((p) => existsSync(p));
             for (const p of leaked) rmSync(p, { recursive: true, force: true });   // the test removes what a mutant leaked
-            return { shimLive, res, spawns: c.spawns(), made, leaked, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), repoSame: JSON.stringify(repoState()) === JSON.stringify(pre) };
+            return { shimLive, res, spawns: c.spawns(), made, leaked, td: c.tmp, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), repoSame: JSON.stringify(repoState()) === JSON.stringify(pre) };
         } finally { if (c) rmSync(c.dir, { recursive: true, force: true }); }
     }
     const retCheck = (x) => {
         assert.ok(x.shimLive, 'the mktemp shim did not log a control mktemp -d');
         assert.deepEqual(x.res.map((q) => `${q.name}:${q.status}:${q.n}`), [0, 1, 2].flatMap(() => CYC.map(([n, rc]) => `${n}:${rc}:${n === 'refusal' ? -1 : 11}`)));
         assert.equal(x.spawns, 3 * 3 * 8, 'node spawns over 9 verdict runs + 3 refusals');
-        assert.deepEqual(x.made, [], 'mktemp was called (a dir in the real temp dir)');
-        assert.deepEqual(x.leaked, []);
+        assert.deepEqual(x.leaked, [], 'a logged mktemp path survived');
+        assert.equal(x.made.length, 9 * 6, 'run temp files: 9 verdict runs x 2 sides x 3 driver runs, 0 for a refusal');
+        for (const p of x.made) assert.ok(p.startsWith(`${x.td}/deopt-diff.`), `a mktemp path outside $TMPDIR/deopt-diff.*: ${p}`);
         assert.deepEqual(x.tmp, [], 'TMPDIR kept entries');
         assert.deepEqual(x.cwd, [], 'cwd kept entries');
         assert.ok(x.repoSame, 'the repo HEAD / refs / status changed');
     };
     const M_MKTEMP = [['# --- every refusal but the --v8-flags allowlist is above this line; spawns start here', 'LEAK_D=$(mktemp -d)   # mutant']];
-    test('stage boundary: 11 retention: 3 x SAME / DIFF / NO-VERDICT / refusal (staged) -> 72 spawns, 11 files per verdict OUT, 0 mktemp, cwd + TMPDIR empty, repo unchanged', { skip }, async () => {
+    test('stage boundary: 11 retention: 3 x SAME / DIFF / NO-VERDICT / refusal (staged) -> 72 spawns, 11 files per verdict OUT, 54 run temp files none live, cwd + TMPDIR empty, repo unchanged', { skip }, async () => {
         retCheck(await retention(SCRIPT));
     });
     test('stage boundary teeth: [11 retention] on the pre-G2 build (221ff2ec) every run exits 2 -> red', { skip: baseSkip }, async () => {
@@ -728,12 +730,14 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     });
     test('stage boundary MUTANT M-mktemp (a bare mktemp -d before the --version spawn, never removed): 11 retention goes red', { skip }, async () => {
         const x = await retention(variant('M-mktemp', M_MKTEMP));
-        assert.throws(() => retCheck(x), assert.AssertionError);
-        assert.equal(x.made.length, 9, 'one leaked dir per run past the refusals');
+        assert.throws(() => retCheck(x), /a logged mktemp path survived/);
+        assert.equal(x.leaked.length, 9, 'one leaked dir per run past the refusals');
+        assert.equal(x.made.length, 9 * 6 + 9, 'the 54 run temp files + the 9 leaked dirs');
     });
 
     // =================================================================================================
-    // 12. SIGTERM to the process group while driver run 3 (before, k = 2) is in flight leaves no temp dir
+    // 12. SIGTERM to the process group while driver run 3 (before, k = 2) is in flight leaves no temp dir or file (the EXIT
+    // trap removes the run temp file of the run in flight)
     // =================================================================================================
     async function sigterm(script) {
         let c, ch;
@@ -756,7 +760,7 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
             for (const p of leaked) rmSync(p, { recursive: true, force: true });
             // outside sigCheck: a teeth / mutant assert.throws can never swallow it
             if (escalated) assert.fail('deopt-diff.sh SIGTERM run timed out after 30000 ms (killed by SIGKILL)');
-            return { wasReady, exitedEarly, st, out, made, leaked, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), spawns: c.spawns() };
+            return { wasReady, exitedEarly, st, out, made, leaked, td: c.tmp, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), spawns: c.spawns() };
         } finally {
             if (ch) { try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }
             if (c) rmSync(c.dir, { recursive: true, force: true });
@@ -767,12 +771,14 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
         assert.equal(x.spawns, 5, '--version + --v8-options + 3 driver spawns at the kill');
         assert.ok(x.st.signal === 'SIGTERM' || (x.st.signal === null && x.st.code !== 0), JSON.stringify(x.st));
         assert.doesNotMatch(x.out, /^VERDICT /m);
-        assert.deepEqual(x.made, [], 'mktemp was called');
-        assert.deepEqual(x.leaked, []);
+        assert.deepEqual(x.leaked, [], 'a logged mktemp path survived');
+        // one run_side temp file per driver run started (3 at the kill): the one in flight is the EXIT trap's to remove
+        assert.equal(x.made.length, 3, 'run temp files at the kill (one per started driver run)');
+        for (const p of x.made) assert.ok(p.startsWith(`${x.td}/deopt-diff.`), `a mktemp path outside $TMPDIR/deopt-diff.*: ${p}`);
         assert.deepEqual(x.tmp, [], 'TMPDIR kept entries');
         assert.deepEqual(x.cwd, [], 'cwd kept entries');
     };
-    test('stage boundary: 12 SIGTERM (process group) during driver run 3 of a staged ref verdict -> killed, no VERDICT, 0 mktemp, TMPDIR + cwd empty', { skip }, async () => {
+    test('stage boundary: 12 SIGTERM (process group) during driver run 3 of a staged ref verdict -> killed, no VERDICT, 3 run temp files none live, TMPDIR + cwd empty', { skip }, async () => {
         sigCheck(await sigterm(SCRIPT));
     });
     test('stage boundary teeth: [12 SIGTERM] on the pre-G2 build (221ff2ec) the run exits before any driver spawn -> red', { skip: baseSkip }, async () => {
@@ -783,7 +789,8 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
     });
     test('stage boundary MUTANT M-mktemp on 12 SIGTERM: the leaked dir turns the row red', { skip }, async () => {
         const x = await sigterm(variant('M-mktemp-sig', M_MKTEMP));
-        assert.throws(() => sigCheck(x), assert.AssertionError);
-        assert.equal(x.made.length, 1);
+        assert.throws(() => sigCheck(x), /a logged mktemp path survived/);
+        assert.equal(x.leaked.length, 1);
+        assert.equal(x.made.length, 3 + 1, 'the 3 run temp files + the leaked dir');
     });
 });

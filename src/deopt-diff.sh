@@ -19,13 +19,18 @@
 #                      cwd (a bare name through PATH). It must be an executable file, else exit 2 before any node
 #                      spawn ("node binary not found", "node binary is not a file on PATH (...)", "node binary is
 #                      not an executable file", "node binary: cannot resolve the directory of ...", "node binary: a
-#                      newline is not allowed in the resolved path").
+#                      newline is not allowed in the resolved path", "node binary: an = is not allowed in the
+#                      resolved path (env would read it as a NAME=value operand, not as the program): PATH").
 #   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-deopt*, *trace-opt* or *concurrent-recompilation* flag (the
-#                      script sets them), any *trace-file-names* flag (it changes the <JSFunction NAME (sfi = ...)>
-#                      text the records are read from), every --require* / --import* / --loader* /
-#                      --experimental-loader* flag, a prefix match (a module of yours, preload or loader, is part of
-#                      the measured process), every --env-file* / --experimental-config-file* /
+#                      script sets them), any *stress-concurrent-inlining* flag (every spelling:
+#                      --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the
+#                      script's --no-concurrent-recompilation; any other route to a background compile is
+#                      NO-VERDICT: see X "background compile" below), any *trace-file-names*
+#                      flag (it changes the <JSFunction NAME (sfi = ...)> text the records are read from), every
+#                      --require* / --import* / --loader* / --experimental-loader* flag, a prefix match (a module of
+#                      yours, preload or loader, is part of the measured process), every --env-file* /
+#                      --experimental-config-file* /
 #                      --experimental-default-config-file* flag, a prefix match (it loads environment variables or
 #                      node options from a file into the measured process), and every --eval* / --print* flag, a
 #                      prefix match (--eval / --print: node runs that code in the measured process instead of the
@@ -39,7 +44,10 @@
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
 #                      output of run k, addresses kept). DIR/raw must be absent or an empty, readable and writable
 #                      directory that is not a symlink; DIR/report.txt must not be a symlink or a file with another
-#                      hard link. Without --out nothing is written to disk.
+#                      hard link. Without --out no file is left on disk. With or without --out, each driver run
+#                      uses one temp file, ${TMPDIR:-/tmp}/deopt-diff.XXXXXX, removed right after (and by the EXIT
+#                      trap on any other exit: a refusal, an error, SIGINT, SIGTERM or SIGHUP); SIGKILL, or a signal
+#                      inside $(mktemp) before the script has the file's name, can leave one deopt-diff.XXXXXX behind.
 #                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
 #   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
 #                      sha; never starting with -). Goes with --after-ref.
@@ -76,11 +84,23 @@
 #   staged copy of --driver), each run as
 #   `node [v8 flags] --trace-deopt-verbose --trace-opt --no-concurrent-recompilation DRIVER`
 #   with cwd = its directory, NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped
-#   (unset at start, for every spawn), stderr merged into stdout, piped through tee (to the --out raw file, else
-#   /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and awk (keeps the trace lines, and for
-#   the tier section every line holding `;;; deoptimize at ` or `@@LITE-MARK` anywhere). The kept text of every run
-#   is held in memory: dense markers grow it. One run per side per k serves every fn; runs alternate before / after
-#   for k = 1..N.
+#   (unset at start, for every spawn), stderr merged into stdout, written to one temp file (see --out), which is
+#   then read through tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps
+#   the NUL) and awk (keeps the trace lines, and for the tier section every line holding `;;; deoptimize at ` or
+#   `@@LITE-MARK` anywhere). The kept text of every run is held in memory: dense markers grow it. One run per side per
+#   k serves every fn; runs alternate before / after for k = 1..N.
+#   The driver's stdout and stderr go to a regular temp file, never to a pipe: once JS touches process.stdout on a
+#   pipe, node makes it non-blocking and V8's own writes to a full pipe are dropped while the run still ends cleanly.
+#   The file is read after the driver has ended, then 64 KiB of spaces are appended to it (never to raw/) and it is
+#   removed right after: a TMPDIR still full when the run ends fails that append, NO-VERDICT ("append exited <rc>").
+#   Known limits of that file: a disk or quota on TMPDIR that was full during the run and freed before that check can
+#   still cut it. Only a file-size limit was tested, no real full disk, so node's status there is unknown: if it still
+#   ends with status 0, a bailout line cut after its `[bailout (kind: ` reads as X (NO-VERDICT), but a cut at a line
+#   boundary, inside a bailout line's first 16 bytes or in a `[completed compiling ` line before its name loses that
+#   record and every one after it with no sign (a lost E record can only reach the guard or the null control, a lost
+#   D record can turn a DIFF into SAME). A driver that reopens
+#   /dev/stdout (Linux: a new file description at offset 0 on the regular file) can overwrite what was already printed
+#   there.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. add, get value). Never
 #   qualified (Store.add). A repeated fn is refused. Matching is EXACT on the name between `<JSFunction ` and
 #   ` (sfi = `: add never matches addX, ad or Store.add, get never matches get value; node internals of other
@@ -96,7 +116,18 @@
 #                                    starting `[completed compiling` with no space after it ("completed compiling:
 #                                    no space after the prefix"); `[bailout` / `[completed compiling` text after
 #                                    other output on the same line ("trace text not at line start"; a NUL byte
-#                                    counts as other output: `abc<NUL>[bailout` and `<NUL>[bailout` are X too)
+#                                    counts as other output: `abc<NUL>[bailout` and `<NUL>[bailout` are X too).
+#                                    For EVERY fn (the line does not say whose it is): a line starting `[bailout
+#                                    (kind: ` that names no fn and is not a whole bailout line (`[bailout (kind: ..):
+#                                    begin. deoptimizing 0x.. <JSFunction .. (sfi = 0x..)>, 0x.. <Code T>, ..]`) or
+#                                    holds a second `[bailout (kind: ` after its own, and such a torn `[bailout (kind: `
+#                                    text after other output on the same line (a `[bailout end. ..` prefix counts)
+#                                    ("bailout: torn trace line": another thread wrote into the line; a glued WHOLE
+#                                    bailout line with no second head
+#                                    is X "trace text not at line start" when it names fn, else ignored); a
+#                                    `[compiling method ` line with `, mode: ConcurrencyMode::kConcurrent` ("background
+#                                    compile (--no-concurrent-recompilation overridden by a V8 flag implication)": a
+#                                    compile off the main thread makes the deopt trace a race)
 # Report lines (after "before  <abs path>  sha256/8 <x>" and "after   <abs path>  sha256/8 <x>"; ref / file mode: the
 #   head in Ref / file mode below; run 1):
 #   "  <fn>: before <e> optimized compile(s) [<unit> x<n>, ..], <d> deopt(s)" (the same for after; no [..] when e
@@ -106,10 +137,11 @@
 #     "    before=<n> after=<m>  [<fn>@<tier>] <kind> (<reason>)"
 #   "  <fn>: NO-VERDICT -- <before|after>: <reason>" (one line per side that has a reason below)
 # NO-VERDICT reasons (per side, first that applies; the first two are checked run by run, k = 1..N):
-#   cannot read driver output in run <k> (<tee|tr|awk> exited <rc>)
-#                                    (in one run the first failure in the order awk > tr > tee > driver exit is named:
-#                                    a failed awk before a failed tr, a failed tr before a failed tee, a failed tee
-#                                    before the driver exit)
+#   cannot read driver output in run <k> (<mktemp|tee|tr|awk|append> exited <rc>)
+#                                    (in one run the first failure in the order awk > tr > tee > append > driver exit
+#                                    is named: a failed awk before a failed tr, a failed tr before a failed tee, a
+#                                    failed tee before a failed append, a failed append before the driver exit; a
+#                                    failed mktemp means that run's driver never started)
 #   driver exited <rc> in run <k>
 #   unparseable trace line naming '<fn>' in run <k>: <why>      (<why> = the first X record)
 #   null control: run <k> differs from run 1 (<n> record(s) differ, first: run 1 x<a> | run <k> x<b>  [<unit>] <line>)
@@ -132,8 +164,11 @@
 #   DIR/stage/before and DIR/stage/after each get that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`,
 #   plumbing, no textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each
 #   side's driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its
-#   own fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>"
-#   (ref) or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
+#   own fails closed (its driver exits non-zero: NO-VERDICT). The staged copies take the module format (type) of the
+#   nearest package.json above DIR: a CommonJS .js module under a --out inside a "type":"module" project fails closed as
+#   "driver exited 1" (node's own error is in DIR/raw/<side>/run.1.txt); put DIR outside that project or name the
+#   module .cjs / .mjs. Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
+#   or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
 #   "driver  <abs --driver>  sha256/8 <x>", and when the two staged modules are byte-identical
 #   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
 #   The mode line says "diff (ref)" or "diff (file)". Spawns, lines and verdict as in driver mode, plus the
@@ -156,7 +191,8 @@
 # Not detected: a deopt of an inlined function counts only for the JSFunction named on the bailout line (its
 #   caller); a dependency invalidation of code that is not on the stack (`[marking dependent code ...]`, no
 #   bailout line) is not a deopt record; a driver that itself prints trace-like text (`[bailout` /
-#   `[completed compiling `) at line start is read as V8 trace output.
+#   `[completed compiling `) at line start is read as V8 trace output; a driver that closes fd 1 and fd 2 (or
+#   re-points them) before it deopts: V8's trace after that is lost and the run still exits 0.
 # Not detected (ref / file mode): a driver that reaches the live module by another path (an absolute path, or a
 #   package self-reference) instead of './NAME'; a hard link of --before to a tracked file that is not --after,
 #   <top>/Signal.js, <top>/<same name> or <top>/<--after's name> (a tracked hard link in --before's directory or
@@ -209,7 +245,7 @@
 #                                    "after op <a>", "before op <b>", "not compiled in run 1 (last marker op <n>)",
 #                                    "no @@LITE-MARK op lines", "markers unreadable (<why>)"
 #   "tier    <fn>  <side>  not reported (run 1: <rc>)"     instead of the side's lines when its run 1 did not
-#                                    exit 0 (<rc> = the driver exit, or "<tee|tr|awk> <rc>")
+#                                    exit 0 (<rc> = the driver exit, or "<mktemp|tee|tr|awk|append> <rc>")
 #   "tier    <fn>  <side>  unreadable (awk exited <rc>)"   instead of the side's lines when the section's awk
 #                                    exits non-zero, prints nothing, or prints a line not starting "tier    " (rc 0
 #                                    for a clean exit); the verdict and exit stand
@@ -264,6 +300,13 @@ function head(r,   p) {                           # r = text after "<JSFunction 
   REST = substr(r, RLENGTH + 1); return 1
 }
 function x(why) { print "X " why }
+# run evidence, not a flag name (V8 implications can override --no-concurrent-recompilation): a compile job V8 ran off the
+# main thread makes the deopt trace a race. Only the compile line: V8 prints `[marking ...` with kConcurrent on every run
+substr($0, 1, 18) == "[compiling method " && index($0, ", mode: ConcurrencyMode::kConcurrent") > 0 { x("background compile (--no-concurrent-recompilation overridden by a V8 flag implication)"); next }
+# a torn `[bailout (kind: ` head glued after other output (Q-B61-DD-GLUE; a `[bailout end. ..` prefix counts, and a second
+# head after it is torn too, Q-B61-DD-TORN2): it names no fn, so it is refused for every fn; a glued WHOLE bailout line
+# falls through to the rule below (names fn: "trace text not at line start"; else dropped)
+(p = index($0, "[bailout (kind: ")) > 1 && (substr($0, p) !~ /^\[bailout \(kind: .*\): begin\. deoptimizing 0x[0-9a-fA-F]+ <JSFunction.* \(sfi = 0x[0-9a-fA-F]+\)>, 0x[0-9a-fA-F]+ <Code [A-Z_]+>, .*\]$/ || index(substr($0, p + 16), "[bailout (kind: ") > 0) { x("bailout: torn trace line"); next }
 # a line naming fn that is not a line-start `[completed compiling ` / `[bailout` line: X when it carries such text
 substr($0, 1, 21) != "[completed compiling " && substr($0, 1, 8) != "[bailout" {
   if (!names($0)) next
@@ -272,7 +315,10 @@ substr($0, 1, 21) != "[completed compiling " && substr($0, 1, 8) != "[bailout" {
   next
 }
 substr($0, 1, 8) == "[bailout" {
-  if (!names($0)) next
+  if (!names($0)) {                               # another thread wrote into the line: the name is gone, refuse it for every fn
+    if (substr($0, 1, 16) == "[bailout (kind: " && ($0 !~ /^\[bailout \(kind: .*\): begin\. deoptimizing 0x[0-9a-fA-F]+ <JSFunction.* \(sfi = 0x[0-9a-fA-F]+\)>, 0x[0-9a-fA-F]+ <Code [A-Z_]+>, .*\]$/ || index(substr($0, 17), "[bailout (kind: ") > 0)) x("bailout: torn trace line")
+    next
+  }
   s = $0
   if (substr(s, 1, 16) != "[bailout (kind: ") { x("bailout: no (kind: prefix"); next }
   s = substr(s, 17); p = index(s, ", reason: ")
@@ -427,8 +473,8 @@ counts() {
   printf '%s optimized compile(s)%s, %s deopt(s)' "$e" "${u:+ [$u]}" "$d"
 }
 
-# judge FN: one side. JRC[k-1] = the driver exit of run k (or "<tee|tr|awk> <rc>" when that tool failed), JREC[k-1] =
-# FN's DEOPT_AWK records of run k. Sets JV (OK NO-VERDICT) and JWHY (the reason). Order: driver output / exit run by
+# judge FN: one side. JRC[k-1] = the driver exit of run k (or "<mktemp|tee|tr|awk|append> <rc>" when that step
+# failed), JREC[k-1] = FN's DEOPT_AWK records of run k. Sets JV (OK NO-VERDICT) and JWHY (the reason). Order: driver output / exit run by
 # run, X record, null control (E+D), guard.
 judge() {
   local fn="$1" n i x first nk dl
@@ -604,6 +650,24 @@ EOF
     "$(rec add "[completed compilingX${E9#'[completed compiling'}")" "X completed compiling: no space after the prefix;"
   check "records: an unparseable bailout naming fn (kind deopt-Eager) -> X naming the kind" \
     "$(rec add "${D10/deopt-eager/deopt-Eager}")" "X bailout: kind 'deopt-Eager';"
+  # a torn bailout (another thread wrote into the line after `deoptimizing `) names no fn: X for every fn. Controls: a
+  # whole bailout of another fn, an anonymous whole bailout and `[bailout end.` give none
+  check "records: a torn line-start bailout head ('... begin. deoptimizing w') -> X 'bailout: torn trace line'; whole other / anonymous bailouts and '[bailout end. w' -> none" \
+    "$(rec add "$E9"$'\n''[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing w')#$(rec add "${D10//JSFunction add /JSFunction other }"$'\n''[bailout (kind: deopt-eager, reason: x): begin. deoptimizing 0x1 <JSFunction (sfi = 0x1)>, 0x2 <Code TURBOFAN_JS>, opt id 1]'$'\n''[bailout end. w')" \
+    "E add@TURBOFAN_JS;X bailout: torn trace line;#"
+  check "records: a torn bailout head glued after driver text ('w[bailout (kind: ... deoptimizing w') -> X 'bailout: torn trace line'; a glued WHOLE bailout of another fn -> none" \
+    "$(rec add "$E9"$'\n''w[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing w')#$(rec add "w${D10//JSFunction add /JSFunction other }")" \
+    "E add@TURBOFAN_JS;X bailout: torn trace line;#"
+  # Q-B61-DD-TORN2: a torn head followed on its line by a WHOLE bailout of another fn passes the full shape (greedy .*):
+  # the second head refuses it, at line start and glued; a torn head glued after a real `[bailout end. ` prefix is torn
+  # too (a WHOLE other-fn bailout after that prefix -> none)
+  TG='[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing [bailout (kind: deopt-soft, reason: Insufficient type feedback for call): begin. deoptimizing 0x7 <JSFunction other (sfi = 0x8)>, 0x9 <Code TURBOFAN_JS>, opt id 3, bytecode offset 0, deopt exit 1, FP to SP delta 32, caller SP 0x1, pc 0x2]'; TT='0x1b92d2fb5b79 <JSFunction add (sfi = 0xf7e008dc999)>, 0x2 <Code TURBOFAN_JS>, opt id 2, bytecode offset 2, deopt exit 1, FP to SP delta 32, caller SP 0x1, pc 0x2]'
+  check "records: a torn bailout head followed by a whole bailout of another fn (line start / glued after 'w'), then the fn's tail line -> X 'bailout: torn trace line'" \
+    "$(rec add "$E9"$'\n'"$TG"$'\n'"$TT")#$(rec add "$E9"$'\n'"w$TG"$'\n'"$TT")" \
+    "E add@TURBOFAN_JS;X bailout: torn trace line;#E add@TURBOFAN_JS;X bailout: torn trace line;"
+  check "records: a torn bailout head glued after '[bailout end. code_invalidation: invalid', then the fn's tail line -> X 'bailout: torn trace line'; a glued WHOLE bailout of another fn there -> none" \
+    "$(rec add "$E9"$'\n''[bailout end. code_invalidation: invalid[bailout (kind: deopt-eager, reason: not a Smi): begin. deoptimizing '$'\n'"$TT")#$(rec add "[bailout end. code_invalidation: invalid${D10//JSFunction add /JSFunction other }")" \
+    "E add@TURBOFAN_JS;X bailout: torn trace line;#"
 
   # --- judge: one side, from JRC (driver exits) and JREC (records per run) ---
   local R_ED R_E R_X R_E2 R_D2
@@ -904,6 +968,35 @@ EOF
   rf "a trace-file-names flag in --v8-flags" "--v8-flags must not set --trace_file_names: it changes the <JSFunction NAME" \
     --fn add --v8-flags=--trace_file_names "$D1" "$D2"
 
+  # --- R6 (Q-B57-FLAG): a compile V8 ran in the background (a flag implication overrode --no-concurrent-recompilation)
+  # is X "background compile ..." for every fn; the `[marking ...` line says kConcurrent on every normal run (stays SAME).
+  # The verbatim lines node v26.8.2 printed (cross-opus R2 / R3) ---
+  local KM KC KD
+  KM='[marking 0x1b92d2fb5b79 <JSFunction add (sfi = 0x24fc8dde7821)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]'
+  KC='[compiling method 0x1b92d2fb5b79 <JSFunction add (sfi = 0x24fc8dde7821)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]'
+  KD='[completed compiling 0x1b92d2fb5b79 <JSFunction add (sfi = 0x24fc8dde7821)> (target MAGLEV) - took 0.000, 0.036, 0.001 ms]'
+  mkd kc "$KM"$'\n'"$KC"$'\n'"$KD"; mkd kco "$KM"$'\n'"${KC//JSFunction add /JSFunction other }"$'\n'"$KD"
+  mkd ks "$KM"$'\n'"${KC/kConcurrent]/kSynchronous]}"$'\n'"$KD"
+  check "R6 e2e: a kConcurrent compile line naming add (before) / naming other (after) -> exit 2, 8 spawns, each side 'background compile (...)'" \
+    "$(spawn - --fn add "$d/kc/driver.js" "$d/kco/driver.js")|$(has "  add: NO-VERDICT -- before: unparseable trace line naming 'add' in run 1: background compile (--no-concurrent-recompilation overridden by a V8 flag implication)")|$(has "  add: NO-VERDICT -- after: unparseable trace line naming 'add' in run 1: background compile (--no-concurrent-recompilation overridden by a V8 flag implication)")" \
+    "2|VERDICT NO-VERDICT|8|1|1"
+  check "R6 e2e: '[marking .. ConcurrencyMode::kConcurrent' + a kSynchronous compile line, both sides -> exit 0 SAME, 8 spawns (no over-refusal)" \
+    "$(spawn - --fn add "$d/ks/driver.js" "$d/ks/driver.js")|$(has '  add: SAME -- identical deopt multiset (before 0 | after 0)')" "0|VERDICT SAME|8|1"
+  got=""
+  for x in --stress-concurrent-inlining --stress_concurrent_inlining_attach_code --no-stress-concurrent-inlining; do
+    got="$got#$(spawn - --fn add --v8-flags "$x" "$D1" "$D2")|$(grep -c -F -e "deopt-diff: --v8-flags must not set $x: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the deopt trace a race; every spelling of the flag is refused)" "$d/sp.out" || true)"
+  done
+  check "R6 refused before any spawn: --v8-flags --stress-concurrent-inlining / --stress_concurrent_inlining_attach_code / --no-stress-concurrent-inlining -> exit 2, 0 spawns, the die line once" \
+    "$got" "#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1#2|VERDICT NO-VERDICT|0|1"
+  # R26: env reads an argument with an = as NAME=value; a wrapper at $d/a=b/node would exec the fake (its log counts)
+  mkdir -p "$d/a=b"; printf '%s\n' "#!$BASH" "exec $(printf '%q' "$fk/node") \"\$@\"" >"$d/a=b/node"; chmod +x "$d/a=b/node"
+  rm -f "$fk"/*.n; : >"$fk/log"
+  (cd "$d/cwd" && env -u NODE_OPTIONS -u GIT_EDITOR -u EDITOR -u VISUAL TMPDIR="$d/tmp" "$BASH" "$SELF" --node "$d/a=b/node" --fn add "$D1" "$D2") \
+    >"$d/sp.out" 2>&1 && rc=0 || rc=$?
+  check "R26 refused before any spawn: --node <d>/a=b/node (an = in the resolved path) -> exit 2, 0 spawns, 'node binary: an = is not allowed in the resolved path'" \
+    "$rc|$(wc -l <"$fk/log" | tr -d ' ')|$(grep -c -F -e 'deopt-diff: node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): ' "$d/sp.out" || true)" \
+    "2|0|1"
+
   # --- ref / file modes end to end (lib/stage.sh): a temp git repo $d/st/R (m/trace.txt: r1 = T_MONO, r2 = T_DEOPT; a
   # driver.js importing './trace.txt'); the fake node cats ./trace.txt from cwd = OUT/stage/<side>. tg isolates every
   # git call (no editor, no global / system config, no hooks, no signing, the six GIT_* vars stage_check refuses
@@ -1202,6 +1295,8 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   case "$g" in
+    *stress-concurrent-inlining*)
+      die "--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the deopt trace a race; every spelling of the flag is refused)" ;;
     *trace-deopt*|*trace-opt*|*concurrent-recompilation*)
       die "--v8-flags must not set $f: the script sets --trace-deopt-verbose --trace-opt --no-concurrent-recompilation itself" ;;
     *trace-file-names*)
@@ -1249,6 +1344,7 @@ NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot res
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
+[[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
 if [[ $STAGED == 0 ]]; then
   DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
   DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
@@ -1288,19 +1384,37 @@ say ""
 # ---------------------------------------------------------------------------------------------
 # runs: k = 1..R, before then after; each keeps its driver exit and its kept lines (KEEP_AWK) (raw output to --out only)
 # ---------------------------------------------------------------------------------------------
+# run_side's temp file goes on every exit path (die, set -e, a signal): this trap removes it, then runs the script's own
+# fail-closed EXIT trap (lib/prologue.sh) with $? restored (set +e so restoring a non-zero $? cannot cut the trap short).
+# A signal inside $(mktemp) before the assignment can still leave that one file
+RUN_TMP=""
+eval "set -- $(trap -p EXIT)"; old=${3:-}
+# shellcheck disable=SC2064
+trap "st_rc=\$?; [[ -z \$RUN_TMP ]] || rm -f -- \"\$RUN_TMP\"; set +e; (exit \$st_rc); $old" EXIT
 RUN_RC=0; RUN_TX=""
-run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driver exit, or "<tee|tr|awk> <rc>") RUN_TX
-  local tx st n t r a
-  # the pipeline's four exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee / tr / awk failure is
-  # never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL, which
-  # would drop a `[bailout` glued after it); DEOPT_AWK then reads the glue as X "trace text not at line start"
-  tx=$( (cd -- "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" 2>&1) \
-    | tee "${3:-/dev/null}" | tr '\000' '?' | awk "$KEEP_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
+run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driver exit, or "<mktemp|tee|tr|awk|append> <rc>") RUN_TX
+  local tx st n t r a nrc=0 ar=0
+  # stdout is a regular file, never a pipe: once JS touches process.stdout, libuv makes a pipe non-blocking and V8's C++
+  # writes to a full pipe are dropped (EAGAIN), so a whole record vanishes while the run still ends cleanly. run_side
+  # runs in the main shell (set -e live; only the tx=$( ) body loses it): every step that can fail carries its own guard.
+  # The redirect sits on the OUTER subshell, ahead of the cd, so a relative TMPDIR still names the same file. The file
+  # is read through tee, tr and awk; the exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee / tr / awk
+  # failure is never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL,
+  # which would drop a `[bailout` glued after it); DEOPT_AWK then reads the glue as X "trace text not at line start"
+  RUN_TMP=$(mktemp "${TMPDIR:-/tmp}/deopt-diff.XXXXXX") || { RUN_RC="mktemp $?"; RUN_TX=""; RUN_TMP=""; return 0; }
+  ( cd -- "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" ) >"$RUN_TMP" 2>&1 || nrc=$?
+  tx=$(<"$RUN_TMP" tee "${3:-/dev/null}" | tr '\000' '?' | awk "$KEEP_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
+  # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
+  # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not
+  { printf '%65536s' '' >>"$RUN_TMP"; } 2>/dev/null || ar=$?
+  rm -f -- "$RUN_TMP" || true; RUN_TMP=""
   st=${tx##*$'\n'}
   if [[ "$tx" == *$'\n'* ]]; then tx=${tx%$'\n'*}; else tx=""; fi
   [[ "$st" =~ $ST_RE ]] || die "cannot read the exit status of the run of $1/$2 (got '$st')"
   n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]}; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
   if [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else RUN_RC=$n; fi
+  # a full TMPDIR is named after a tee / tr / awk failure and before the driver exit (awk > tr > tee > append > driver)
+  if [[ $ar != 0 && $RUN_RC != *' '* ]]; then RUN_RC="append $ar"; fi
   RUN_TX="$tx"
 }
 RCB=(); RCA=(); TXB=(); TXA=()

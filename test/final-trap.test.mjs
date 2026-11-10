@@ -32,11 +32,12 @@ const hb = skip ? { stdout: '' } : capSync('bash', ['-c', 'printf %s "$BASH_VERS
 const HOST32 = /^3\.2\./.test(hb.stdout);
 
 // tool -> [census of command-position `exit 0` sites, raw `grep -c 'exit 0'` lines, raw lines by context
-// {comment, quoted, heredoc, code}] (hand-derived from the B0 census; bb raw 15 = the Q-ENV check label, review r1)
+// {comment, quoted, heredoc, code}] (hand-derived from the B0 census; bb raw 15 = the Q-ENV check label, review r1;
+// dd raw 19 = G2's R6 e2e self-test check title "... -> exit 0 SAME ...", b61)
 const TOOLS = {
     'allocation-diff': [2, 12, { comment: 3, quoted: 4, heredoc: 3, code: 2 }],
     'bytecode-budget': [3, 15, { comment: 4, quoted: 8, heredoc: 0, code: 3 }],
-    'deopt-diff': [2, 18, { comment: 4, quoted: 11, heredoc: 1, code: 2 }],
+    'deopt-diff': [2, 19, { comment: 4, quoted: 12, heredoc: 1, code: 2 }],
     'ic-diff': [2, 11, { comment: 2, quoted: 7, heredoc: 0, code: 2 }],
     'inlining-budget-diff': [2, 5, { comment: 1, quoted: 2, heredoc: 0, code: 2 }],
 };
