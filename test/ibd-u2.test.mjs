@@ -161,7 +161,7 @@ const each = (arr, f) => arr.forEach(f);
 row('F8 --out= and --fn= are refused "needs a non-empty value": exit 2, 1 die, 0 spawns', (b) => withCase((c) => {
     drivers(c);
     return ['--out=', '--fn='].map((a) => {
-        const o = runIbd(b, c, [...BASE.filter((x) => x !== '--fn' && x !== 'read.set'), '--fn', 'read.set', '--node', fakeNode(c), a, 'a.mjs', 'b.mjs']);
+        const o = runIbd(b, c, [...BASE.filter((x) => x !== '--fn' && x !== 'read.set'), ...(a === '--fn=' ? [] : ['--fn', 'read.set']), '--node', fakeNode(c), a, 'a.mjs', 'b.mjs']);   // one --fn only (b67 G-XS: twice is refused first)
         o.a = a; return o;
     });
 }), (os) => each(os, (o) => refused(o, new RegExp(`${o.a.slice(0, -1)} needs a non-empty value`))),
@@ -328,7 +328,7 @@ row('F16 dash-led --repo (ref mode): reaches node, 1 VERDICT (the --repo oracle 
 
 row('F14 --fn read.set,read reaches node (a substring is not a duplicate): 1 VERDICT, no refusal', (b) => withCase((c) => {
     drivers(c);
-    return runIbd(b, c, [...BASE, '--fn', 'read.set,read', '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
+    return runIbd(b, c, [...BASE.filter((x) => x !== '--fn' && x !== 'read.set'), '--fn', 'read.set,read', '--node', fakeNode(c), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
 }), reached, { 'substring match in the SEEN guard': () => variant('f14-sub', "fn '$t' is given twice", rep('*"|$t|"*', '*"$t"*')) });
 
 // ---- F10a: NODE_OPTIONS never reaches the -p probe; a failing -p is a named die ----

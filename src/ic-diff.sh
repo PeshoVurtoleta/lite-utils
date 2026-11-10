@@ -731,7 +731,8 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
-# options (every check below runs before any node is spawned and before any disk write)
+# options (every check below runs before any node is spawned and before any disk write; the --v8-flags allowlist,
+# lib/v8flags.sh, and the hashed --v8-options probe run after the --version spawn, at the marker line below)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null
 IC_TMP=""

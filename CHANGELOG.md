@@ -7,19 +7,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- b66 IC24 ic-diff on node 22 and 24 (Q-B66-IC24, Q-B66-G4REAL, Q-B66-G4TWIN). CI G4 run 42850759205 (f23b6c6): on
-  node 22 (v22.23.4) and 24 (v24.22.2), macOS + ubuntu (4 legs), audit-g4 A1 real (:204) and A2 real (:243) ended rc 2
-  `code kind outside the allowlist: Builtin,2` (node 26.8.2 green). The tool fails closed as designed (NO-VERDICT,
-  never a wrong verdict; LEDGER #83); the defect was the test oracle (V8 14.x only) and node 24 was unnamed. -h: the
-  known-limit line now names node 22 and 24 (header text only, src/ic-diff.sh:139; no verdict change). Roots:
-  ic-diff.sh 50a6fc34 -> ea9f4f70, src/ic-diff.sh f1568ac8 -> f8ef611a; other 4 roots unchanged; `--self-test` 81.
-  Tests: test/ic-diff.test.mjs c2b321b8 -> bbfc17ef (KNOWN_LIMIT_22_24 row; red on the old root, a duplicated line
-  and an appended old line); test/audit-g4.test.mjs 23f84cf9 -> 318d3f25: A1 / A2 real fix rows assert rc 0 SAME on
-  V8 14.x, else rc 2 NO-VERDICT 'code kind outside the allowlist'; their OLD twins run on every V8 and assert rc 2
-  NO-VERDICT 'no IC log'. Teeth MEASURED on node 26.8.2 (V8 14.6): V8_14=false -> A1 / A2 real red; off-14 emulation
-  -> 4/4 real rows pass; twins at the cut fix root -> red. audit-g4 35/35 on node 26.8.2. Review r1 REJECTED (a false
-  skip reason, Q-B66-G4TWIN), r2 APPROVED. UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14
-  branches. Limits and lessons: LEDGER #83, #110, #111.
 - G5c inlining-budget-diff (reading-list finding Q-RL-TURBO; Q-B62-TL). A Turbolev run is no longer mislabelled as
   a Maglev one: V8 14.6 with Turbolev on prints TurboFan-tier (@TF) units under --trace-maglev-inlining, so the old
   build compared them and could say SAME or DIFF about a different tier (MEASURED on real node v26.8.2: `--tiers
@@ -1109,6 +1096,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b67 G-XS: the shared option and self-test rules reach inlining-budget-diff (ibd), bytecode-budget (bb) and ic-diff
+  (ic) (cross-script audit X1-X5, X7, X8, X15; Q-B66-XS; LEDGER #112-#114). ibd's option loop now takes the shared
+  rules: X1 a value option given twice is refused, exit 2, 0 spawns (`inlining-budget-diff: --fn given twice (give one
+  comma list)`); this closes L6 (class 1 by consequence): `--fn a --fn b --only-fn` used to judge only b (READ), so a
+  change in a alone could end exit 0 SAME, and `--tiers` given twice dropped a tier. X2 an unknown option gets a
+  did-you-mean hint (`--run` -> `did you mean --runs?`); the single-dash `-*)` part stays post-1.0. X3 `--self-test` is
+  acted on after the loop and refuses any other argument (`--self-test takes no other argument`; it used to run and
+  ignore them, rc 0). X5 a blank `--v8-flags` is refused at 0 spawns. X4 the bb and ibd self-tests pass only with oks >
+  0 (a self-test whose every check is skipped now fails); the last line is now `self-test: N check(s) ok` (was
+  `self-test: all checks passed`). X7 an ibd named `--out` that cannot be created, resolved or written dies with a named
+  reason (`--out: cannot create ...`); the 2 spawns of LEDGER #76 stay. X8 bb's `--node-version` refusal text no longer
+  says "as `node --version` prints it" (false for a prerelease node): it names a release version and -h says so. X15 the
+  bb and ic option banners now say what runs before and after the first spawn (comments only). X11 (Q-B66-X11, DOCUMENT)
+  bb -h states that a driver writing bare number lines can move the gate (driver output is trusted), with the census (0
+  of 4008 lengths torn inside their digits; 63 of 63 clean lengths followed by `Parameter count`); a rule on that line
+  is DECLINED (LEDGER #112). Self-test counts unchanged: bb 68, bb --fixtures 92, ibd 89, ic 81. Judge and measure paths
+  are untouched. Tier: DETERMINISTIC. Gated in test/audit-xs.test.mjs (rows with old-root twins at dc4a10c). The
+  self-test last line is re-anchored in test/inlining-budget-diff.test.mjs, test/bytecode-budget.test.mjs and
+  test/bytecode-budget-stage-boundary.test.mjs; test/ibd-u2.test.mjs F8 / F14 give --fn once (twice is refused first);
+  the test/deopt-diff-boundary.test.mjs ibd parity pin moves e297d240 -> cf9d27de (LEDGER #114). Roots:
+  bytecode-budget.sh f1070535 -> 00605bfa, src 79073826 -> 3f1502c8; inlining-budget-diff.sh e297d240 -> cf9d27de, src
+  61a570cb -> 1cd51eed; ic-diff.sh ea9f4f70 -> bc1349ab, src f8ef611a -> ac8b8de8 (comment only); other 2 roots
+  unchanged.
+- b66 IC24 ic-diff on node 22 and 24 (Q-B66-IC24, Q-B66-G4REAL, Q-B66-G4TWIN). CI G4 run 42850759205 (f23b6c6): on
+  node 22 (v22.23.4) and 24 (v24.22.2), macOS + ubuntu (4 legs), audit-g4 A1 real (:204) and A2 real (:243) ended rc 2
+  `code kind outside the allowlist: Builtin,2` (node 26.8.2 green). The tool fails closed as designed (NO-VERDICT,
+  never a wrong verdict; LEDGER #83); the defect was the test oracle (V8 14.x only) and node 24 was unnamed. -h: the
+  known-limit line now names node 22 and 24 (header text only, src/ic-diff.sh:139; no verdict change). Roots:
+  ic-diff.sh 50a6fc34 -> ea9f4f70, src/ic-diff.sh f1568ac8 -> f8ef611a; other 4 roots unchanged; `--self-test` 81.
+  Tests: test/ic-diff.test.mjs c2b321b8 -> bbfc17ef (KNOWN_LIMIT_22_24 row; a test row is red on the old root;
+  a duplicated or appended old line also fails its once-only asserts); test/audit-g4.test.mjs 23f84cf9 -> 318d3f25: A1 / A2 real fix rows assert rc 0 SAME on
+  V8 14.x, else rc 2 NO-VERDICT 'code kind outside the allowlist'; their OLD twins run on every V8 and assert rc 2
+  NO-VERDICT 'no IC log'. Teeth MEASURED on node 26.8.2 (V8 14.6): V8_14=false -> A1 / A2 real red; off-14 emulation
+  -> 4/4 real rows pass; twins at the cut fix root -> red. audit-g4 35/35 on node 26.8.2. Review r1 REJECTED (a false
+  skip reason, Q-B66-G4TWIN), r2 APPROVED. UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14
+  branches. Limits and lessons: LEDGER #83, #110, #111.
 - CI triage (burst 65, test-only, no tool changed; LEDGER #105, #106): four red rows (three causes) fixed. (a) `bb-fillers A1
   precedence` failed on ubuntu node 26.8.2 (cause READ from the uutils tee source, race not reproduced: its 1 MiB F_SETPIPE_SZ holds the 400 KB pad): the pad now exceeds 2x the pipe max
   and the new row `bb-fillers A1 pad` pins it (fillers 25 -> 26). (b) Q-B65-NODEPRE: audit-g1 rows that pass

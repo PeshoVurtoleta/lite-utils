@@ -47,7 +47,7 @@ function variant(dir, name, from, to) {
 test('inlining-budget-diff --self-test: every check passes', { skip }, () => {
     const r = selfTest(SCRIPT);
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /^self-test: all checks passed$/m);
+    assert.match(r.stdout, /^self-test: \d+ check\(s\) ok$/m);
     assert.doesNotMatch(r.stdout, /^FAIL /m);
     assert.equal(okCount(r.stdout), CHECKS);
 });
@@ -68,7 +68,7 @@ test('inlining-budget-diff --self-test: an unmodified copy outside the repo pass
 // v8fl-check-after-mkdir moves v8fl_check below the mkdir; the Q-RL-TURBO 1 block between them is read from the root, so the
 // anchor still pins v8fl_check, that block and the mkdir as one adjacent run
 const IBD_ROOT_TEXT = readFileSync(SCRIPT, 'utf8');
-const IBD_MKDIR = 'mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage';
+const IBD_MKDIR = 'mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage 2>/dev/null || die "--out: cannot create $OUT/raw .. $OUT/stage"';
 const IBD_TL_BLOCK = IBD_ROOT_TEXT.slice(IBD_ROOT_TEXT.indexOf('# Turbolev on the command line (Q-RL-TURBO 1)'), IBD_ROOT_TEXT.indexOf(IBD_MKDIR));
 const MUTANTS = [
     ['multiset-sort-u', 'multiset() { sort | uniq -c; }', 'multiset() { sort -u; }',
@@ -368,9 +368,9 @@ test('inlining-budget-diff --self-test=x: exit 2, "--self-test takes no value" +
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.equal(r.stdout, '');
         assert.equal(r.stderr, 'inlining-budget-diff: --self-test takes no value\nVERDICT NO-VERDICT\n');
-        const m = run(variant(dir, 'no-selftest-novalue', '--self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; if self_test;', '--self-test) if self_test;'));
+        const m = run(variant(dir, 'no-selftest-novalue', '--self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;', '--self-test) SELFTEST=1 ;;'));
         assert.equal(m.status, 0, 'the mutant runs the self-test: ' + m.stdout + m.stderr);
-        assert.match(m.stdout, /^self-test: all checks passed$/m);
+        assert.match(m.stdout, /^self-test: \d+ check\(s\) ok$/m);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

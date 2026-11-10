@@ -695,7 +695,7 @@ const sigCheck = (s) => {
     assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
     assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);
     assert.ok(s.hasAdd, 'the left dir is the self-test dir (holds its "add" fixture)');
-    assert.doesNotMatch(s.out, /^self-test: all checks passed$/m);
+    assert.doesNotMatch(s.out, /^self-test: (all checks passed|\d+ check\(s\) ok)$/m);   // the old line (9173830d) or the new one
 };
 test('stage boundary: 9 PRE-EXISTING --self-test SIGINT after the first ok line -> killed by SIGINT, its temp dir LEFT BEHIND (no INT/TERM trap)', { skip }, async () => {
     sigCheck(await sigintRun(SCRIPT));

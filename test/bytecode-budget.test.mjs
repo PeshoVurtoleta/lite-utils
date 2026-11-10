@@ -99,7 +99,7 @@ function mktempShim(dir) {
 test('bytecode-budget --self-test: exactly C ok, none failed', { skip }, () => {
     const r = run(SCRIPT, ['--self-test']);
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /^self-test: all checks passed$/m);
+    assert.match(r.stdout, /^self-test: \d+ check\(s\) ok$/m);
     assert.doesNotMatch(r.stdout, /^FAIL /m);
     assert.equal(okCount(r.stdout), C);
 });

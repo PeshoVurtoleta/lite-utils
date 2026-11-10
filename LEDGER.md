@@ -162,6 +162,16 @@ user-land trace on release builds) and ArrayBuffer / memory-layout count. Eviden
 **#20 Sec 6 ruling: no NaN rejection in the allowlist.** Fixing the allowlist to reject NaN numeric
 values was out of scope; the maintainer ruled "Record as known". See #66. Evidence: ROADMAP.md:264.
 
+**#112 Parameter-count rule DECLINED (Q-B66-X11; bb; cross-script audit X11).** A rule that accepts a `Bytecode length:`
+number only when it is followed by `Parameter count` was considered to close the bare-number-line forgery (#92 (b), #98
+(a)) and declined: MEASURED on node v26.8.2 (census of 4008 correct lengths under Worker tears), the rule refuses 591 of
+the 4008 correct lengths, and 430 more had `Parameter count ` split from its number (refused only by a whole-line
+match). The clean side: 63 of 63 clean lengths were followed by `Parameter count`, and 0 of 4008 lengths were torn
+inside their digits. Node 22 / 24: unverified. Ruled DOCUMENT: no code change; bb -h states the trusted-driver limit
+with the census (b67). What would re-open it: a new mechanism (a form that does not refuse correct lengths under tears).
+Evidence: `.handoff/RULINGS-b66-cross.md` Q-B66-X11, audit/2026-11-10-cross-script/FINDINGS.md, CROSSCHECK.md (local,
+untracked).
+
 ---
 
 ## B. Defects found and fixed
@@ -453,6 +463,20 @@ assertKilled requires the listed rows to fail (at-least rows); "each red on its 
 fix; retention (12 cycles) has a must-fail control (EXIT trap's rm -rf deleted leaves >= 1 entry per cycle). Audit
 repro (Q-B64-REPRO, REPORTED): before RED ICD-fable-1, -2, ICD-opus-1, -2, -3; the B1 root 5142d62a all six GREEN
 (ICD-fable-3 GREEN throughout).
+
+**#113 G-XS (b67): ibd option rules, self-test floor, named --out die (cross-script audit X1-X5, X7, X8, X15;
+Q-B66-XS).** CLOSED, all DETERMINISTIC. X1: a value option given twice is refused (exit 2, 0 spawns) in ibd; L6 CLOSED
+by consequence (class 1; old behaviour READ, PLAN-b67-gxs L6; the old twin gates only > 0 spawns): `--fn a --fn b
+--only-fn` judged only b (a never judged), so a change in a alone could end exit 0 SAME; without --only-fn a dropped fn
+lost its guard (NO-VERDICT -> SAME), and `--tiers turbo --tiers maglev` dropped a tier the same way. X2: did-you-mean
+hint (single-dash `-*)` stays post-1.0). X3: `--self-test` acts after the loop and refuses any other argument. X5: a
+blank --v8-flags refused at 0 spawns. X4: bb and ibd self-tests pass only with oks > 0 (a self-test whose every check is
+skipped fails; last line `self-test: N check(s) ok`); counts unchanged (bb 68, bb --fixtures 92, ibd 89, ic 81). X7: ibd
+named --out dies by name (#76). X8: bb prerelease text (#106 (b)). X15: bb / ic option banners true. Gate:
+test/audit-xs.test.mjs, rows with old-root twins (dc4a10c). Mutants proven by the round-2 reviewer, each killed: m1 drop
+the POS clause of the --self-test refusal, m2 drop the 001 clause, m3 a spawn before the loop. Review: r1 REJECTED (2
+LITERAL), r2 APPROVED, r3 a 5-line test-only round (ibd-u2 F8 / F14, the parity pin, 2 audit-xs nits). Evidence:
+`.handoff/PLAN-b67-gxs.md`, `.handoff/overlay/b67-gxs/` (local, untracked).
 
 ---
 
@@ -789,11 +813,18 @@ that runs a tool on a real node and asserts nothing about the verdict hides a pl
 unmeasured premise ("passes for the wrong reason") was false: the r1 review measured the old twin's reason (`no IC
 log`, before any code-kind check) and the skip became an assertion with teeth (Q-B66-G4TWIN: twins run on every V8,
 assert rc 2 NO-VERDICT and 'no IC log'). Lesson: measure a reason before writing it into a skip. (d) Tripwire, by
-design: `V8_14 = /^14\./`; a node whose V8 major is not 14 but whose numbering matches would make the fix rows red,
+design: `V8_14 = /^14\./`; a node whose V8 major is not 14 but whose code-kind numbering still matches 14.x would make the fix rows red,
 the signal to re-measure the table. Measured (node 26.8.2, V8 14.6): V8_14=false -> A1 / A2 real red; off-14
 emulation -> 4/4 real rows pass; twins at the cut fix root -> red on 'no IC log'. Roots: ic-diff.sh 50a6fc34 ->
 ea9f4f70, src f1568ac8 -> f8ef611a. Evidence: `.handoff/RULINGS-b66-ic.md`, `.handoff/evidence/b66-ic/` (local,
 untracked).
+
+**#114 b67 G-XS: a rule change breaks the sibling rows that relied on the old rule.** Last-wins became given-twice in
+ibd, and test/ibd-u2.test.mjs F8 / F14 and the ibd self-test refusal() helper had relied on the old rule and went red.
+Rule: a targeted test list must include every file that runs the changed root (test/ibd-u2.test.mjs, and the
+test/deopt-diff-boundary.test.mjs parity pin of the ibd root), not only the new gate. The old self-test last line (`all
+checks passed`) was also re-anchored in test/inlining-budget-diff.test.mjs, test/bytecode-budget.test.mjs and
+test/bytecode-budget-stage-boundary.test.mjs. See #113.
 
 ---
 
@@ -958,6 +989,8 @@ U2, the `! -L` check stays above the hoist, PLAN A13). ENAMETOOLONG (a 300-char 
 preflight, like ENOSPC, takes 2 spawns, no planned fix. U2 reworded the source comment above the node version read: the
 preflight refuses a bad --out with 0 spawns, and a path only mkdir can see through (ENAMETOOLONG) still
 takes the 2 spawns.
+b67 (G-XS, X7): that mkdir failure now dies by name (`--out: cannot create ...`), no longer `unexpected error (exit 1)`; the
+2 spawns stay. The `cannot resolve` and `cannot write` dies are backstops no test reaches (the preflight refuses first).
 Evidence: `.handoff/PLAN-b52-ibd-u1.md` (A5, A8), `.handoff/evidence/b5x-ibd-triage.md`,
 `.handoff/evidence/u1/` (local, untracked).
 
@@ -1018,17 +1051,20 @@ and /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/test/94-inlinin
 `const CHECKS = 43;` (this tool's `--self-test` has moved to 54 since U1, CHANGELOG "U1"). Not edited from here
 (another package). Open until the maintainer syncs it.
 
-**#83 Q-I1: ic-diff on node 22 and 24 ends NO-VERDICT (known limit, class 2; audit I1; b66 IC24).**
-Ruled DOCUMENT (RULINGS-b56-audit-closure Q-I1): the code-kind numbering table (src/ic-diff.sh:187, 189, 208) is
-V8 14.x only, so every node 22 run is NO-VERDICT, never a wrong verdict (usability only; package.json engines.node
-is >= 22). The audit's candidate fix did NOT land: I4 and I5 are candidate-only and not present (landing the candidate
-would revive both: I4 needs its guard, I5 a decision). Text: one -h line (src/ic-diff.sh:139; names node 22 and 24 since b66, Q-B66-IC24). Repro (audit
-reproduction.mjs on a copy): I1 RED; a canned node 22 log gives exit 2 NO-VERDICT. Node 24 MEASURED b66 (CI run 42850759205, f23b6c6, v24.22.2, macOS + ubuntu): the same NO-VERDICT, `code kind outside
-the allowlist: Builtin,2` (Q-B66-IC24). REPORTED, not measured (V8 branch heads 12.4 / 13.6 / 14.6 read via a fetch
-summarizer): node 22 and 24 share one numbering; V8 14 inserted FOR_TESTING_JS at 2, moving every later kind up one
-(Builtin 2 -> 3, Interpreted 9 -> 10, Baseline 10 -> 11, Maglev 11 -> 12, Turbofan 12 -> 13). Gate: a mutant widening the allowlist to node 22 numbers survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (canned `Builtin,2` and `JS,9` logs; M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of
-(Maglev read as baseline). Evidence: `.handoff/evidence/b56-ic-audit-closure.md`, audit 2026-11-04-ic-diff FINDINGS
-(local, untracked). Other I-ids: I2 / I3 / I6 FIXED per that closure check, not mapped further here (#69).
+**#83 Q-I1: ic-diff on node 22 and 24 ends NO-VERDICT (known limit, class 2; audit I1; b66 IC24).** Ruled DOCUMENT
+(RULINGS-b56-audit-closure Q-I1): the code-kind numbering table (src/ic-diff.sh:193, 195, 215-216) is V8 14.x only, so
+every node 22 run is NO-VERDICT, never a wrong verdict (usability only; package.json engines.node is >= 22). The audit's
+candidate fix did NOT land: I4 and I5 are candidate-only and not present (landing the candidate would revive both: I4
+needs its guard, I5 a decision). Text: one -h line (src/ic-diff.sh:139; names node 22 and 24 since b66, Q-B66-IC24).
+Repro (audit reproduction.mjs on a copy): I1 RED; a canned node 22 log gives exit 2 NO-VERDICT. Node 24 MEASURED b66 (CI
+run 42850759205, f23b6c6, v24.22.2, macOS + ubuntu): the same NO-VERDICT, `code kind outside the allowlist: Builtin,2`
+(Q-B66-IC24). REPORTED, not measured (V8 branch heads 12.4 / 13.6 / 14.6 read via a fetch summarizer): node 22 and 24
+share one numbering; V8 14 inserted FOR_TESTING_JS at 2, moving every later kind up one (Builtin 2 -> 3, Interpreted 9
+-> 10, Baseline 10 -> 11, Maglev 11 -> 12, Turbofan 12 -> 13). Gate: a mutant widening the allowlist to node 22 numbers
+survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (canned `Builtin,2` and `JS,9` logs;
+M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of (Maglev read as baseline). Evidence:
+`.handoff/evidence/b56-ic-audit-closure.md`, audit 2026-11-04-ic-diff FINDINGS (local, untracked). Other I-ids: I2 / I3
+/ I6 FIXED per that closure check, not mapped further here (#69).
 
 **#84 Q-NO-WARNINGS: NODE_NO_WARNINGS stays unstripped in allocation-diff (known limit; audit A6 residual).**
 Ruled DOCUMENT, no code change (this ruling moves no root). Q-ENV lists four names; NODE_NO_WARNINGS is
@@ -1061,7 +1097,9 @@ Worker writing `\n` during a print, regular file, 2941 length lines: 1924 clean,
 digits, 0 partial digit strings (pipe, 250: 58 clean, 192 torn the same way); a torn record gives a matched header
 without a length or a null-control mismatch, so NO-VERDICT (fails closed, not new against the pipe). A line holding
 only a number can forge a length (3 workers spamming `7\n` over 250 compiles read 7 on 91 records); that is a hostile
-driver, covered by "driver output is trusted" (-h). (c) A driver that reopens /dev/stdout on Linux gets a new file
+driver, covered by "driver output is trusted" (-h). b67 (Q-B66-X11): bb -h now states it: a driver writing bare number
+lines in every run alike can move bb's gate. Census (MEASURED, node v26.8.2): 0 of 4008 lengths torn inside their
+digits. The Parameter-count rule is DECLINED (#112). (c) A driver that reopens /dev/stdout on Linux gets a new file
 description at offset 0 and can overwrite earlier output: READ, not run (-h). (d) The baseline lists node's own
 functions at startup only: an internal compiled after the driver imports something (e.g. node:fs) is missed (by
 reading; -h). The list on node 26.8.2 has 24 names; of about 40 common names only `get` and `set` collide (MEASURED,
@@ -1098,7 +1136,9 @@ a length's digits is not detected; the length reads short or as other digits. ME
 + `Bytecode length: 3` + header, then `Bytecode length: 5` / `worker line` / `0` reads `3,5`; `Bytecode length: 512` /
 `0` reads `3,512`; `Bytecode length: 12` / `50` reads `3,12`, no `?`. ARGUED by reviewer r2 (BSD awk), not in the ruled
 sentence: a write landing just before the digits (`Bytecode length: ` + `12\n` + `50`) reads 12. The tearing itself is
-MEASURED (28 of 180 runs before the fix, 10 `?` of 180 after). (b) A Maglev abort was not reproduced (`mlabort.js`:
+MEASURED (28 of 180 runs before the fix, 10 `?` of 180 after). b67 (Q-B66-X11): bb -h states the trusted-driver
+limit with the census (node v26.8.2, MEASURED): 0 of 4008 lengths torn inside their digits; a driver writing bare number
+lines in every run alike can move bb's gate. A rule on the `Parameter count` line is DECLINED (#112). (b) A Maglev abort was not reproduced (`mlabort.js`:
 Maglev ignores `--max-optimized-bytecode-size` and completes); only `[completed compiling` counts, so an unseen abort
 shape cannot count as evidence (argued from the rule). (c) Completion lines were censused on node 26.8.2 only; node 22 /
 24 completion lines are UNPROVEN, and a node that prints none leaves no D row, which fails closed (NO-VERDICT where a
@@ -1151,27 +1191,34 @@ fail, the audit-g2 A8 real-node row killed at its 150 s cap; alone at load1 1.5 
 NPMTEST-b64-g4-final-run1.txt, -run2.txt, DIAG-b64-a8-selftest.txt). (i) ARGUED: the IC_ABS `|| die` is
 unreachable and not gated (under set -e it still exits 2). Evidence: .handoff/lanes/g4/evidence/ (local, untracked).
 
-**#106 b65 open limits.** (a) MEASURED on CI logs for deopt-diff only (audit-g2 A3, ubuntu bash 5.3.9; bash 4.x not run), mechanism ARGUED: a SIGTERM while a tool waits for the driver prints
-`unexpected error (exit 0)` (EXIT trap $? = 0, then SIGTERM re-raised); the verdict stays NO-VERDICT (fail closed).
-allocation-diff, bytecode-budget and inlining-budget-diff carry the same lib/prologue.sh:9 trap and no INT/TERM trap, so ARGUED to print it too; ic-diff traps INT TERM (`die "interrupted"`, src/ic-diff.sh:850, :868) and prints `ic-diff: interrupted` instead (READ). A prologue signal-trap fix is for the cross-script
-reviewer (Phase 7), Q-B65-SIGTERM. (b) READ: bb's refusal text "(as `node --version` prints it)"
-(src/bytecode-budget.sh:852) is false for prerelease nodes (v27.0.0-alpha.0.0.0 is refused); FILLER for Phase 7,
-Q-B65-NODEPRE. (c) UNPROVEN until the next ubuntu CI run: the bash 5 branch of A3 and the pad fix of #105 (a) (no bash
-5 or Linux here).
+**#106 b65 open limits.** (a) MEASURED on CI logs for deopt-diff only (audit-g2 A3, ubuntu bash 5.3.9; bash 4.x not
+run), mechanism ARGUED: a SIGTERM while a tool waits for the driver prints `unexpected error (exit 0)` (EXIT trap $? =
+0, then SIGTERM re-raised); the verdict stays NO-VERDICT (fail closed). allocation-diff, bytecode-budget and
+inlining-budget-diff carry the same lib/prologue.sh:9 trap and no INT/TERM trap, so ARGUED to print it too; ic-diff
+traps INT TERM (`die "interrupted"`, src/ic-diff.sh:851, :869) and prints `ic-diff: interrupted` instead (READ). A
+prologue signal-trap fix is for the cross-script reviewer (Phase 7), Q-B65-SIGTERM. (b) CLOSED b67 (G-XS, X8): bb's
+refusal text "(as `node --version` prints it)" was false for prerelease nodes (v27.0.0-alpha.0.0.0 is refused); the text
+now names a release version and -h says "Release versions only" (Q-B65-NODEPRE). (c) PROVEN on ubuntu (b67, CI run
+42865876509 of 5fcffb5, node 22 and 24, GNU bash 5.3.9; node 26 legs success): the bash >= 4 branch of audit-g2 A3 and
+its mutant GREEN, and the 45 fillers / pad rows (the pad fix of #105 (a)) GREEN; the only reds were audit-g4 A1 / A2
+real (the oracle defect IC24 addresses in dc4a10c; its CI proof is open, #111). bash 4.x and the macOS legs were not
+read.
 
 **#109 G5c open limits.** Measured, read or argued is stated per item. (a) ARGUED: a V8 that drops --turbolev from
---v8-options (or lists it under a name this build does not read) while `--concurrent` is on gives units with no
-tag, so neither the default check nor the @TF count fires; -h says the maglev tier is NO-VERDICT only through its
-check for decision lines in TurboFan-tier (@TF) units, which --concurrent turns off. The turbo tier under an
-always-on Turbolev is unverified. Not reproduced (no such V8). (b) MEASURED survivor: the `$` of
-`/@TF(-OSR)?(#[0-9]+)?$/` dropped survives; the direction is a false NO-VERDICT for a function named like `x@TF`
-(fail closed). FILLER: a self-test row for a function named `x@TF`. (c) No committed row for the CR strip or the
-`true` / `false` arms of the turbolev awk (hand-checked on BSD awk only, B1 A3 "by awk alone"); dropping one dies
-"cannot read", fails closed. (d) READ: in ref / file mode the default-on refusal leaves staged files in stage/
-(modes.sh runs before the limits read); a rerun needs a fresh --out, stated in -h. (e) UNPROVEN until CI: mawk,
-gawk, bash 5 and Linux (everything above ran on BSD awk, bash 3.2.57, macOS); the real-node old twin is opt-in only
-(LITEUTILS_REAL_HOLD=1). (f) MEASURED only on node v26.8.2: a Turbolev-off real maglev + turbo run is SAME with 0
-@TF lines (no false NO-VERDICT there); node 22 / 24 are not run (UNPROVEN).
+--v8-options (or lists it under a name this build does not read) while `--concurrent` is on gives units with no tag, so
+neither the default check nor the @TF count fires; -h says the maglev tier is NO-VERDICT only through its check for
+decision lines in TurboFan-tier (@TF) units, which --concurrent turns off. The turbo tier under an always-on Turbolev is
+unverified. Not reproduced (no such V8). (b) MEASURED survivor: the `$` of `/@TF(-OSR)?(#[0-9]+)?$/` dropped survives;
+the direction is a false NO-VERDICT for a function named like `x@TF` (fail closed). FILLER: a self-test row for a
+function named `x@TF`. (c) No committed row for the CR strip or the `true` / `false` arms of the turbolev awk
+(hand-checked on BSD awk only, B1 A3 "by awk alone"); dropping one dies "cannot read", fails closed. (d) READ: in ref /
+file mode the default-on refusal leaves staged files in stage/ (modes.sh runs before the limits read); a rerun needs a
+fresh --out, stated in -h. (e) UNPROVEN until the dc4a10c CI run reads green: the G5c rows on Linux, GNU bash 5 and gawk
+(ubuntu legs: GNU bash 5.3.9, GNU Awk 5.3.2). mawk is in no CI leg and stays UNPROVEN. Everything above ran on BSD awk,
+bash 3.2.57, macOS. The b67 read of run 42865876509 is of 5fcffb5, which predates G5c (6aa2cf3, whose run was
+cancelled), so it proves no G5c row. The real-node old twin is opt-in only (LITEUTILS_REAL_HOLD=1). (f) MEASURED only on
+node v26.8.2: a Turbolev-off real maglev + turbo run is SAME with 0 @TF lines (no false NO-VERDICT there); node 22 / 24
+are not run (UNPROVEN).
 
 **#111 b66 open limits.** UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14 branches of audit-g4
 A1 / A2 real (rc 2 NO-VERDICT 'code kind outside the allowlist') and of their old twins ('no IC log'); only V8 14.6
