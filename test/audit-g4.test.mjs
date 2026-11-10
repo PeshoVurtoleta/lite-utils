@@ -33,6 +33,10 @@ const CI_STRICT = process.env.CI === 'true';
 const sha8 = (b) => createHash('sha256').update(b).digest('hex').slice(0, 8);
 const NODE_REAL = process.execPath;
 const CYCLES = 12; // spec says 20; 12 keeps the file under ~90 s on a loaded host (20: file 72-109 s)
+// Q-B66-G4REAL: the A1 / A2 real-node fix rows branch on V8: rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT "code kind outside
+// the allowlist" (ic-diff's code-kind table is V8 14.x only; CI run 42850759205). Q-B66-G4TWIN: their OLD twins run on
+// every V8 and assert rc 2 NO-VERDICT "no IC log" (the old root writes no log, so no code-kind check runs).
+const V8_14 = /^14\./.test(process.versions.v8);
 
 function cleanEnv(extra = {}) {
     const e = { ...process.env };
@@ -201,14 +205,20 @@ function realCase(extra) {
     const r = run(extra.root, c, ['--node', NODE_REAL, ...(extra.out ? ['--out', o] : []), '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cap: 120000, ...(extra.run || {}) });
     return { c, o, r };
 }
-test('A1 real node: --out o%pz, process.execPath -> rc 0 SAME (one attempt)', { skip }, () => {
+test('A1 real node: --out o%pz, process.execPath -> rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT \'code kind outside the allowlist\' (one attempt; Q-B66-G4REAL)', { skip }, () => {
     const { r, o } = realCase({ root: TOOL, out: true });
-    code(r, 0, 'A1 real'); assert.equal(verdict(r), 'SAME', msg(r));
-    assert.ok(existsSync(join(o, 'raw', 'before', 'run.1.log')));
+    if (V8_14) {
+        code(r, 0, 'A1 real'); assert.equal(verdict(r), 'SAME', msg(r));
+        assert.ok(existsSync(join(o, 'raw', 'before', 'run.1.log')));
+    } else {
+        code(r, 2, 'A1 real off V8 14.x'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+        assert.ok((r.stdout + r.stderr).includes('code kind outside the allowlist'), msg(r));
+    }
 });
-test('A1 real node OLD twin: rc 2 (one attempt)', { skip: OLDSKIP }, () => {
+test('A1 real node OLD twin: rc 2 NO-VERDICT \'no IC log\' on any V8 (one attempt; Q-B66-G4TWIN)', { skip: OLDSKIP }, () => {
     const { r } = realCase({ root: oldRoot(), out: true });
     code(r, 2, 'A1 real old'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+    assert.ok(/no IC log/.test(r.stdout + r.stderr), msg(r));
 });
 
 // =====================================================================================================================
@@ -240,14 +250,20 @@ function a2Real(root) {
     const r = run(root, c, ['--node', NODE_REAL, '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cwd: w, tmpdir: '../tmp2', cap: 120000 });
     return { t, r };
 }
-test('A2 real node: relative TMPDIR -> rc 0 SAME, 0 entries (one attempt)', { skip }, () => {
+test('A2 real node: relative TMPDIR -> rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT \'code kind outside the allowlist\'; 0 entries (one attempt; Q-B66-G4REAL)', { skip }, () => {
     const { t, r } = a2Real(TOOL);
-    code(r, 0, 'A2 real'); assert.equal(verdict(r), 'SAME', msg(r));
+    if (V8_14) {
+        code(r, 0, 'A2 real'); assert.equal(verdict(r), 'SAME', msg(r));
+    } else {
+        code(r, 2, 'A2 real off V8 14.x'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+        assert.ok((r.stdout + r.stderr).includes('code kind outside the allowlist'), msg(r));
+    }
     assert.deepEqual(ls(t), []);
 });
-test('A2 real node OLD twin: rc 2 NO-VERDICT (one attempt)', { skip: OLDSKIP }, () => {
+test('A2 real node OLD twin: rc 2 NO-VERDICT \'no IC log\' on any V8 (one attempt; Q-B66-G4TWIN)', { skip: OLDSKIP }, () => {
     const { r } = a2Real(oldRoot());
     code(r, 2, 'A2 real old'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+    assert.ok(/no IC log/.test(r.stdout + r.stderr), msg(r));
 });
 
 // =====================================================================================================================

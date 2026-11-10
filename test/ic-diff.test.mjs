@@ -654,13 +654,15 @@ test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row'
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// --- Q-I1 (b56): the -h known limit, one line, exact (a ruling: DOCUMENT, no allowlist change) ---
-const KNOWN_LIMIT_22 = 'Known limit: on node 22 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 numbering is adopted; a NO-VERDICT, never a wrong verdict.';
-test('ic-diff -h: the node-22 known limit, one whole line, exactly once', { skip }, () => {
+// --- Q-I1 (b56) + Q-B66-IC24 (b66): the -h known limit, one line, exact (a ruling: DOCUMENT, no allowlist change);
+// node 24 measured in CI run 42850759205 (v24.22.2: the same Builtin,2 NO-VERDICT as v22.23.4)
+const KNOWN_LIMIT_22_24 = 'Known limit: on node 22 and 24 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 / 24 numbering is adopted; a NO-VERDICT, never a wrong verdict.';
+test('ic-diff -h: the node 22 and 24 known limit, one whole line, exactly once (Q-B66-IC24)', { skip }, () => {
     const [h] = helpRuns(SCRIPT);
     assert.equal(h.status, 2, h.stdout + h.stderr);
-    assert.equal(h.stdout.split('\n').filter((l) => l === KNOWN_LIMIT_22).length, 1, h.stdout);
-    assert.equal(h.stdout.split('on node 22').length - 1, 1, h.stdout);
+    assert.equal(h.stdout.split('\n').filter((l) => l === KNOWN_LIMIT_22_24).length, 1, h.stdout);
+    assert.equal(h.stdout.split('on node 22 and 24').length - 1, 1, h.stdout);
+    assert.equal(h.stdout.split('on node 22').length - 1, 1, h.stdout);   // an old-text or duplicated line fails
 });
 
 // --- A4 (+ A7 K1 / K2) on this file's OWN fake node and mktemp shim (independent of the self-test's fake). The fake

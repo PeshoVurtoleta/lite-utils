@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- b66 IC24 ic-diff on node 22 and 24 (Q-B66-IC24, Q-B66-G4REAL, Q-B66-G4TWIN). CI G4 run 42850759205 (f23b6c6): on
+  node 22 (v22.23.4) and 24 (v24.22.2), macOS + ubuntu (4 legs), audit-g4 A1 real (:204) and A2 real (:243) ended rc 2
+  `code kind outside the allowlist: Builtin,2` (node 26.8.2 green). The tool fails closed as designed (NO-VERDICT,
+  never a wrong verdict; LEDGER #83); the defect was the test oracle (V8 14.x only) and node 24 was unnamed. -h: the
+  known-limit line now names node 22 and 24 (header text only, src/ic-diff.sh:139; no verdict change). Roots:
+  ic-diff.sh 50a6fc34 -> ea9f4f70, src/ic-diff.sh f1568ac8 -> f8ef611a; other 4 roots unchanged; `--self-test` 81.
+  Tests: test/ic-diff.test.mjs c2b321b8 -> bbfc17ef (KNOWN_LIMIT_22_24 row; red on the old root, a duplicated line
+  and an appended old line); test/audit-g4.test.mjs 23f84cf9 -> 318d3f25: A1 / A2 real fix rows assert rc 0 SAME on
+  V8 14.x, else rc 2 NO-VERDICT 'code kind outside the allowlist'; their OLD twins run on every V8 and assert rc 2
+  NO-VERDICT 'no IC log'. Teeth MEASURED on node 26.8.2 (V8 14.6): V8_14=false -> A1 / A2 real red; off-14 emulation
+  -> 4/4 real rows pass; twins at the cut fix root -> red. audit-g4 35/35 on node 26.8.2. Review r1 REJECTED (a false
+  skip reason, Q-B66-G4TWIN), r2 APPROVED. UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14
+  branches. Limits and lessons: LEDGER #83, #110, #111.
 - G5c inlining-budget-diff (reading-list finding Q-RL-TURBO; Q-B62-TL). A Turbolev run is no longer mislabelled as
   a Maglev one: V8 14.6 with Turbolev on prints TurboFan-tier (@TF) units under --trace-maglev-inlining, so the old
   build compared them and could say SAME or DIFF about a different tier (MEASURED on real node v26.8.2: `--tiers

@@ -31,7 +31,7 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -779,6 +779,22 @@ APPROVED, no blockers; every plan mutant is killed by a committed test except th
 61a570cb, root e297d240, ibd test 08cbf657, deopt-diff-boundary 1fc4ee68, audit-g5 4be52244 (then a comment-only
 fix). Test of the gate, per law 6: every one of the 11 gate rows fails on 7c91d1c.
 
+**#110 b66 IC24: test-gate lessons (ic-diff on node 22 / 24; Q-B66-IC24, Q-B66-G4REAL, Q-B66-G4TWIN).** (a) A
+real-node oracle written on one V8 (14.x) went red on the supported 22 / 24 (CI run 42850759205: audit-g4 A1 real
+:204 and A2 real :243 rc 2 `code kind outside the allowlist: Builtin,2`, 4 legs; node 26 green). Rule: a real-node row
+states the V8 it holds for and asserts the known-limit verdict elsewhere (A1 / A2 real now: rc 0 SAME on V8 14.x, else
+rc 2 NO-VERDICT). (b) FOUND by the Fable 5.2 cross-check: test/env-strip.test.mjs:270 (E3) and :305 (E5) hand ic-diff a
+real trace on every leg but assert only the env strip, so the 22 / 24 NO-VERDICT passed through them silently; a row
+that runs a tool on a real node and asserts nothing about the verdict hides a platform limit. (c) A skip justified by an
+unmeasured premise ("passes for the wrong reason") was false: the r1 review measured the old twin's reason (`no IC
+log`, before any code-kind check) and the skip became an assertion with teeth (Q-B66-G4TWIN: twins run on every V8,
+assert rc 2 NO-VERDICT and 'no IC log'). Lesson: measure a reason before writing it into a skip. (d) Tripwire, by
+design: `V8_14 = /^14\./`; a node whose V8 major is not 14 but whose numbering matches would make the fix rows red,
+the signal to re-measure the table. Measured (node 26.8.2, V8 14.6): V8_14=false -> A1 / A2 real red; off-14
+emulation -> 4/4 real rows pass; twins at the cut fix root -> red on 'no IC log'. Roots: ic-diff.sh 50a6fc34 ->
+ea9f4f70, src f1568ac8 -> f8ef611a. Evidence: `.handoff/RULINGS-b66-ic.md`, `.handoff/evidence/b66-ic/` (local,
+untracked).
+
 ---
 
 ## E. Process lessons
@@ -1002,13 +1018,15 @@ and /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/test/94-inlinin
 `const CHECKS = 43;` (this tool's `--self-test` has moved to 54 since U1, CHANGELOG "U1"). Not edited from here
 (another package). Open until the maintainer syncs it.
 
-**#83 Q-I1: ic-diff on node 22 ends NO-VERDICT (known limit, class 2; audit I1).**
+**#83 Q-I1: ic-diff on node 22 and 24 ends NO-VERDICT (known limit, class 2; audit I1; b66 IC24).**
 Ruled DOCUMENT (RULINGS-b56-audit-closure Q-I1): the code-kind numbering table (src/ic-diff.sh:187, 189, 208) is
 V8 14.x only, so every node 22 run is NO-VERDICT, never a wrong verdict (usability only; package.json engines.node
 is >= 22). The audit's candidate fix did NOT land: I4 and I5 are candidate-only and not present (landing the candidate
-would revive both: I4 needs its guard, I5 a decision). Text: one -h line (src/ic-diff.sh:133). Repro (audit
-reproduction.mjs on a copy): I1 RED; a canned node 22 log gives exit 2 NO-VERDICT. Node 24's numbering is
-UNMEASURED; no node 22 / 24 on the host. Gate: a mutant widening the allowlist to node 22 numbers survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (canned `Builtin,2` and `JS,9` logs; M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of
+would revive both: I4 needs its guard, I5 a decision). Text: one -h line (src/ic-diff.sh:139; names node 22 and 24 since b66, Q-B66-IC24). Repro (audit
+reproduction.mjs on a copy): I1 RED; a canned node 22 log gives exit 2 NO-VERDICT. Node 24 MEASURED b66 (CI run 42850759205, f23b6c6, v24.22.2, macOS + ubuntu): the same NO-VERDICT, `code kind outside
+the allowlist: Builtin,2` (Q-B66-IC24). REPORTED, not measured (V8 branch heads 12.4 / 13.6 / 14.6 read via a fetch
+summarizer): node 22 and 24 share one numbering; V8 14 inserted FOR_TESTING_JS at 2, moving every later kind up one
+(Builtin 2 -> 3, Interpreted 9 -> 10, Baseline 10 -> 11, Maglev 11 -> 12, Turbofan 12 -> 13). Gate: a mutant widening the allowlist to node 22 numbers survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (canned `Builtin,2` and `JS,9` logs; M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of
 (Maglev read as baseline). Evidence: `.handoff/evidence/b56-ic-audit-closure.md`, audit 2026-11-04-ic-diff FINDINGS
 (local, untracked). Other I-ids: I2 / I3 / I6 FIXED per that closure check, not mapped further here (#69).
 
@@ -1154,3 +1172,7 @@ always-on Turbolev is unverified. Not reproduced (no such V8). (b) MEASURED surv
 gawk, bash 5 and Linux (everything above ran on BSD awk, bash 3.2.57, macOS); the real-node old twin is opt-in only
 (LITEUTILS_REAL_HOLD=1). (f) MEASURED only on node v26.8.2: a Turbolev-off real maglev + turbo run is SAME with 0
 @TF lines (no false NO-VERDICT there); node 22 / 24 are not run (UNPROVEN).
+
+**#111 b66 open limits.** UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14 branches of audit-g4
+A1 / A2 real (rc 2 NO-VERDICT 'code kind outside the allowlist') and of their old twins ('no IC log'); only V8 14.6
+(node 26.8.2) ran them. See #83, #110.
