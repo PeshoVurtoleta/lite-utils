@@ -30,8 +30,12 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const FIFO_CLAUSE = '[[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]]';
 
 // opts may override encoding / env / cwd, never the cap: capSync refuses an opts.timeout (no caller passes one)
+// A --self-test spawn gets SELF_CAP (b68 CI-CAP, LEDGER #115: 3x the slowest CI bb self-test spawn, 59.0 s, rounded up to
+// 30000 ms); every other run keeps 120000.
+const SELF_CAP = 180000;
 function run(path, args, opts = {}) {
-    return capSync('bash', [path, ...args], { encoding: 'utf8', ...opts }, 120000, 'bytecode-budget.sh');
+    const cap = args.some((a) => a.startsWith('--self-test')) ? SELF_CAP : 120000;
+    return capSync('bash', [path, ...args], { encoding: 'utf8', ...opts }, cap, 'bytecode-budget.sh');
 }
 // a teeth row's expected red is an assertion, never a run its cap killed or a spawn that failed (capSync names both: fail closed)
 const redNotTimeout = (e) => e instanceof assert.AssertionError && !/ timed out after \d+ ms \(| spawn error /.test(e.message);

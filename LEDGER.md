@@ -604,6 +604,46 @@ green, 6 old twins, one of them the real-node twin opt-in via LITEUTILS_REAL_HOL
 unchanged (9, cmp-equal to the 74c2fcb5 golden); census [2,5,{1,2,0,2}] unchanged. Evidence:
 .handoff/evidence/b65-g5c/ (local, untracked); .handoff/PLAN-b62-g5c.md.
 
+**#115 CI-CAP: self-test caps sized to the slowest CI leg (burst 68).** Run 42885917245 (dc4a10c), macOS node 24,
+failed one row: inlining-budget-diff.test.mjs "--self-test MUST FAIL on mutant no-newline-refusal" at 60187 ms against
+its 60000 ms cap; run 42865876509 (5fcffb5), macOS node 26, failed "mutant trap-ignores-final" the same way at 61322 ms.
+Both mutants were going red as designed (FAIL lines in stdout): the cap was sized below the slowest leg; the rows pass
+their assertion when not capped (law 8). The label "killed by SIGPIPE" is not the cap's signal: it names the signal
+that ended bash after the trapped TERM (#73: spawnSync sends SIGTERM to bash only and closes the pipes; the EXIT trap's
+printf to the closed stderr dies by SIGPIPE; re-probed this burst). test/spawn-cap.mjs unchanged (FROZEN).
+Policy (orchestrator): a cap that bounds ONE whole --self-test spawn is >= 3x the slowest CI observation of any row it
+bounds, rounded UP to 30000 ms; never lowered; non-self-test caps, killSignal and --test-timeout unchanged. Data: every
+top-level row of all 16 leg-runs of the two runs (11 of the 16 legs (all 8 of run 42865876509, 3 of run 42885917245) log the step as "UNKNOWN STEP", so the first
+SLOW-ROWS.txt, built from "npm test" lines only, saw 5 legs and missed 11). A pooled (async) row's time includes its queue wait, so
+the per-spawn time is read from the run's own ms diagnostic (deopt-diff) or the pool's wave timing (a 6-row window).
+Changed (old -> new, slowest bounded spawn, ratio): inlining-budget-diff.test.mjs selfTest and the --self-test=x row
+60000 -> 210000 (61.3 s, 3.4x); bytecode-budget.test.mjs run() 120000 -> 180000 for a --self-test argv only (59.0 s
+M-fifo-off, 3.1x; the 93.9 s G-ENV teeth row is 2 equal self-tests, ~47 s each); deopt-diff-boundary.test.mjs fxRow
+240000 -> 330000 for a --self-test argv only (102.2 s K2-gotopt-substring, 3.2x); deopt-diff-stage.test.mjs selfRun
+240000 -> 330000 (87.4 s ST.base, the one directly observed spawn of the 3-wide pool; 330000 covers 110 s; the 105.2 s
+"A3 teeth" row is mostly queue wait); allocation-diff.test.mjs:192 runSelfTest armCap 600000 -> 630000 (<= 200.4 s
+M10b, macOS node 26, run 42865876509, 6-row window bound: the first wave is nbase + M1..M5, so M10b starts at >=
+C(M1) = 246.1 s and ends at 446.5 s; 3.1x); audit-g2.test.mjs 3 dd self-test calls 170000 -> 360000 (99.3 s in this
+file, 103.3 s the slowest dd spawn anywhere, 3.5x); audit-g5.test.mjs run() 90000 -> 210000 for a --self-test argv
+(59.4 s, 3.5x); audit-xs.test.mjs run() / runN() default 120000 -> 210000 for a --self-test argv (no CI data: the file
+is new at 43c4ac5; ibd 61.3 s / bb 59.0 s). Already >= 3x (unchanged): deopt-diff.test.mjs SELF_CAP 360000 (103.3 s),
+RUN_CAP 540000 (164.8 s run ms), NBASE 900000 (196.7 s), FIX_CAP 780000 (218.4 s); ic-diff.test.mjs 300000 / 300000 (55.6 s sync, ~95.7 s pooled); ext-audit.test.mjs
+run() 300000 (dd B2 75.4 s); ext-audit-alloc 480000 (B2 137.4 s); ext-audit-inl SELFCAP 600000 (46.3 s); audit-g3
+600000 (142.8 s); bytecode-budget-stage 240000 (54.1 s); bytecode-budget-stage-boundary 240000 (51.8 s);
+deopt-diff-boundary selfTestRun 240000 (66.4 s). The allocation-diff R8 row (932.6 / 981.3 s) waits for every other
+self-test of its file to settle before it launches; its armCap starts at its own spawn, so the cap never saw the wait.
+File timeout (node 22 bounds each WHOLE file; package.json --test-timeout=3600000): (a) observed CI wall, as the sum
+of the file's top-level row times on its slowest leg: ibd 2200.8 s (macOS node 26), bb 1592.3, dd-boundary 691.3,
+audit-g2 332.5, audit-g5 296.4, dd-stage 259.9; audit-xs none (new). All under 3600 s (ibd 61%), so the timeout stays
+the all-hang backstop and package.json is unchanged. (b) worst-case sum of the self-test caps, before -> after: ibd 82
+spawns 4.92M -> 17.22M ms; bb 41 spawns 4.92M -> 7.38M; dd-boundary 21 spawns 5.04M -> 6.93M; dd-stage 3 waves
+0.72M -> 0.99M; audit-g2 0.51M -> 1.08M; audit-g5 4 spawns 0.36M -> 0.84M; audit-xs 20 spawns 2.40M -> 4.20M (the
+other caps are unchanged and not summed). ibd, bb and dd-boundary were already past 3600000 before: a fully hung file
+dies by the file timeout, not row by row. Not covered by the policy: test/bytecode-budget-stage-boundary.test.mjs
+~:665 waits at most 60 s (3000 x 20 ms) for a checkpoint inside a --self-test before its SIGINT; same risk class on a
+slow leg (FILLERS). Measured numbers are REPORTED (hosted CI, 2 runs, 16 leg-runs). Evidence:
+.handoff/evidence/b68-ci/ (SLOW-ROWS-16.txt, perfile.mjs, gh-run-*.log; local, untracked).
+
 ---
 
 ## D. Test-gate lessons

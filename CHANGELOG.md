@@ -1140,6 +1140,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `unexpected error (exit N)` line, one VERDICT and an empty TMPDIR on bash >= 4 (bash 5 prints `(exit 0)`, open limit
   #106; audit-g2 37 tests, 36 pass, 1 skip, unchanged). The bash 5 and uutils branches are UNPROVEN until the next
   ubuntu CI run.
+- CI-CAP (burst 68, test-only; LEDGER #115): every cap on one whole `--self-test` spawn is now >= 3x the slowest CI
+  spawn (run 42885917245 killed an ibd mutant row at 60187 ms vs 60000): ibd 60000 -> 210000, bb / audit-g5 / audit-xs
+  self-test runs 180000 / 210000 / 210000, deopt-diff-boundary 330000, deopt-diff-stage 330000, audit-g2 360000, allocation-diff 630000.
 
 - `bytecode-budget.sh` read any digit run after `Bytecode length:` as a length. awk doubles lose
   precision past 2^53 and bash `(( ))` wraps past 2^63, so diff mode read 2^53 | 2^53+1 as SAME and

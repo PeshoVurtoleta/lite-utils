@@ -407,7 +407,10 @@ function selfRun(script, env) {
         const c = spawn('bash', [script, '--self-test'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '', err = '';
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
-        const h = armCap(c, 240000, 'SIGTERM');
+        // 330000 (was 240000; b68 CI-CAP, LEDGER #115): 3x the slowest observed CI spawn of this pool, rounded up to 30000 ms.
+        // Only ST.base's time is directly observed (87.4 s, ubuntu node 22, run 42885917245; 3 x 87.4 s = 262.2 s); a later
+        // pool spawn is not bounded by that, and 330000 covers up to 110 s.
+        const h = armCap(c, 330000, 'SIGTERM');
         c.on('error', (e) => { h.clear(); rej(e); });
         c.on('close', (status, signal) => {
             h.clear();

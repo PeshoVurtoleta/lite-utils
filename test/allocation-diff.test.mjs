@@ -189,7 +189,7 @@ function runSelfTest(path, tmp, extra = {}) {
         const c = spawn('bash', [path, '--self-test'], { env: { ...ENV, TMPDIR: tmp, ...extra } });
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the self-test's EXIT trap then removes its own mktemp dir
-        const h = armCap(c, 600000, 'SIGTERM');
+        const h = armCap(c, 630000, 'SIGTERM');
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
         // a spawn error (ENOENT, EAGAIN, ...) is kept, not thrown: 'close' still fires, h.clear() runs and the caller's
         // noTimeout reports "<what> spawn error <code>" by name (deopt-diff-boundary.test.mjs's selfTestRun idiom)

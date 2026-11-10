@@ -114,11 +114,15 @@ function mkCase() {
     c.tmpLeft = () => readdirSync(c.tmp);
     return c;
 }
-function run(root, c, args, what, cap = 120000) {
+// a run whose argv has --self-test gets SELF_CAP by default (b68 CI-CAP, LEDGER #115: the ibd self-test cap, 3x 61.3 s;
+// it also covers bb's 180000); every other run keeps 120000
+const SELF_CAP = 210000;
+const capFor = (args) => (args.some((a) => a.startsWith('--self-test')) ? SELF_CAP : 120000);
+function run(root, c, args, what, cap = capFor(args)) {
     return spawn(BASH, [root, ...args], { cwd: c.w, env: cleanEnv({ TMPDIR: c.tmp }) }, `${what}`, cap);
 }
 // as run(), with NODE=<fake node> so a row whose argv must not carry --node still counts spawns
-function runN(root, c, args, what, cap = 120000) {
+function runN(root, c, args, what, cap = capFor(args)) {
     return spawn(BASH, [root, ...args], { cwd: c.w, env: cleanEnv({ TMPDIR: c.tmp, NODE: c.node }) }, `${what}`, cap);
 }
 // ibd base argv for driver mode (every option here is given ONCE; a row adds its own extras)

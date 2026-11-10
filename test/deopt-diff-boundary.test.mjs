@@ -516,8 +516,11 @@ function fxRow(script, args, setup) {
         const env = { ...ENV, PATH: pb + ':' + process.env.PATH };
         delete env.NODE;
         writeFileSync(join(g.node, '..', 'log'), '');
-        // cap 240000 (was 120000): CI run 42056284029, job 127345428176 (macOS node 26.8.2): row R-only-pos took 73.1 s
-        const r = capSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', cwd: g.cwd, env }, 240000, basename(script));
+        // cap 240000 (was 120000): CI run 42056284029, job 127345428176 (macOS node 26.8.2): row R-only-pos took 73.1 s.
+        // A --self-test row gets 330000 (b68 CI-CAP, LEDGER #115): 3x 102.2 s (K2-gotopt-substring, macOS node 22, run
+        // 42885917245), rounded up to 30000 ms; every other row keeps 240000.
+        const cap = args.includes('--self-test') ? 330000 : 240000;
+        const r = capSync('bash', [script, ...args.map((a) => (Object.hasOwn(map, a) ? map[a] : a))], { encoding: 'utf8', cwd: g.cwd, env }, cap, basename(script));
         const out = r.stdout + r.stderr;
         const fake = readFileSync(join(g.node, '..', 'log'), 'utf8').split('\n').filter(Boolean).length;
         const pnode = readFileSync(plog, 'utf8').split('\n').filter(Boolean).length;

@@ -28,8 +28,12 @@ function cleanEnv(extra = {}) {
     e.NODE_V8_COVERAGE = undefined;   // not a delete: node's child_process re-inserts a missing NODE_V8_COVERAGE key
     return { ...e, ...extra };
 }
+// SELF_CAP bounds ONE --self-test spawn (b68 CI-CAP, LEDGER #115): 3x the slowest CI spawn, rounded up to 30000 ms. Was
+// 60000: runs 42865876509 (macOS node 26) and 42885917245 (macOS node 24) killed a mutant row that was going red as
+// designed at 61.3 s / 60.2 s; 3 x 61.3 s = 183.9 s -> 210000.
+const SELF_CAP = 210000;
 function selfTest(path, extra) {
-    return capSync('bash', [path, '--self-test'], { encoding: 'utf8', env: cleanEnv(extra) }, 60000, 'inlining-budget-diff.sh --self-test');
+    return capSync('bash', [path, '--self-test'], { encoding: 'utf8', env: cleanEnv(extra) }, SELF_CAP, 'inlining-budget-diff.sh --self-test');
 }
 function okCount(out) { return (out.match(/^ok {3}/gm) || []).length; }
 
@@ -363,7 +367,7 @@ test('inlining-budget-diff -h control: a root copy with the paragraph removed ca
 test('inlining-budget-diff --self-test=x: exit 2, "--self-test takes no value" + NO-VERDICT, empty stdout; MUST FAIL with the guard dropped', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'ibd-stv-'));
     try {
-        const run = (p) => capSync('bash', [p, '--self-test=x'], { encoding: 'utf8', env: cleanEnv(), cwd: dir }, 60000, 'inlining-budget-diff.sh --self-test=x');
+        const run = (p) => capSync('bash', [p, '--self-test=x'], { encoding: 'utf8', env: cleanEnv(), cwd: dir }, SELF_CAP, 'inlining-budget-diff.sh --self-test=x');
         const r = run(SCRIPT);
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.equal(r.stdout, '');

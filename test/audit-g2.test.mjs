@@ -85,6 +85,9 @@ function cleanEnv(extra = {}) {
     e.NODE_V8_COVERAGE = undefined;
     return { ...e, ...extra };
 }
+// one deopt-diff --self-test spawn (b68 CI-CAP, LEDGER #115; was 170000): deopt-diff.test.mjs SELF_CAP; >= 3x 103.3 s, the
+// slowest CI dd self-test spawn (macOS node 22, run 42885917245; this file's A10 --fixtures row: 99.3 s)
+const DD_SELF_CAP = 360000;
 const spawn = (cmd, args, opts, what, cap = 60000) => capSync(cmd, args, { encoding: 'utf8', env: cleanEnv(), maxBuffer: 1 << 26, ...opts }, cap, what);
 
 let TOP = null, seq = 0;
@@ -397,7 +400,7 @@ test('A5 mutant (the whole condition widened to index($0, "ConcurrencyMode::kCon
 });
 test('A5 mutant (whole condition widened): the canned --self-test rows go red', { skip }, () => {
     const m = mutant('a5-widen-st', [[A_CONC, A_WIDE]]);
-    const r = spawn(BASH, [m, '--self-test', '--fixtures', FIXDIR], { cwd: mk('st') }, 'mutant --self-test', 170000);
+    const r = spawn(BASH, [m, '--self-test', '--fixtures', FIXDIR], { cwd: mk('st') }, 'mutant --self-test', DD_SELF_CAP);
     assert.notEqual(r.status, 0, 'the widened mutant must fail its own self-test');
     assert.match(r.stdout, /^FAIL /m);
 });
@@ -488,13 +491,13 @@ test('A9 --help: the new sentences are there, the old "Without --out nothing is 
 
 // ======================================================= A10 =======================================================
 test('A10 --self-test: all checks ok (>= 107), no FAIL line', { skip }, () => {
-    const r = spawn(BASH, [TOOL, '--self-test'], { cwd: mk('st') }, 'deopt-diff.sh --self-test', 170000);
+    const r = spawn(BASH, [TOOL, '--self-test'], { cwd: mk('st') }, 'deopt-diff.sh --self-test', DD_SELF_CAP);
     code(r, 0, '--self-test'); assert.ok(!/^FAIL /m.test(r.stdout), msg(r));
     const m = /^self-test: (\d+) check\(s\) ok$/m.exec(r.stdout);
     assert.ok(m, msg(r)); assert.ok(Number(m[1]) >= 107, `only ${m[1]} checks (want >= 107)`);
 });
 test('A10 --self-test --fixtures: all checks ok (>= 124), no FAIL line', { skip }, () => {
-    const r = spawn(BASH, [TOOL, '--self-test', '--fixtures', FIXDIR], { cwd: mk('st') }, 'deopt-diff.sh --self-test --fixtures', 170000);
+    const r = spawn(BASH, [TOOL, '--self-test', '--fixtures', FIXDIR], { cwd: mk('st') }, 'deopt-diff.sh --self-test --fixtures', DD_SELF_CAP);
     code(r, 0, '--self-test --fixtures'); assert.ok(!/^FAIL /m.test(r.stdout), msg(r));
     const m = /^self-test: (\d+) check\(s\) ok$/m.exec(r.stdout);
     assert.ok(m, msg(r)); assert.ok(Number(m[1]) >= 124, `only ${m[1]} checks (want >= 124)`);

@@ -136,9 +136,13 @@ function mkCase(traceA = T_RS, traceB = T_RS_B) {
     c.spawns = () => wl(join(c.bin, 'spawns.log'));
     return c;
 }
+// a run whose argv has --self-test (or --self-test=x: the guard-dropped mutant row runs the whole self-test) gets
+// SELF_CAP (b68 CI-CAP, LEDGER #115: the ibd self-test cap of test/inlining-budget-diff.test.mjs, 3x 61.3 s); others 90000
+const SELF_CAP = 210000;
 function run(root, c, args, o = {}) {
     const env = cleanEnv({ TMPDIR: c.tmp, ...(o.env || {}) });
-    return spawn(BASH, [root, ...args], { cwd: o.cwd || c.w, env }, `inlining-budget-diff.sh (${args.slice(0, 4).join(' ')})`, o.cap || 90000);
+    const cap = o.cap || (args.some((a) => a.startsWith('--self-test')) ? SELF_CAP : 90000);
+    return spawn(BASH, [root, ...args], { cwd: o.cwd || c.w, env }, `inlining-budget-diff.sh (${args.slice(0, 4).join(' ')})`, cap);
 }
 // base argv for driver mode: tiny, one fn, one tier
 const B = (c, out, extra = []) => ['--tiers', 'turbo', '--runs', '2', '--fn', 'read.set', '--no-bytecode', '--node', c.node, ...extra, '--out', out];
