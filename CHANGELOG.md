@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G1 bytecode-budget (audit R2 = BB-opus-1, R5 = BB-fable-1, R3 = BB-opus-2, R22 = BB-opus-5, R23 = BB-opus-6, R26 =
+  ICD-opus-3, R24 = DD-fable-1; Q-B57-PIPE, Q-B57-C1, Q-B57-BB2, Q-B57-MINOR, Q-B57-DOC, Q-B60-TMPFULL). R2: the
+  driver's stdout and stderr go to a per-probe mktemp regular file, never a pipe (a full pipe dropped V8's own writes
+  while the run still ended cleanly); the file is read, then removed. R5: `--no-flush-bytecode` comes after every
+  --v8-flags token and before --print-bytecode, on every probe and on the baseline, and is in the mode line (a
+  function V8 flushed and recompiled no longer counts as two same-name functions). R3: one baseline spawn per run (`-e
+  "console.log('')"`, filter `*`) lists the functions node compiles itself; a --fn in that list is NO-VERDICT, and any
+  baseline failure (mktemp, node exit, tr, awk, append, an unreadable status, zero names) makes every fn NO-VERDICT.
+  Q-B60-TMPFULL: after each temp file is read, 64 KiB of spaces are appended to it with the bash builtin (no spawn,
+  raw/ unchanged); a failure is NO-VERDICT `append exited N` (a TMPDIR still full when the probe ends). R22: a newline
+  in a DRIVER, in --out or in the cwd they resolve against is refused, exit 2, 0 spawns. R23: with --out, --fn names
+  equal up to ASCII case are refused. R26: an `=` in the resolved node path is refused (env would read it as a
+  NAME=value operand). R24: the -h sentence on staged copies inheriting `type` (the nearest package.json above DIR).
+  Spawns: +1 (the baseline) past the limits, none on a version mismatch or a refusal; mktemp +1 per probe and +1 per
+  run; temp files left after a run: 0. Tests: test/audit-g1.test.mjs added (64 rows); pins moved in 9 test files. `npm
+  test` (private copy with .git, 2026-11-10, ONE run, node 26.8.2, bash 3.2.57, macOS, host PRELIMINARY, load 3.12):
+  2634 tests, 2626 pass, 0 fail, 8 skip. Local proof is bash 3.2.57 / macOS / node 26.8.2 only; node 22 / 24 accepting
+  `--no-flush-bytecode` is a Lead only CI proves (by reading: a node without it fails closed as `driver exited`).
+  Known limits: LEDGER #92.
 - G0 shared lib, all five tools (audit R1 = BB-opus-4 / DD-opus-2 / IBD-opus-4, R17 = IBD-fable-4 / ICD-fable-3, R21 =
   AD-opus-3, R19 = AD-fable-1, R4 = BB-opus-3; Q-B58-STDERR, Q-B58-ALIAS, Q-B59-POSIX-COND). `is_tracked`
   (lib/tracked.sh): the ls-files pathspec is `:(literal)` and `--icase-pathspecs` (ASCII case folding), the list is

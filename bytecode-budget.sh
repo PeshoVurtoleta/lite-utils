@@ -27,7 +27,9 @@
 #                          caller's cwd (a bare name through PATH). It must be an executable file, else exit 2
 #                          before any node spawn ("node binary not found", "node binary is not a file on PATH
 #                          (...)", "node binary is not an executable file", "node binary: cannot resolve the
-#                          directory of ...", "node binary: a newline is not allowed in the resolved path").
+#                          directory of ...", "node binary: a newline is not allowed in the resolved path", "node
+#                          binary: an = is not allowed in the resolved path (env would read it as a NAME=value
+#                          operand, not as the program): PATH").
 #   --v8-flags STR         extra V8 flags for every probe, split on spaces (flags only, each `--` and a letter; any
 #                          *print-bytecode* flag is refused; a max*inlined*bytecode* flag must be --name=N, N an
 #                          integer of 1..9 digits; a reserve*inline*budget* flag must be --name=X, X = N or N.M, N and
@@ -53,7 +55,10 @@
 #                          a space in fn becomes -). DIR/raw must be absent or an empty, readable and writable
 #                          directory that is not a symlink; DIR/report.txt must be absent (then DIR absent or
 #                          writable) or a writable regular file (never a FIFO, a device or a directory), and must not
-#                          be a symlink or a file with another hard link. Without --out nothing is written to disk.
+#                          be a symlink or a file with another hard link. Without --out no file is left on disk.
+#                          With or without --out, the baseline and each probe use one temp file,
+#                          ${TMPDIR:-/tmp}/bytecode-budget.XXXXXX, removed right after; a run killed mid-run can
+#                          leave one bytecode-budget.XXXXXX behind.
 #                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
 #   --diff                 diff mode: probe DRIVER_BEFORE and DRIVER_AFTER (run k of each side, k = 1..N, in turn)
 #                          and compare the two length multisets per fn. Needs --fn and exactly two DRIVERs, or a
@@ -74,19 +79,23 @@
 #   --fixtures DIR         with --self-test: also check the real-trace captures in DIR (the node-26.8.2 set)
 #   -h, --help             this text (exit 2)
 #   Each value option is given at most once (one comma list) and never empty (--v8-flags never only blanks);
-#   --fn / --max / --v8-flags take no newline and --fn / --max no empty entry (stray comma). --self-test takes
-#   only --fixtures. --self-test / --help take no =value; an explicit empty --opt= is refused, never filled
+#   --fn / --max / --v8-flags / --out and each DRIVER path take no newline (nor the cwd they resolve against) and
+#   --fn / --max no empty entry (stray comma). --self-test takes only --fixtures. --self-test / --help take no
+#   =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
 #   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; their values take
 #   no newline.
 #
 # DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
-#   `node [v8 flags] --print-bytecode --print-bytecode-filter=<fn> DRIVER`
+#   `node [v8 flags] --no-flush-bytecode --print-bytecode --print-bytecode-filter=<fn> DRIVER`
 #   with cwd = its directory and NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped
-#   (unset at start, for every spawn). V8 prints a function only once it is compiled.
+#   (unset at start, for every spawn). V8 prints a function only once it is compiled. --no-flush-bytecode comes after
+#   the --v8-flags (the last flag wins): a function V8 flushed and recompiled after some major GCs (default
+#   --flush-bytecode, --bytecode-old-age=6) would print twice and count as two same-name functions.
 # fn: a short V8 name, ^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$ (e.g. read, get value). Never
-#   qualified: Store.read prints nothing on node 26, so it is refused. A repeated fn is refused.
+#   qualified: Store.read prints nothing on node 26, so it is refused. A repeated fn is refused; with --out, so are two
+#   fn names equal up to ASCII case (raw/<fn>.<k>.txt would be one file on a case-insensitive file system).
 #   Matching is EXACT and counts EVERY function with that name (same-name functions, class and object
 #   methods); each one is gated. read never matches reader or read.set.
 # Per fn and run, the probe output is reduced to "<count> <bad> <lengths>": matched headers, matched headers
@@ -96,7 +105,23 @@
 #   Two shapes count under "not followed by" too, one more in both <count> and <bad>, for any name: a header found after
 #   column 1 of a line, and a "Bytecode length:" line with no header line right above it. A NUL byte reads as '?' first.
 #   driver output is trusted: a driver that prints V8 header text can forge a result.
+#   Another thread that writes to stdout while V8 prints a record (a Worker's writeSync, or the main thread while a
+#   Worker compiles) can land between V8's separate writes of that record: a matched header without its length, or a
+#   run that differs, so NO-VERDICT. A line holding only a number can land right after 'Bytecode length: ' and be read
+#   as the length.
 #   No address reaches that line, so run k must equal run 1 as text (null control).
+#   The driver's stdout and stderr go to a regular temp file (see --out), never to a pipe: once JS touches
+#   process.stdout on a pipe, node makes it non-blocking and V8's own writes to a full pipe are dropped while the run
+#   still ends cleanly. The file is read after the driver has ended, then 64 KiB of spaces are appended to it (never
+#   to raw/) and it is removed right after: a TMPDIR still full when the probe ends fails that append, NO-VERDICT
+#   ("append exited <rc>"; the baseline makes the same check).
+#   Known limits of that file: a disk or quota on TMPDIR that was full during the run and freed before that check can
+#   still cut it. Only a file-size limit was tested, no real full disk, so node's status there is unknown: if it still
+#   ends with status 0, a record cut between the end of its name and its length line counts as a matched header not
+#   followed by a length (NO-VERDICT), but a cut inside the digits of a length reads as a shorter length, and a cut in
+#   a header before its name ends, or at a record boundary, loses that record with no sign. A driver that reopens
+#   /dev/stdout (Linux: a new file description at offset 0 on the regular file) can overwrite what was already printed
+#   there.
 # Report lines (run 1):
 #   "  <fn>: <count> match(es): <l1,l2,..>"
 #   "    <len> bytes: over <limit> (<op><value>)[, ...]" or "    <len> bytes: within every limit" (each distinct length)
@@ -118,16 +143,28 @@
 # NO-VERDICT reasons, one line per fn ("  <fn>: NO-VERDICT -- <reason>"):
 #   node version mismatch: <bin> --version is <v>, the maxima are for <v>     (gate mode)
 #   node version mismatch: <bin> --version is <v>, --node-version is <v>      (report and diff mode)
-#   cannot read driver output in run <k> (<tee|tr|awk> exited <rc>)
-#                                    (in one run the first failure in the order awk > tr > tee > driver exit is named:
-#                                    a failed awk before a failed tr, a failed tr before a failed tee, a failed tee
-#                                    before the driver exit)
+#   cannot read driver output in run <k> (<mktemp|tee|tr|awk|append> exited <rc>)
+#                                    (in one run the first failure in the order awk > tr > tee > append > driver exit
+#                                    is named: a failed awk before a failed tr, a failed tr before a failed tee, a
+#                                    failed tee before a failed append, a failed append before the driver exit; a
+#                                    failed mktemp means that run's driver never started)
 #   driver exited <rc> in run <k>
 #   null control: run <k> differs from run 1 (run <k>: <line> | run 1: <line>)
 #   no function named '<fn>' in run 1 (not compiled: never called / lazy, or no such name)
 #   <b> of <n> matched header(s) not followed by 'Bytecode length: N' in run 1 (unknown format)
 #     (N of 1..9 digits: a length of 10 or more digits is counted here; so are a header after column 1 of a line and
 #     a length line with no header line right above it)
+#   cannot list the functions node compiles itself (<why>): its lengths cannot be told from the driver's
+#     (<why>, the first that applies: mktemp exited <rc>, cannot read its exit status (got '<s>'), awk exited <rc>,
+#     tr exited <rc>, append exited <rc>, node exited <rc>, it listed no function)
+#   node itself compiles a function named '<fn>' in a process that only prints: its lengths cannot be told from the
+#     driver's (rename the function)
+#   These two come after every reason above. The baseline behind them: past the limits read and before the first probe,
+#   one spawn of `node [v8 flags] --no-flush-bytecode --print-bytecode --print-bytecode-filter=* -e "console.log('')"`,
+#   in the caller's cwd, stdin /dev/null, the same env strip, its output to one temp file and nothing to raw/. The filter
+#   also matches functions node compiles for itself, and no header says which script a function comes from.
+#   Known limit: a function node compiles only after the driver imports something (e.g. an internal of node:fs) is not
+#   in that list, so a --fn of that name still counts node's copy as the driver's.
 # Verdict, over every fn (NO-VERDICT > OVER > WITHIN): exit 0 WITHIN, 1 OVER, 2 NO-VERDICT. Report mode:
 #   exit 0 REPORTED, or 2 NO-VERDICT. A refused argument (Options, DRIVER, fn) exits 2 before any node is
 #   spawned; a --node BIN whose --version fails, a --v8-flags token the allowlist refuses (after --version and
@@ -135,9 +172,10 @@
 #   exits 2 after its spawn(s) (a V8 flag node lists but rejects still runs every probe). With --out, a failing
 #   --version, an allowlist refusal or a version mismatch leaves DIR holding raw/ (empty) and report.txt only (no
 #   raw/before, raw/after or stage/). Spawns: one --version, two --v8-options (the --v8-flags allowlist, then the
-#   limits), then fn x runs probes.
+#   limits), the baseline (none on a version mismatch or a refusal), then fn x runs probes.
 # Diff verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT. Spawns: one --version,
-#   two --v8-options (the --v8-flags allowlist, then the limits), then fn x runs x 2 probes. --diff with --max, or not
+#   two --v8-options (the --v8-flags allowlist, then the limits), the baseline (none on a version mismatch or a refusal),
+#   then fn x runs x 2 probes. --diff with --max, or not
 #   exactly two DRIVERs, exits 2 before any spawn.
 #   (Ref / file mode: no DRIVER; any DRIVER path exits 2 before any spawn.)
 # Ref / file mode: --out DIR is required and DIR/stage must be absent or empty. Before any probe, but after
@@ -145,7 +183,10 @@
 #   that side's module as NAME (ref mode: `git cat-file blob <sha>:REL`, plumbing, no
 #   textconv; file mode: a cp, so an edit after staging cannot leak in) plus a copy of --driver, and each side's
 #   driver runs there (cwd = DIR/stage/<side>). One module file per side: a module with relative imports of its own
-#   fails closed (its driver exits non-zero: NO-VERDICT). Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
+#   fails closed (its driver exits non-zero: NO-VERDICT). The staged copies take the module format (type) of the
+#   nearest package.json above DIR: a CommonJS .js module under a --out inside a "type":"module" project fails closed as
+#   "driver exited 1" (node's own error is in DIR/raw/<side>/<fn>.<k>.txt); put DIR outside that project or name the
+#   module .cjs / .mjs. Head: "before  <REF> @ <sha 12>  <REL>  sha256/8 <x>" (ref)
 #   or "before  <abs FILE>  sha256/8 <x>" (file), x = the staged copy's, the same for after, then
 #   "driver  <abs --driver>  sha256/8 <x>", and when the two staged modules are byte-identical
 #   "NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)".
@@ -567,6 +608,8 @@ FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 LINE_RE='^0 [0-9]+ [0-9]+ (-|[0-9]+(,[0-9]+)*)$'   # a probe line "<driver exit> <count> <bad> <lengths>" of a clean run
 ST_RE='^@ ([0-9]+)( [0-9]+)? ([0-9]+) ([0-9]+)$'   # the probe pipeline's last line: "@ node [tee] tr awk" (tee only with --out)
 
+BASE_NAMES=""; BASE_BAD=""   # base_list: the functions node compiles itself, and why that list could not be read (set before the first probe)
+
 vworst() { local a; for a in NO-VERDICT OVER; do if [[ $1 == "$a" || $2 == "$a" ]]; then echo "$a"; return 0; fi; done; echo "$1"; }
 
 distinct() { printf '%s\n' "$1" | tr ',' '\n' | awk '!seen[$0]++'; }   # "l1,l2,.." -> distinct values, first-seen order
@@ -595,6 +638,8 @@ judge() {
   read -r rc n bad lens <<<"$first"
   if [[ "$n" == 0 ]]; then JWHY="no function named '$fn' in run 1 (not compiled: never called / lazy, or no such name)"; return 0; fi
   if [[ "$bad" != 0 ]]; then JWHY="$bad of $n matched header(s) not followed by 'Bytecode length: N' in run 1 (unknown format)"; return 0; fi
+  if [[ -n "$BASE_BAD" ]]; then JWHY="cannot list the functions node compiles itself ($BASE_BAD): its lengths cannot be told from the driver's"; return 0; fi
+  if [[ "$BASE_NAMES" == *$'\n'"$fn"$'\n'* ]]; then JWHY="node itself compiles a function named '$fn' in a process that only prints: its lengths cannot be told from the driver's (rename the function)"; return 0; fi
   if [[ -z "$max" ]]; then JV=REPORTED; JWHY="$n match(es), not gated"; return 0; fi
   IFS=, read -r -a lens_a <<<"$lens"
   for l in "${lens_a[@]}"; do if (( l > max )); then over="$over $l"; fi; done
@@ -762,6 +807,7 @@ self_test() {
     '[ -f "$src" ] && sed "s/(0x/(0x$n/" "$src"' 'exit "${FAKE_RC:-0}"' >"$fk/node"
   chmod +x "$fk/node"
   cp "$d/add" "$fk/add.txt"; : >"$fk/lazy.txt"
+  { hdr __base 1; echo 'Bytecode length: 1'; } >"$fk/*.txt"   # the baseline spawn (filter '*'): one name, not a fn any row asks for
   { hdr mid 1; echo 'Bytecode length: 211'; } >"$fk/mid.txt"
   { hdr dup 1; echo 'Bytecode length: 6'; hdr dup 2; echo 'Bytecode length: 19'; } >"$fk/dup.txt"
   { hdr read 1; echo 'Bytecode length: 6'; hdr read 2; echo 'Bytecode length: 5'
@@ -775,35 +821,35 @@ self_test() {
     printf '%s|%s|%s' "$rc" "$(grep '^VERDICT ' "$d/sp.out" || true)" "$(wc -l <"$fk/log" | tr -d ' ')"
   }
   has() { grep -c -e "$1" "$d/sp.out" || true; }
-  check "gate (fake node): 3 fns within -> exit 0; 9 spawns (--version, 2 x --v8-options: the --v8-flags allowlist, then the limits, 3 fns x 2 runs)" \
-    "$(spawn - --max add=6,mid=211,dup=19 --node-version v26.8.2 "$drv")" "0|VERDICT WITHIN|9"
-  check "without --out nothing is written to disk (cwd and TMPDIR stay empty)" \
+  check "gate (fake node): 3 fns within -> exit 0; 10 spawns (--version, 2 x --v8-options: the --v8-flags allowlist, then the limits, the baseline, 3 fns x 2 runs)" \
+    "$(spawn - --max add=6,mid=211,dup=19 --node-version v26.8.2 "$drv")" "0|VERDICT WITHIN|10"
+  check "without --out no file is left on disk: the baseline and probe temp files are removed (cwd and TMPDIR stay empty)" \
     "$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" 0
   check "gate (fake node): over -> exit 1 OVER (FINAL=1 keeps the planned exit), reason names fn" \
-    "$(spawn - --max mid=210 --node-version v26.8.2 "$drv")|$(has '^  mid: OVER -- length(s) 211 > max 210$')" "1|VERDICT OVER|5|1"
+    "$(spawn - --max mid=210 --node-version v26.8.2 "$drv")|$(has '^  mid: OVER -- length(s) 211 > max 210$')" "1|VERDICT OVER|6|1"
   check "gate (fake node): every same-name function is gated (dup 6,19 vs 18 -> OVER)" \
-    "$(spawn - --max dup=18 --node-version v26.8.2 "$drv")" "1|VERDICT OVER|5"
+    "$(spawn - --max dup=18 --node-version v26.8.2 "$drv")" "1|VERDICT OVER|6"
   check "gate (fake node): node version mismatch -> exit 2 before any probe (2 spawns: --version, --v8-options), reason names fn" \
     "$(spawn FAKE_VER=v26.8.1 --max mid=1 --node-version v26.8.2 "$drv")|$(has '^  mid: NO-VERDICT -- node version mismatch: ')" \
     "2|VERDICT NO-VERDICT|2|1"
   check "fn regex: a qualified name (Store.read) exits 2 with 0 spawns" \
     "$(spawn - --max Store.read=1 --node-version v26.8.2 "$drv")" "2|VERDICT NO-VERDICT|0"
   check "report mode (fake node): exit 0 REPORTED; read = 4 matches in input order" \
-    "$(spawn - --fn read,dup "$drv")|$(has '^  read: 4 match(es): 6,5,6,6$')" "0|VERDICT REPORTED|7|1"
+    "$(spawn - --fn read,dup "$drv")|$(has '^  read: 4 match(es): 6,5,6,6$')" "0|VERDICT REPORTED|8|1"
   check "lazy (no match) -> exit 2 NO-VERDICT, reason names fn" \
     "$(spawn - --max lazy=100 --node-version v26.8.2 "$drv")|$(has "^  lazy: NO-VERDICT -- no function named 'lazy' in run 1")" \
-    "2|VERDICT NO-VERDICT|5|1"
+    "2|VERDICT NO-VERDICT|6|1"
   check "driver exit 1 -> exit 2 NO-VERDICT (never OVER)" \
     "$(spawn FAKE_RC=1 --max mid=1 --node-version v26.8.2 "$drv")|$(has '^  mid: NO-VERDICT -- driver exited 1 in run 1$')" \
-    "2|VERDICT NO-VERDICT|5|1"
+    "2|VERDICT NO-VERDICT|6|1"
   { hdr mid 1; echo 'Bytecode length: 212'; } >"$fk/mid.2.txt"
   check "null control (fake node): run 2 prints another length -> exit 2 NO-VERDICT" \
     "$(spawn - --max mid=211 --node-version v26.8.2 "$drv")|$(has '^  mid: NO-VERDICT -- null control: run 2 differs from run 1')" \
-    "2|VERDICT NO-VERDICT|5|1"
+    "2|VERDICT NO-VERDICT|6|1"
   rm -f "$fk/mid.2.txt"
   check "--out: report.txt + raw/ with one raw file per fn per run, 0x addresses kept raw" \
     "$(spawn - --out "$d/o" --max add=6,mid=211,dup=19 --node-version v26.8.2 "$drv")|$(grep -c '^VERDICT WITHIN$' "$d/o/report.txt" || true)|$(find "$d/o/raw" -type f | wc -l | tr -d ' ')|$(cat "$d/o/raw/dup.2.txt" | grep -c '(0x21 ' || true)" \
-    "0|VERDICT WITHIN|9|1|6|1"
+    "0|VERDICT WITHIN|10|1|6|1"
   got=""
   for x in '--fn add,add' '--runs 1 --fn add' '--runs 21 --fn add' '--fn add --max add=1 --node-version v26.8.2' \
     '--fn add --v8-flags --print_bytecode' '--fn add --v8-flags x.js' '--max add=1' '--max add=x --node-version v26.8.2' \
@@ -814,7 +860,7 @@ self_test() {
   out=$(spawn - --fn add); got="$got${out%%|*}:${out##*|} "
   out=$(spawn - --fn add "$drv" "$drv"); got="$got${out%%|*}:${out##*|}"
   check "refused before any spawn (exit 2, 0 spawns): repeated fn, runs 1 / 21, --fn with --max, *print-bytecode* / non-flag v8 flag, no --node-version, bad N, bad version, unknown option; then a valid --fn add runs; no DRIVER, two DRIVERs" \
-    "$got" "2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 0:5 2:0 2:0"
+    "$got" "2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 2:0 0:6 2:0 2:0"
 
   # --- diff mode end to end: the fake node cats <fn>.txt beside the driver (cwd) when there, so the sides differ ---
   local drva="$d/drva/driver.mjs"
@@ -823,22 +869,22 @@ self_test() {
   { hdr dup 1; echo 'Bytecode length: 19'; hdr dup 2; echo 'Bytecode length: 6'; } >"$d/drva/dup.txt"
   { hdr add 1; echo 'Bytecode length: 6'; hdr add 2; echo 'Bytecode length: 6'; } >"$d/drva/add.txt"
   : >"$d/drva/read.txt"
-  check "diff (fake node): one DRIVER on both sides -> exit 0 SAME; 7 spawns (--version, 2 x --v8-options, 1 fn x 2 runs x 2 sides); nothing on disk" \
+  check "diff (fake node): one DRIVER on both sides -> exit 0 SAME; 8 spawns (--version, 2 x --v8-options, the baseline, 1 fn x 2 runs x 2 sides); nothing left on disk" \
     "$(spawn - --diff --fn mid "$drv" "$drv")|$(has '^  mid: SAME -- identical length multiset (211 | 211)$')|$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" \
-    "0|VERDICT SAME|7|1|0"
+    "0|VERDICT SAME|8|1|0"
   check "diff (fake node): mid 211 | 212 -> exit 1 DIFF (FINAL=1 keeps the planned exit), one count line per length" \
-    "$(spawn - --diff --fn mid "$drv" "$drva")|$(has '^    before=1 after=0  211$')|$(has '^    before=0 after=1  212$')" "1|VERDICT DIFF|7|1|1"
+    "$(spawn - --diff --fn mid "$drv" "$drva")|$(has '^    before=1 after=0  211$')|$(has '^    before=0 after=1  212$')" "1|VERDICT DIFF|8|1|1"
   check "diff (fake node): dup 6,19 | 19,6 -> exit 0 SAME (order-free)" \
-    "$(spawn - --diff --fn dup "$drv" "$drva")" "0|VERDICT SAME|7"
+    "$(spawn - --diff --fn dup "$drv" "$drva")" "0|VERDICT SAME|8"
   check "diff (fake node): add 6 | 6,6 -> exit 1 DIFF (multiplicity)" \
-    "$(spawn - --diff --fn add "$drv" "$drva")|$(has '^    before=1 after=2  6$')" "1|VERDICT DIFF|7|1"
+    "$(spawn - --diff --fn add "$drv" "$drva")|$(has '^    before=1 after=2  6$')" "1|VERDICT DIFF|8|1"
   check "diff (fake node): read 4 matches | none -> exit 2 NO-VERDICT naming after" \
-    "$(spawn - --diff --fn read "$drv" "$drva")|$(has "^  read: NO-VERDICT -- after: no function named 'read' in run 1 ")" "2|VERDICT NO-VERDICT|7|1"
+    "$(spawn - --diff --fn read "$drv" "$drva")|$(has "^  read: NO-VERDICT -- after: no function named 'read' in run 1 ")" "2|VERDICT NO-VERDICT|8|1"
   check "diff (fake node): mid DIFF + lazy NO-VERDICT -> exit 2 NO-VERDICT (worst over fns)" \
-    "$(spawn - --diff --fn mid,lazy "$drv" "$drva")" "2|VERDICT NO-VERDICT|11"
-  check "diff --out (fake node): 3 fns x 2 runs -> 15 spawns, report.txt, raw/before and raw/after 6 files each" \
+    "$(spawn - --diff --fn mid,lazy "$drv" "$drva")" "2|VERDICT NO-VERDICT|12"
+  check "diff --out (fake node): 3 fns x 2 runs -> 16 spawns, report.txt, raw/before and raw/after 6 files each" \
     "$(spawn - --out "$d/od" --diff --fn add,mid,dup "$drv" "$drva")|$(grep -c '^VERDICT DIFF$' "$d/od/report.txt" || true)|$(find "$d/od/raw/before" -type f | wc -l | tr -d ' ')|$(find "$d/od/raw/after" -type f | wc -l | tr -d ' ')" \
-    "1|VERDICT DIFF|15|1|6|6"
+    "1|VERDICT DIFF|16|1|6|6"
   check "diff (fake node): node version mismatch -> exit 2 before any probe (2 spawns: --version, --v8-options), report-mode wording" \
     "$(spawn FAKE_VER=v26.8.1 --diff --fn mid --node-version v26.8.2 "$drv" "$drva")|$(has '^  mid: NO-VERDICT -- node version mismatch: .*, --node-version is v26.8.2$')" \
     "2|VERDICT NO-VERDICT|2|1"
@@ -876,15 +922,15 @@ self_test() {
   elif [[ $sr != 0 ]]; then
     check "ref / file modes: temp git repo set up (init, commits r1 r2, tags)" "git exited $sr: $(tail -n 1 "$d/git.log")" "ok"
   else
-    check "ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 7 spawns, before=1 after=0  211" \
+    check "ref mode (fake node, temp git repo): --before-ref r1 --after-ref r2, m/mid.txt 211 | 212 -> exit 1 DIFF, 8 spawns, before=1 after=0  211" \
       "$(sspawn - --out "$d/sr1" --diff --fn mid --before-ref r1 --after-ref r2 --module m/mid.txt --driver "$sd" --repo "$R")|$(has '^    before=1 after=0  211$')" \
-      "1|VERDICT DIFF|7|1"
+      "1|VERDICT DIFF|8|1"
     check "ref mode: --before-ref r1 --after-ref r1 (byte-identical modules) -> exit 0 SAME plus the null-control NOTE" \
       "$(sspawn - --out "$d/sr2" --diff --fn mid --before-ref r1 --after-ref r1 --module m/mid.txt --driver "$sd" --repo "$R")|$(has '^NOTE    before and after modules are byte-identical: this run is a null control (expect SAME)$')" \
-      "0|VERDICT SAME|7|1"
+      "0|VERDICT SAME|8|1"
     check "file mode: --before a FROZEN copy (r1, 211) --after the live tracked m/mid.txt (212) -> exit 1 DIFF; OUT holds 9 files (report.txt, raw 2 + 2, stage 2 + 2)" \
       "$(sspawn - --out "$d/sf" --diff --fn mid --before "$frz" --after "$R/m/mid.txt" --driver "$sd")|$(find "$d/sf" -type f | wc -l | tr -d ' ')" \
-      "1|VERDICT DIFF|7|9"
+      "1|VERDICT DIFF|8|9"
     got=""; RR=(--before-ref r1 --after-ref r2 --module m/mid.txt --driver "$sd" --repo "$R")
     rf - --diff --fn mid --out "$d/rf1" --before-ref r1 --module m/mid.txt --driver "$sd" --repo "$R"; got="${got% }+$(has '^bytecode-budget: --before-ref and --after-ref go together$') "
     rf - --fn mid --out "$d/rf2" "${RR[@]}"; got="${got% }+$(has '^bytecode-budget: --before-ref/--after-ref and --before/--after need --diff ') "
@@ -937,9 +983,9 @@ self_test() {
       "$got" "2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT 2|VERDICT NO-VERDICT|0|1|no OUT "
     # GT2: an untracked --before inside the repo (git answers "did not match") is a FROZEN copy: accepted
     mkdir -p "$R/u"; cp "$frz" "$R/u/mid.txt"
-    check "GT2 file mode: an untracked --before inside the repo (r1, 211) --after the live tracked m/mid.txt (212) -> accepted: exit 1 DIFF, 7 spawns, before=1 after=0  211" \
+    check "GT2 file mode: an untracked --before inside the repo (r1, 211) --after the live tracked m/mid.txt (212) -> accepted: exit 1 DIFF, 8 spawns, before=1 after=0  211" \
       "$(sspawn - --out "$d/gt2" --diff --fn mid --before "$R/u/mid.txt" --after "$R/m/mid.txt" --driver "$sd")|$(has '^    before=1 after=0  211$')" \
-      "1|VERDICT DIFF|7|1"
+      "1|VERDICT DIFF|8|1"
   fi
 
   # --- MD-36 / MD-37 (ext-audit B-four): a symlinked raw/, a report.txt with another hard link -- refused before any write ---
@@ -987,15 +1033,15 @@ self_test() {
   done
   check "MD-50..58 allowlist: --v8-flags --bogus-flag / --snapshot-blob=F / --build-snapshot / --openssl-config=F / --experimental-require-module / --experimental-print-required-tla (not listed by this node) -> exit 2 after --version + one --v8-options, the die line once, nothing else printed, 0 probes" \
     "$got" "$(printf '#2|VERDICT NO-VERDICT|2|1|2|--version,--v8-options%.0s' 1 2 3 4 5 6)"
-  check "MD-50..58 allowlist: the 3 listed flags (int =30, float =1.5, bool) together -> exit 0 REPORTED, 5 spawns, the =30 override in the limits line" \
+  check "MD-50..58 allowlist: the 3 listed flags (int =30, float =1.5, bool) together -> exit 0 REPORTED, 6 spawns, the =30 override in the limits line" \
     "$(spawn - --fn add --v8-flags '--max-inlined-bytecode-size=30 --reserve-inline-budget-scale-factor=1.5 --expose-gc' "$drv")|$(has '^limits  TurboFan small<=30 (<=75 if a HeapNumber may cross) single<=30 | ')" \
-    "0|VERDICT REPORTED|5|1"
+    "0|VERDICT REPORTED|6|1"
   check "MD-50..58 allowlist rows write nothing to disk (cwd and TMPDIR stay empty)" \
     "$(find "$d/tmp" "$d/cwd" -mindepth 1 | wc -l | tr -d ' ')" 0
   # --- Q-ENV: the 4 env vars a node reads at start are unset at the top of this script (the fake exits 7 on any) ---
-  check "Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn (3 fns within -> exit 0, 9 spawns); the head names all four" \
+  check "Q-ENV e2e: NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS set in the environment reach no spawn (3 fns within -> exit 0, 10 spawns); the head names all four" \
     "$(export NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt"; spawn NODE_OPTIONS=--st-probe --max add=6,mid=211,dup=19 --node-version v26.8.2 "$drv")|$(has "bytecode-budget  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
-    "0|VERDICT WITHIN|9|1"
+    "0|VERDICT WITHIN|10|1"
 
   if [[ -n "$FIXTURES" ]]; then
     # TASK 0 census (grep -A1 over the captures, no script awk): every matched header has its length line.
@@ -1095,6 +1141,7 @@ if [[ $SELFTEST == 1 ]]; then
 fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
+for p in ${POS[@]+"${POS[@]}"} "$OUT" "$PWD"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out / the cwd: a newline is not allowed (it would forge report lines)"; done
 [[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 0 || $DIFFMODE == 1 ]] || die "--before-ref/--after-ref and --before/--after need --diff (ref and file modes are diff modes)"
@@ -1118,11 +1165,16 @@ else
   IFS=, read -r -a TARGETS <<<"$FNLIST"
 fi
 [[ ${#TARGETS[@]} -gt 0 ]] || die "no function named (--fn / --max is empty)"
-SEEN="|"
+SEEN="|"; SEENL="|"
 for t in "${TARGETS[@]}"; do
   [[ "$t" =~ $FN_RE ]] || die "fn must be a short V8 function name (e.g. read, get value; never Store.read), got '$t'"
   [[ "$SEEN" != *"|$t|"* ]] || die "fn '$t' is given twice"
   SEEN="$SEEN$t|"
+  if [[ -n "$OUT" ]]; then
+    tl=$(printf '%s' "$t" | LC_ALL=C tr 'A-Z' 'a-z')
+    [[ "$SEENL" != *"|$tl|"* ]] || die "--out: two fn names equal up to case ('$t'): raw/<fn>.<k>.txt would be one file on a case-insensitive file system"
+    SEENL="$SEENL$tl|"
+  fi
 done
 [[ -z "$WANT_VER" || "$WANT_VER" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--node-version must be vX.Y.Z (as \`node --version\` prints it), got '$WANT_VER'"
 [[ "$RUNS" =~ ^[0-9]{1,2}$ ]] && RUNS=$((10#$RUNS)) && [[ $RUNS -ge 2 && $RUNS -le 20 ]] \
@@ -1180,6 +1232,7 @@ NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot res
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
+[[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
 if [[ -n "$OUT" ]]; then
   # refuse before any write: an unreadable raw/ fools the emptiness test below; a symlinked report.txt redirects the write
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
@@ -1196,7 +1249,7 @@ if [[ -n "$OUT" ]]; then
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 else
-  REPORT=/dev/null   # nothing is written to disk without --out
+  REPORT=/dev/null   # no report file without --out; the temp files are removed right after, so no file is left on disk
 fi
 bb_head() { # 1 = the run head after stage_write; 0 = the mismatch exit (a ref / file run has staged nothing yet: no before / after / driver / NOTE line)
   say "bytecode-budget  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
@@ -1212,14 +1265,14 @@ bb_head() { # 1 = the run head after stage_write; 0 = the mismatch exit (a ref /
   else
     say "driver  ${DRV_DIR%/}/$DRV_BASE"
   fi
-  say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--print-bytecode --print-bytecode-filter=<fn>"
+  say "mode    $MODE  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }--no-flush-bytecode --print-bytecode --print-bytecode-filter=<fn>"
   if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 }
 
 # ---------------------------------------------------------------------------------------------
 # node version (S-6): checked before any probe
 # ---------------------------------------------------------------------------------------------
-# --- every pre-spawn refusal is above this line (so are raw/ and the empty report.txt; raw/before, raw/after and stage/ are made below, after the version check); spawns start here: --version, --v8-options (the --v8-flags allowlist: refusals exit 2 here, 0 measured runs), --v8-options (limits), then the runs ---
+# --- every pre-spawn refusal is above this line (so are raw/ and the empty report.txt; raw/before, raw/after and stage/ are made below, after the version check); spawns start here: --version, --v8-options (the --v8-flags allowlist: refusals exit 2 here, 0 measured runs), --v8-options (limits), the baseline (past the limits; none on a mismatch or a refusal), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 v8fl_check "$NODE_BIN"
 if [[ -n "$MAXLIST" ]]; then MODE="gate (maxima for node $WANT_VER)"; elif [[ $DIFFMODE == 1 ]]; then MODE="diff"; else MODE="report"; fi
@@ -1280,23 +1333,65 @@ say ""
 # probe: fn x runs, each reduced to "<driver exit> <count> <bad> <lengths>"
 # ---------------------------------------------------------------------------------------------
 probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the raw output goes to $OUT/raw/<rawrel>
-  local rc line st n t r a
+  local rc line st n t r a tmp nrc=0 ar=0
+  # stdout is a regular file, never a pipe: once JS touches process.stdout, libuv makes a pipe non-blocking and V8's C++
+  # writes to a full pipe are dropped (EAGAIN), so a whole record vanishes while the run still ends cleanly. probe runs in $( ), where bash
+  # clears set -e outside posix mode: every step below carries its own guard. The redirect sits on the OUTER subshell,
+  # ahead of the cd, so a relative TMPDIR still names the same file
+  tmp=$(mktemp "${TMPDIR:-/tmp}/bytecode-budget.XXXXXX") || { printf 'mktemp:%s \n' "$?"; return 0; }
+  ( cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --no-flush-bytecode --print-bytecode \
+      --print-bytecode-filter="$1" "./$4" ) >"$tmp" 2>&1 || nrc=$?
   if [[ -n "$OUT" ]]; then
-    line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" 2>&1) | tee "$OUT/raw/$5" | tr '\000' '?' \
-      | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
+    line=$(tee "$OUT/raw/$5" <"$tmp" | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
   else
-    line=$( (cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" 2>&1) | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
+    line=$(tr '\000' '?' <"$tmp" | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
   fi
+  # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
+  # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not
+  { printf '%65536s' '' >>"$tmp"; } 2>/dev/null || ar=$?
+  rm -f "$tmp" || true
   # the pipeline's exits ride on a last "@ node [tee] tr awk" line, so a tee / tr / awk failure is never reported as the driver's
   st=${line##*$'\n'}
   if [[ "$line" == *$'\n'* ]]; then line=${line%$'\n'*}; else line=""; fi
   [[ "$st" =~ $ST_RE ]] || die "cannot read the exit status of the run of $3/$4 (got '$st')"
   n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]# }; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
   if [[ $a != 0 ]]; then rc="awk:$a"; elif [[ $r != 0 ]]; then rc="tr:$r"; elif [[ -n $t && $t != 0 ]]; then rc="tee:$t"; else rc=$n; fi
+  if [[ $ar != 0 && $rc != *:* ]]; then rc="append:$ar"; fi
   printf '%s %s\n' "$rc" "$line"
 }
+
+# ---------------------------------------------------------------------------------------------
+# baseline: the functions node compiles itself in a process that only prints (one spawn, main shell, past the limits)
+# ---------------------------------------------------------------------------------------------
+# --print-bytecode-filter matches node's own lazily compiled functions too, and no header says which script a function
+# is from: a fn node compiles itself is NO-VERDICT (judge). The empty (anonymous) name is no name a --fn can ask for.
+# shellcheck disable=SC2016
+BASE_AWK='
+index($0, "[generated bytecode for function: ") == 1 {
+  s = substr($0, 35); cut = index(s, " (0x"); if (cut) s = substr(s, 1, cut - 1)
+  if (s != "" && !seen[s]++) print s
+}
+'
+base_list() { # sets BASE_NAMES ($'\n'name$'\n'name$'\n') or BASE_BAD (the reason); never exits: judge() reports it
+  local base brc=0 ar=0 names st re='^@ ([0-9]+) ([0-9]+)$'
+  base=$(mktemp "${TMPDIR:-/tmp}/bytecode-budget.XXXXXX") || { BASE_BAD="mktemp exited $?"; return 0; }
+  env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --no-flush-bytecode --print-bytecode --print-bytecode-filter='*' \
+    -e "console.log('')" >"$base" 2>&1 </dev/null || brc=$?
+  names=$(tr '\000' '?' <"$base" | awk "$BASE_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}") || true
+  { printf '%65536s' '' >>"$base"; } 2>/dev/null || ar=$?   # as in probe: TMPDIR must still have room
+  rm -f "$base" || true
+  st=${names##*$'\n'}
+  if [[ "$names" == *$'\n'* ]]; then names=${names%$'\n'*}; else names=""; fi
+  if ! [[ "$st" =~ $re ]]; then BASE_BAD="cannot read its exit status (got '$st')"
+  elif [[ ${BASH_REMATCH[2]} != 0 ]]; then BASE_BAD="awk exited ${BASH_REMATCH[2]}"
+  elif [[ ${BASH_REMATCH[1]} != 0 ]]; then BASE_BAD="tr exited ${BASH_REMATCH[1]}"
+  elif [[ $ar != 0 ]]; then BASE_BAD="append exited $ar"
+  elif [[ $brc != 0 ]]; then BASE_BAD="node exited $brc"
+  elif [[ -z "$names" ]]; then BASE_BAD="it listed no function"
+  else BASE_NAMES=$'\n'"$names"$'\n'; fi
+  return 0
+}
+base_list
 
 # ---------------------------------------------------------------------------------------------
 # diff mode: per fn, runs k = 1..R alternate before / after; judge() each side, then the length multisets

@@ -264,6 +264,24 @@ first full `npm test` on the G0 diff; fix Q-B59-POSIX-COND: `[[ ! -o posix ]] ||
 
 ---
 
+**#90 G1 bytecode-budget (b60): six mechanisms and what proves each.** (a) R2 regular file (Q-B57-PIPE): proved by the
+A1 rows of test/audit-g1.test.mjs (a fake logging `[ -p /dev/stdout ]`: 0 pipe lines, with and without --out; relative
+TMPDIR; TMPDIR a regular file) and the real BB-opus-1 row (each of 3 attempts exit 1 OVER or a torn-record NO-VERDICT,
+never WITHIN; the old root is red on that row; its ff6108b twin, local only, pins the old WITHIN). (b) R5 no-flush
+(Q-B57-C1): A2 rows (fake argv: baseline and both probes carry the token after every --v8-flags token and before
+--print-bytecode; exact mode line), the real `mid` row under `--expose-gc --stress-flush-code`, mutants M-len and
+token-before-flags. (c) R3 baseline (Q-B57-BB2): A3 rows (fake `*` printing `get`; five shim rows: exit 3, zero
+headers, tr, awk, mktemp failing on the baseline call only; spawn counts 10 for a 3-fn report, 8 for a 1-fn diff, 2 on
+a mismatch). (d) Q-B60-TMPFULL append: A6 rows under `ulimit -f` with SIGXFSZ ignored (`append exited N`, 0 `driver
+exited`, raw/ bytes equal the fake's output) and a drop-append must-fail control. (e) R22 / R23 / R26 refusals
+(Q-B57-MINOR), R24 text (Q-B57-DOC): A4 rows, 0 spawns each. (f) Precedence and anchoring contracts: five MUT rows
+(see #91). The repro rows BB-opus-1 .. BB-opus-6 are GREEN on the index-only copies (orchestrator-reported). The
+reviewer (r1b, APPROVED) built the five mutants with its own edits: each turns exactly its own pin row red. Evidence:
+`.handoff/RULINGS-b60-g1.md`, `.handoff/PLAN-b60-g1.md`, `.handoff/evidence/REVIEW-b60-g1-r1.md`,
+`REVIEW-b60-g1-r1b.md`, `NPMTEST-b60-g1-r1b.txt`, `.handoff/evidence/GATE-b60-g1.txt` (local, untracked).
+
+---
+
 ## C. CI / platform lessons
 
 **#38 History pins reachable only via the local reflog (burst 35).** Review of `ci.yml` found 4 of 5 history-test
@@ -394,6 +412,24 @@ sweep, for X1d) rather than delete it, and say in the row which part is now only
 touches lib/ runs the FULL suite before its first review: G0 went two review rounds without one, and the posix line's
 alias regression (#86 d) showed only at the first full `npm test`. Evidence: `.handoff/evidence/REVIEW-b59-g0-r3.md`
 (local, untracked).
+
+---
+
+**#91 G1: defects and gate lessons the unit caught.** (a) A deterministic row asserting "3 of 3 OVER" on a driver that
+holds a pipe went red once under full-suite load: a torn record gives NO-VERDICT, which is correct, so the row now
+asserts the run is never WITHIN (measured once; the old root is red on the loosened row). (b) Reviewer r1 blocker 2:
+five mutants of precedence and anchoring contracts survived every file (append hiding the driver exit, append hiding a
+tool failure, append / node order swapped in base_list, the baseline checks moved above `n == 0`, `*"$fn"*`
+unanchored); each got a pin row and a MUT control asserting the specific wrong text and the absence of the right one.
+(c) r1 blocker 3: the newline refusal checked the given arguments only; a relative DRIVER or --out from a cwd with a
+newline in its name forged a column-1 `VERDICT SAME` (T1.4 missed that route); the refusal now also covers `$PWD`. (d)
+bash 3.2 counts `ulimit -f` in 1024-byte blocks outside posix mode (a limit is not in bytes). (e) A redirect-open
+failure leaks past a `2>/dev/null` written after it on the same command (redirects apply left to right); the code
+wraps the append in a brace group, `{ ...; } 2>/dev/null`. (f) `set -e` is cleared inside `$( )`, so every probe step
+is guarded by hand with `||`. (g) r1 blocker 1: a row titled "local only" must skip itself under CI=true; its skip
+clause tests CI_STRICT, or it runs on all legs. Evidence: `.handoff/evidence/REVIEW-b60-g1-r1.md`,
+`REVIEW-b60-g1-r1b.md`; for (a) also `.handoff/evidence/NPMTEST-b60-g1.txt` (the pre-review run, rc 1, the one red
+row) (local, untracked).
 
 ---
 
@@ -651,3 +687,26 @@ a hard link under a case-only sibling name of a tracked file stays undetected; d
 deopt-diff -h; by reading, no regression against 57b93d1. (b) `readonly FINAL=1` through BASH_ENV makes
 bytecode-budget exit 1 with no VERDICT; pre-existing, measured identical on 57b93d1. Evidence:
 `.handoff/evidence/REVIEW-b59-g0-r3b.md` (local, untracked).
+
+**#92 G1 open limits.** Measured or read is stated per item. (a) A TMPDIR full during the run and freed before the
+append check: not caught; no real full disk was run, so node's exit status there is unproven (READ; -h). (b) Torn
+records from another thread (a Worker's writeSync while V8 prints): MEASURED by reviewer r1 on node 26.8.2 with a
+Worker writing `\n` during a print, regular file, 2941 length lines: 1924 clean, 1017 torn at `Bytecode length: ` |
+digits, 0 partial digit strings (pipe, 250: 58 clean, 192 torn the same way); a torn record gives a matched header
+without a length or a null-control mismatch, so NO-VERDICT (fails closed, not new against the pipe). A line holding
+only a number can forge a length (3 workers spamming `7\n` over 250 compiles read 7 on 91 records); that is a hostile
+driver, covered by "driver output is trusted" (-h). (c) A driver that reopens /dev/stdout on Linux gets a new file
+description at offset 0 and can overwrite earlier output: READ, not run (-h). (d) The baseline lists node's own
+functions at startup only: an internal compiled after the driver imports something (e.g. node:fs) is missed (by
+reading; -h). The list on node 26.8.2 has 24 names; of about 40 common names only `get` and `set` collide (MEASURED,
+reviewer r1). (e) A killed run can leave one `bytecode-budget.XXXXXX` (no EXIT trap inside the `$( )` subshell; by
+reading; -h). (f) With the default SIGXFSZ a file-size limit kills the shell: base_list's append ends the run with rc
+153 and one temp file left, exit outside -h's 0 / 1 / 2 (MEASURED; fails closed, hostile setup). (g) Open FILLERS from
+the r1b NITs (the PWD case MEASURED by reviewer r1b; the two wording items READ, not measured): a deleted cwd with no
+PWD in the environment gives "PWD: unbound variable", generic `unexpected error`, exit 2 (fix `"${PWD-}"`); src line
+82 "(nor the cwd they resolve against)" understates the code, suggested "(nor the cwd, even for absolute paths)"; the
+torn-record sentences at src lines 108-111 sit before "No address reaches that line" so "that line" reads wrongly
+(move them after the null-control sentence). Also a broken `tr` with --out ends `unexpected error (exit 1)`, exit 2, 0
+spawns, fails closed (r1 NIT, measured). UNVERIFIED: Linux, bash 5, node 22 / 24, uutils `mktemp`. Evidence:
+`.handoff/evidence/REVIEW-b60-g1-r1.md`, `REVIEW-b60-g1-r1b.md` (local, untracked).
+
