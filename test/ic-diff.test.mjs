@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 76;   // self-test ok lines at b43 G-ENV B7 ic (src ed76aa62 / root 5c5a85d6, PLAN-b42-genv TASK 7: row 76 Q-ENV); a new check moves this literal
+const C = 81;   // self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE /
@@ -33,7 +33,7 @@ for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE
 // the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
 ENV.NODE_V8_COVERAGE = undefined;
 
-// The 76 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 81 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -111,6 +111,11 @@ const ROW = [null,
     /* 74 */ 'MD-56: a --v8-options list',
     /* 75 */ 'K3 second call: the hashed',
     /* 76 */ 'Q-ENV: NODE_OPTIONS,',
+    /* 77 */ 'R13a',
+    /* 78 */ 'R13b',
+    /* 79 */ 'R14 ',
+    /* 80 */ 'R26 ',
+    /* 81 */ 'R6 ',
 ];
 
 function selfTest(path) {
@@ -454,6 +459,27 @@ const NEW = [
     // NODE_REDIRECT_WARNINGS reach the fake node at --version; NODE_OPTIONS / NODE_COMPILE_CACHE stay stripped per spawn)
     ['M-env-off', [76], 'Q-ENV top unset deleted (NODE_V8_COVERAGE / NODE_REDIRECT_WARNINGS reach every spawn)',
         [[ENV_TOP, '']]],
+    // b64 G4 TASK 8 (PLAN-b64-g4; anchors and rows from .handoff/lanes/g4/evidence/mut-b1.py, each measured there at
+    // exactly its rows: mut-b1-a.txt / mut-b1-b.txt). Not gated: IC_ABS's `|| die` (unreachable: under set -e the
+    // failed cd still exits 2).
+    ['M-pct', [77, 78], 'the % in the run dir not doubled (V8 expands a lone %p / %t in --logfile)',
+        [["rd=${rd//%/%%} && ", '']]],
+    ['M-pct-parent', [77, 78], 'the % doubled in the parent before the subshell (the parent glob then reads the doubled dir)',
+        [["  ( cd \"$2\" && rd=${rd//%/%%} && exec ", "  rd=${rd//%/%%}; ( cd \"$2\" && exec "]]],
+    ['M-pct-first', [77], 'only the first % doubled',
+        [["rd=${rd//%/%%} && ", "rd=${rd/\\%/%%} && "]]],
+    ['M-pct-p', [77], 'only %p doubled',
+        [["rd=${rd//%/%%} && ", "rd=${rd//%p/%%p} && "]]],
+    ['M-abs', [79], 'the private log dir not made absolute (a relative TMPDIR reaches --logfile relative to the driver dir)',
+        [["  IC_ABS=$(cd -- \"$IC_TMP\" && pwd) || die \"cannot resolve the private log dir $IC_TMP\"; IC_TMP=$IC_ABS\n", '']]],
+    ['M-eq', [80], 'the = in the resolved node path check -> `true`',
+        [["[[ \"$NODE_RES\" != *=* ]] || die \"node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_RES\"\n", 'true\n']]],
+    ['M-eq-bin', [80], 'the = check reads NODE_BIN, not NODE_RES (the PATH route passes it)',
+        [["[[ \"$NODE_RES\" != *=* ]] || die \"node binary: an = is not allowed", "[[ \"$NODE_BIN\" != *=* ]] || die \"node binary: an = is not allowed"]]],
+    ['M-sci', [81], 'the *stress-concurrent-inlining* refusal arm deleted',
+        [["    *stress-concurrent-inlining*)\n      die \"--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the IC log a race; every spelling of the flag is refused)\" ;;\n", '']]],
+    ['M-sci-exact', [81], 'the refusal arm matches only the exact --stress-concurrent-inlining',
+        [['    *stress-concurrent-inlining*)\n', '    --stress-concurrent-inlining)\n']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -542,7 +568,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 75 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 80 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -595,6 +621,8 @@ const HELP_HAS = [
     'Not detected: two sites of fn that swap states', 'a name with a slash is a path, never looked up on PATH',
     '--out: cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is',
     'node binary: a newline is not allowed in the resolved path',
+    // b64 G4 TASK 7 (PLAN-b64-g4 R26 / R6)
+    'node binary: an = is not allowed in the resolved path', '*stress-concurrent-inlining*',
 ];
 // the two capped runs, made OUTSIDE any assert.throws (a by-name timeout must not read as a kill)
 function helpRuns(script) {

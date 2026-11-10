@@ -414,6 +414,45 @@ tests, 2702 pass, 0 fail, 8 skip. Evidence: `.handoff/lanes/g3/PLAN-b63-g3.md`, 
 (Q-RL-PRETEN), `.handoff/RULINGS-b57-audit.md` (R6, R8, R20, R26), `.handoff/lanes/g3/evidence/golden-before.txt`,
 `b1-gate.txt`, `b2-gate.txt`, `NPMTEST-b63-g3-prereview.txt`, `REVIEW-b63-g3-r1.md` (local, untracked).
 
+**#102 G4 ic-diff (b64): four mechanisms and what proves each.** Before build = commit 7c91d1c / sha256/8 11279540
+(frozen, .handoff/frozen/b64-g4/; src b49e1374); 5142d62a = the B1 root (before B2's -h line, src :64); 09fb5c15 (src
+020cecb0) = the r1 root; 50a6fc34 (src f1568ac8) = the final root after r2. (a) R13 `%` in the run dir
+(Q-B57-MINOR, Opus form): V8 expands `%p`, `%t` and `%%` in --logfile, so a run dir holding a `%` (`--out DIR` or
+TMPDIR) wrote the trace to a different path and the run read `no IC log` (NO-VERDICT, fail closed). run_side now does
+`( cd "$2" && rd=${rd//%/%%} && exec ... "--logfile=$rd/run.log" ...)`: the doubling lives in the trace subshell's
+copy, so the parent's `$rd` stays raw for the glob, mv and awk, and it costs no fork on the hot path (a bash builtin
+substitution). Proved by self-test rows 77 (`--out $d/o%pz%%q`, argv anchor `--logfile=${d//%/%%}/o%%pz%%%%q/raw/`,
+run.1.log kept, 6 argvs) and 78 (TMPDIR `t%p`, 0 entries left), whose fake node expands `%%` / `%p` as V8 does, so the
+before build fails both; and by audit-g4 A1 (`o%pz%t%%q`, TMPDIR `t%p%t%%`, argv 4 of 4 doubled, with the real node).
+Mutants: M-pct and M-pct-parent (77, 78), M-pct-first `rd=${rd/\%/%%}` and M-pct-p `rd=${rd//%p/%%p}` (77 only: measured
+by hand on the final root 50a6fc34, red on exactly [77], row 77 `2|VERDICT NO-VERDICT|9|0|0|0` against the head's
+`0|VERDICT SAME|9|0|1|6`; the test gates at-least rows). (b) R14 relative TMPDIR: the private log dir is resolved
+once after the -d check, `IC_ABS=$(cd -- "$IC_TMP" && pwd) || die ...; IC_TMP=$IC_ABS`, so every `--logfile=` is
+absolute; no new leak window (the main shell never cds, the EXIT trap's rm -rf is valid either side). Proved by row 79
+(TMPDIR `../tmp` from a cwd: 6 argvs `--logfile=/`, 0 entries left) and audit-g4 A2; mutant M-abs (79). (c) R26 `=` in
+the resolved node path: one die line after the NODE_RES resolve, text byte-identical to dd / bb, before any node spawn;
+exit 2, 0 spawns, 0 mktemp, on `--node DIR/a=b/node` and on a bare node found via PATH. Proved by row 80 (both routes)
+and audit-g4 A3; mutants M-eq (line -> `true`) and M-eq-bin (tests NODE_BIN instead of NODE_RES; the PATH route kills
+it) (80). (d) R6 name guard (Q-B57-FLAG): a first case arm `*stress-concurrent-inlining*)` in the --v8-flags
+allowlist refuses every spelling (`_` / `-`, `--no-`, `--v8-flags=`), exit 2, 0 spawns. Proved by row 81 (three
+spellings; the before build refuses with the allowlist text after 2 spawns) and audit-g4 A4 (the before build ran
+`--stress-concurrent-inlining` to rc 0 SAME, 7 spawns at --runs 2, on audit-g4's fake node: a wrong ic verdict under
+the flag is argued from R6, measured only for deopt-diff); mutants M-sci (delete the arm) and M-sci-exact (arm -> the
+one spelling) (81). Arm order is not pinned: no other arm matches any spelling, an order mutant is EQUIVALENT
+(reviewer r1: "scilast" survived, confirmed). -h names the `=` refusal, the flag refusal and the `%%` rule; the
+newline-refusal -h line is split into three to name the = refusal (no other existing line changes). Parity: golden
+G1-G4 from the frozen root against the B1 root 5142d62a, on real node: byte-identical: report.txt, rc, stdout and the
+argv log with and without --out; the self-test keeps rows 1-76 and adds 77-81; -h differs by that split line and the
+inserted lines (evidence/golden/PROVENANCE.txt, node 26.8.2, load1 2.27). Self-test 76 -> 81; the before build fails
+exactly rows 77-81 (mut-b1-OLD.txt, B1 root 5142d62a; r1 revert-all on the r1 root 09fb5c15); the fake's `%` expansion
+causes only rows 77-78 to fail on the before build, not 79-81. test/ic-diff.test.mjs C 76 -> 81 with 9 new mutants; its
+assertKilled requires the listed rows to fail (at-least rows); "each red on its own rows only" was measured by hand:
+7 mutants by mut-b1 on the B1 root 5142d62a (mut-b1-a.txt, mut-b1-b.txt), M-pct-first and M-pct-p on the final root
+50a6fc34. audit-g4 35 tests, each A1-A4 row with an OLD twin on `git show 7c91d1c:ic-diff.sh`; A5 parity runs OLD vs
+fix; retention (12 cycles) has a must-fail control (EXIT trap's rm -rf deleted leaves >= 1 entry per cycle). Audit
+repro (Q-B64-REPRO, REPORTED): before RED ICD-fable-1, -2, ICD-opus-1, -2, -3; the B1 root 5142d62a all six GREEN
+(ICD-fable-3 GREEN throughout).
+
 ---
 
 ## C. CI / platform lessons
@@ -636,6 +675,28 @@ node major 26 (any 26.x, e.g. CI's floating 26 leg, unmeasured there; measured o
 majors, so a green skip elsewhere proves nothing about the pin; CI has to carry it (law 6). (d) Rows 1-79 stayed
 byte-identical except A14's label (row 15), so a row-count move (79 -> 83) is checked by parity against the frozen
 vectors, not by the count.
+
+**#103 G4: defects and gate lessons the unit caught.** (a) Review r1 REJECTED (1 LITERAL, gate teeth), one fix round;
+r2 APPROVED. The -h line promises every `%` is doubled, but every R13 vector held one `%p`; `rd=${rd/\%/%%}` (first
+only) and `rd=${rd//%p/%%p}` survived (self-test 81 ok, audit-g4 A1 6/6 on fake and real node) and gave NO-VERDICT on
+the real node with a relative TMPDIR `../t%p%t%%` from a symlinked cwd. Lesson: a gate for an all-occurrences contract
+needs a vector with several `%` and a mutant per partial slip; fixed by `o%pz%%q` at four sites in row 77,
+M-pct-first and M-pct-p, and audit-g4 A1 `o%pz%t%%q` / `t%p%t%%`. Reviewer r2's extra mutants (the pairs
+`${rd//%%/%%%%}` and the triple `${rd//%/%%%}`) were caught by the new rows (77, 78). (b) The helper's first audit-g4
+`verdict()` read stdout only; a refusal prints VERDICT on stderr, so 6 rows failed falsely. The orchestrator's run on
+the new root caught it before review: a verdict helper reads both streams (a refusal is the common case in a refusal
+gate). (c) Equivalent mutants the reviewer found: the R6 arm moved last (no other arm matches), and `cd -P` / `pwd -P`
+for IC_ABS (both name the same dir; no row or contract pins logical vs physical spelling); a mutant counts only when a
+row can tell it apart. (d) Review NIT (fixed): the M-pct-parent description said "cd then reads the doubled dir"; it
+is the parent glob that reads it. (e) FILLERS #4 "two ic mutants survive": no source found by a scout or the planner;
+the nearest lead (M-walk-dot / M-walk-x) is already killed by ext-audit N34 / N35. Recorded, no row planned. (f) A5's
+retention runs 12 cycles, not the planned 20 (r2 ruling): a leak on these fake-node, signal-free paths shows in cycle
+0 or never, and the must-fail control keeps its own 3. Open test-label NITs for FILLERS (r2, test-only): audit-g4 :173
+label says `o%pz` but its body checks no argv; :204 still says `--out o%pz` (fix the label or add
+`cnt(c.lfs(), (p) => p.includes('o%pz%t%%q')) === 4` to the OLD twin); :171 `/^o\d+z$/` can never fire (drop it or
+the "no <d>/o<digits>z" in the :165 label); :35 a timing comment with no provenance (mark PRELIMINARY or remove);
+test/ic-diff.test.mjs:462 comment credits mut-b1 for all 9 mutants. Evidence: .handoff/lanes/g4/evidence/
+REVIEW-b64-g4-r1.md, REVIEW-b64-g4-r2.md (local, untracked).
 
 ---
 
@@ -969,3 +1030,24 @@ dropped, passes the self-test and is caught by audit-g3 A2 and L2). (e) Under `G
 reviewer did not run the full test/allocation-diff.test.mjs: estimated +15-20% wall time (~1.8 ks at the coder's load,
 under the 3600 s cap; estimate, CI baseline unknown). (g) audit-g3.test.mjs:6 header lists "(A1 A4 A5 A6 A7 A8 A10)":
 add A5b (FILLER).
+
+**#104 G4 open limits.** Measured, read or argued is stated per item. (a) UNPROVEN, ubuntu bash 5 / uutils / GNU
+mktemp leg: `${rd//%/%%}` was verified on bash 3.2.57 only; rows 77-81 prove it there on the first CI run (not run;
+nothing local). (b) READ, not measured: with a trailing-slash TMPDIR the // before ic-diff.XXXXXX becomes one / in
+argv after IC_ABS; the report is unchanged. (c) EMULATED (doc review, GNU-like mktemp shim on macOS, root 50a6fc34): a
+% TMPDIR puts a % in the self-test's own d and all 81 rows pass (the row-77 anchor doubles $d since the r1 fix; r1 NIT
+2 closed); an = TMPDIR fails 30 of 81 rows, exit 1 (the fake node path holds the =, R26 refuses it): fail closed. Not
+run on ubuntu. (d) A5 retention is 12 cycles, not 20 (r2 ruling; PLAN addendum A2). (e) READ: cross-tool lead, not in
+this lane: dd :1651 and bb :1235 (at 7c91d1c; bb is :1240 in the live tree from another lane) test `=` on NODE_BIN, so
+the PATH route reaches env there and dies later with `cannot run`, still exit 2 (no wrong verdict; reviewer r1 NIT 3
+and cross-fable placement). (f) The audit repro was run on the before build and the B1 root 5142d62a only (REPORTED);
+the final root's gates are the self-test and audit-g4. (g) The reviewers did not re-run the golden G1-G4, and r2 did
+not re-run M-pct / M-pct-parent or the audit-g4 OLD twins A1 / A2 and A5 parity (r1 ran audit-g4 35/35 with OLD twins,
+PRELIMINARY); they ran on the B1 / r1 roots; on the final root npm test run 2 (h) runs the mutants, OLD twins and A5
+parity (at-least rows); golden G1-G4 is in no npm test file and was not re-run there. (h)
+Pre-review `npm test` (lane copy, quiet lock, host PRELIMINARY, load1 5.43, baseline 2.21; on the r1 root 09fb5c15 /
+audit-g4 a9f67f70): 2720 tests, 2712 pass, 0 fail, 8 skip; final (roots 50a6fc34 / f1568ac8, quiet lock, host QUIET at
+start, load1 1.33 -> 6.33, 1007 s): 2724 tests, 2716 pass, 0 fail, 8 skip, run 2 per Q-B64-A8 (run 1 at load1 ~21: 1
+fail, the audit-g2 A8 real-node row killed at its 150 s cap; alone at load1 1.5 it passed in 20 s; outside lane g4;
+NPMTEST-b64-g4-final-run1.txt, -run2.txt, DIAG-b64-a8-selftest.txt). (i) ARGUED: the IC_ABS `|| die` is
+unreachable and not gated (under set -e it still exits 2). Evidence: .handoff/lanes/g4/evidence/ (local, untracked).

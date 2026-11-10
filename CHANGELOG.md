@@ -7,6 +7,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G4 ic-diff (audit R13 = ICD-fable-1 / ICD-opus-1, R14 = ICD-fable-2 / ICD-opus-2, R26 = ICD-opus-3, R6 name guard;
+  Q-B57-MINOR, Q-B57-FLAG, Q-B64-REPRO). R13 (Q-B57-MINOR, Opus form): V8 expands `%p` (pid), `%t` and `%%` in
+  --logfile, so a `%` in the run dir (`--out DIR` or TMPDIR holding one) made the trace write elsewhere and the run
+  ended `no IC log` (NO-VERDICT, never a wrong verdict); run_side now doubles every `%` in the trace subshell's own copy
+  of the run dir (`rd=${rd//%/%%}`, bash builtin, no fork; the parent's `$rd` stays raw for the glob, mv and awk), so V8
+  expands it back to the one `%`. R14: a relative TMPDIR made the private log dir relative while the trace runs from
+  the driver's directory; the private dir is now resolved once to an absolute path (`cd -- DIR && pwd`) before any
+  run, so every `--logfile=` starts with `/` (with a trailing-slash TMPDIR the // before ic-diff.XXXXXX becomes one /
+  in argv (read: the report is unchanged)). R26 (one line per tool): an `=` in the resolved node path is refused, exit
+  2, 0 spawns, with the dd / bb text (`node binary: an = is not allowed in the resolved path (env would read it as a
+  NAME=value operand, not as the program): PATH`), on both routes (`--node` and a bare node found via PATH); the check
+  is on the resolved path, before any node spawn. R6 name guard (Q-B57-FLAG): a `--v8-flags` token holding
+  `*stress-concurrent-inlining*` (every spelling, `_` or `-`, the `--no-` form and the `--v8-flags=` form included) is
+  refused, exit 2, 0 spawns (V8 implies --concurrent-recompilation from it, which overrides the script's
+  --no-concurrent-recompilation; before the fix it ran (A4 OLD twin, fake node: rc 0 SAME, 7 spawns at --runs 2; a
+  wrong ic verdict under the flag is argued from R6, measured only for deopt-diff)). -h: the node-binary line names the
+  `=` refusal, three whole lines name the flag refusal, and one line says each `%` in the run dir is passed doubled
+  (%%); the newline-refusal -h line is split into three to name the = refusal (no other existing line changes). On
+  normal input the records are byte-identical to the before build 7c91d1c / sha256/8 11279540: golden parity on the B1
+  root 5142d62a (byte-identical: report.txt, rc, stdout and the argv log with and without --out; the self-test keeps
+  rows 1-76 and adds 77-81; -h differs by that split line and the inserted lines; evidence/golden/PROVENANCE.txt, node
+  26.8.2, load1 2.27). Final roots: ic-diff.sh sha256/8 50a6fc34, src/ic-diff.sh f1568ac8, test/ic-diff.test.mjs
+  c2b321b8, test/audit-g4.test.mjs 23f84cf9. Spawns: unchanged (7 at --runs 2, 9 at the default --runs 3, one mktemp);
+  a refusal makes 0 spawns and 0 mktemp. Tests: `--self-test` 76 -> 81 checks (rows 77-81: R13a `--out DIR` holding
+  `o%pz%%q`, R13b TMPDIR `t%p`, R14, R26 on both routes, R6 on three spellings; rows 1-76 keep their numbers; the
+  self-test's fake node now expands `%%` / `%p` in --logfile as V8 does); test/ic-diff.test.mjs C 76 -> 81, 9 new
+  mutants (M-pct, M-pct-parent, M-pct-first, M-pct-p, M-abs, M-eq, M-eq-bin, M-sci, M-sci-exact); the test requires each
+  mutant to fail its listed rows (M-pct and M-pct-parent 77, 78; M-pct-first and M-pct-p 77; M-abs 79; M-eq and M-eq-bin
+  80; M-sci and M-sci-exact 81), at-least rows; "each red on its own rows only" was measured by hand: the 7 mutants by
+  mut-b1 on the B1 root 5142d62a (row 77 then `o%pz`), M-pct-first and M-pct-p on the final root 50a6fc34 (red on
+  exactly [77]). The before build 7c91d1c fails exactly rows 77-81 (mut-b1-OLD.txt, B1 root 5142d62a; r1 revert-all on
+  the r1 root 09fb5c15). test/audit-g4.test.mjs added (35 tests, black-box, its own fake node with V8's `%` expansion,
+  each A1-A4 row with an OLD twin on `git show 7c91d1c:ic-diff.sh`; A5 parity runs OLD vs fix; retention has a
+  must-fail control; rows: A1 R13 at `o%pz%t%%q` / TMPDIR `t%p%t%%` plus real node, A2 R14, A3 R26, A4 R6, A5 parity,
+  zero-write refusals and 12-cycle TMPDIR retention). Review: r1 REJECTED (1 LITERAL: the -h promise "each %" had no
+  must-fail mutant, the one-`%` vectors let `rd=${rd/\%/%%}` and `rd=${rd//%p/%%p}` through); one fix round
+  (multi-`%` vectors, M-pct-first, M-pct-p); r2 APPROVED. Audit repro rows (Q-B64-REPRO: the two ic-diff reproduction
+  scripts as unmodified copies, REPORTED demonstrations): before build RED ICD-fable-1, ICD-fable-2, ICD-opus-1,
+  ICD-opus-2, ICD-opus-3 (ICD-fable-3 GREEN); the B1 root 5142d62a all six GREEN (REPRO-b64-before.txt,
+  REPRO-b64-after-b1.txt; the later roots changed only one -h line and the test vectors; the repro was not re-run on
+  the final root). `npm test` pre-review (lane copy with .git, quiet lock, host PRELIMINARY, load1 5.43 -> 14.63,
+  baseline 2.21, on the r1 root 09fb5c15 / audit-g4 a9f67f70): 2720 tests, 2712 pass, 0 fail, 8 skip, 1401 s
+  (NPMTEST-b64-g4-prereview.txt). `npm test` (final tree, roots 50a6fc34 / f1568ac8; lane copy with .git, quiet lock,
+  host QUIET at start, load1 1.33 -> 6.33, 1007 s): 2724 tests, 2716 pass, 0 fail, 8 skip (run 2 per Q-B64-A8; run 1 at
+  load1 ~21 had 1 fail, the audit-g2 A8 real-node cap kill, outside lane g4; NPMTEST-b64-g4-final-run2.txt, -run1.txt).
+  Local proof is bash 3.2.57 / macOS / node 26.8.2 only. Known limits: LEDGER #104.
 - G3 allocation-diff (reading-list finding Q-RL-PRETEN; audit R6 = DD-fable-2 / cross-opus R2 sibling, R8, R20, R26 =
   ICD-opus-3 sibling; Q-RL-PRETEN, Q-B57-FLAG, Q-B57-C1, Q-B57-MINOR). Q-RL-PRETEN: TRACE_FLAGS now holds
   `--no-allocation-site-pretenuring` (head line and spawn argv: `--trace-gc --min-semi-space-size=1

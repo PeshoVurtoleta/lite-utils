@@ -16,7 +16,9 @@
 #                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
 #                      file, else exit 2 before any spawn ("node binary not found", "node binary is not a file on
 #                      PATH (...)", "node binary is not an executable file", "node binary: cannot resolve the
-#                      directory of ...", "node binary: a newline is not allowed in the resolved path"). The probes
+#                      directory of ...", "node binary: a newline is not allowed in the resolved path",
+#                      "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value
+#                      operand, not as the program): PATH"). The probes
 #                      and every trace run (each in its driver's directory) run that one file, and the header names it.
 #   --v8-flags STR     extra V8 flags for every trace run, split on spaces (flags only, each `--` and a letter).
 #                      Refused, with `_` read as `-`: any *log*, *prof*, *concurrent-recompilation*,
@@ -28,6 +30,9 @@
 #                      prefix match (--eval / --print: node runs that code in the measured process instead of the
 #                      driver, which becomes argv; V8's --print-* flags, e.g. --print-bytecode, print V8 internals
 #                      into the measured run). -r / -e / -p are refused as non-flags.
+#                      Refused too: any *stress-concurrent-inlining* flag (every spelling: --stress-concurrent-inlining
+#                      implies --concurrent-recompilation in V8, which overrides the script's
+#                      --no-concurrent-recompilation; a background compile makes the IC log a race).
 #                      Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag (never
 #                      --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot /
 #                      file flags. Refused, exit 2 at the latest after one --v8-options read and before any measured
@@ -56,6 +61,7 @@
 #   --no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>` with cwd = the driver's directory (`./`
 #   keeps a file name starting with `-` a path), stdout + stderr to DIR/raw/<side>/run.<k>.out with --out, else
 #   /dev/null. Runs alternate before / after for k = 1..N. Only a run's records are held in memory, never its log.
+#   Each % in <abs run dir> is passed doubled (%%), which V8's --logfile expands back to one %.
 # Spawns, every one under `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE`: one --version, two --v8-options (the
 #   --v8-flags allowlist read, then the hashed probe), then 2 x runs trace runs (runs 3: 9 spawns); a failing probe
 #   exits 2 before anything is written. Probe die lines: `ic-diff: cannot run <node> --version`, `ic-diff: cannot run
@@ -469,7 +475,8 @@ EOF
   # (FAKE_OPTS_RC: that exit; FAKE_OPTS_EMPTY: prints nothing; both only on the FAKE_OPTS_AT-th --v8-options call, default
   # 1, counted in <its dir>/opts.n); else a trace run: exit 9 on a driver argument starting
   # with - (as node: "bad option"), copy ./ic.<n>.log or ./ic.log (n = its run count in that dir) to
-  # isolate-0x7508000000-<pid>-<basename of --logfile> beside the --logfile path (./iso2: a second isolate file too),
+  # isolate-0x7508000000-<pid>-<basename of --logfile> beside the --logfile path, expanded as V8 does (%% -> %, %p -> its
+  # pid) (./iso2: a second isolate file too),
   # ./term: SIGTERM to its parent (this script), exit with ./rc or 0. A mktemp shim (first on PATH) logs each call
   # and, with ST_MKTERM set, sends SIGTERM to its parent after the dir is made ---
   local fk="$d/fk" mk="$d/mk" dr="$d/dr" b0 b1
@@ -484,6 +491,7 @@ EOF
     '    cat ./v8opts.txt; exit 0 ;;' \
     'esac' \
     'lf=""; drv=""; for a; do case "$a" in --logfile=*) lf="${a#--logfile=}" ;; esac; drv="$a"; done' \
+    'lf="${lf//%%/@P@}"; lf="${lf//%p/$$}"; lf="${lf//@P@/%}"' \
     'case "$drv" in -*) echo "bad option: $drv" >&2; exit 9 ;; esac' \
     'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"' \
     'src=./ic.log; if [ -f "./ic.$n.log" ]; then src="./ic.$n.log"; fi' \
@@ -694,6 +702,30 @@ EOF
     "$(spawn NODE_OPTIONS=--st-probe NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(has "ic-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
     "0|VERDICT SAME|9|1|1"
 
+  # --- G4 (b64): R13 a % in the run dir (V8 expands %p / %% in --logfile: each trace argv doubles every %), R14 a
+  # relative TMPDIR (the private dir is made absolute), R26 an = in the resolved node path, R6 *stress-concurrent-inlining* ---
+  check "R13a --out DIR holding a % (o%pz%%q), mono vs mono2 -> rc 0 SAME, 9 spawns, 0 mktemp, raw/before/run.1.log kept, 6 trace argvs hold --logfile=DIR with the % doubled" \
+    "$(spawn -- "$NO" --out "$d/o%pz%%q" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$([[ -f "$d/o%pz%%q/raw/before/run.1.log" ]] && echo 1 || echo 0)|$(grep -c -F -e "--logfile=${d//%/%%}/o%%pz%%%%q/raw/" "$fk/log" || true)" \
+    "0|VERDICT SAME|9|0|1|6"
+  mkdir -p "$d/t%p"
+  check "R13b TMPDIR holding a % (t%p), mono vs mono2 -> rc 0 SAME, 9 spawns, 1 mktemp, 0 entries left in TMPDIR" \
+    "$(spawn TMPDIR="$d/t%p" -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(find "$d/t%p" -mindepth 1 | wc -l | tr -d ' ')" \
+    "0|VERDICT SAME|9|1|0"
+  check "R14 a relative TMPDIR (../tmp from the cwd), mono vs mono2 -> rc 0 SAME, 9 spawns, 1 mktemp, 6 trace argvs hold an absolute --logfile=/..., 0 entries left in TMPDIR" \
+    "$(spawn TMPDIR=../tmp -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono2/driver.js")|$(grep -c -e ' --logfile=/' "$fk/log" || true)|$(find "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
+    "0|VERDICT SAME|9|1|6|0"
+  mkdir -p "$d/a=b"; cp "$fk/node" "$d/a=b/node"
+  o="$(spawn -- --node "$d/a=b/node" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $d/a=b/node")|$(cat "$d/a=b/log" 2>/dev/null | wc -l | tr -d ' ')"
+  o="$o#$(spawn PATH="$d/a=b:$mk:$PATH" -- --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $d/a=b/node")|$(cat "$d/a=b/log" 2>/dev/null | wc -l | tr -d ' ')"
+  check "R26 an = in the resolved node path (--node DIR/a=b/node; a bare node found via PATH=DIR/a=b:...) -> exit 2, 0 spawns, 0 mktemp, 'node binary: an = is not allowed in the resolved path' once, 0 lines in the copy's log" \
+    "$o" "2|VERDICT NO-VERDICT|0|0|1|0#2|VERDICT NO-VERDICT|0|0|1|0"
+  o=""
+  for x in --stress-concurrent-inlining --stress_concurrent_inlining_attach_code --no-stress-concurrent-inlining; do
+    o="$o#$(spawn -- "$NO" --fn get "--v8-flags=$x" "$dr/mono/driver.js" "$dr/poly/driver.js")|$(rq "--v8-flags must not set $x: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the IC log a race; every spelling of the flag is refused)")"
+  done
+  check "R6 --v8-flags --stress-concurrent-inlining / --stress_concurrent_inlining_attach_code / --no-stress-concurrent-inlining (every spelling) -> exit 2, 0 spawns, 0 mktemp, the die line once" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3)"
+
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
 }
@@ -748,6 +780,8 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"
   case "$g" in
+    *stress-concurrent-inlining*)
+      die "--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the IC log a race; every spelling of the flag is refused)" ;;
     *log*|*prof*|*concurrent-recompilation*|*interpreted-frames-native-stack*|*snapshot*)
       die "--v8-flags must not set $f: the script sets ${TRACE_FLAGS[*]} --logfile itself (no *log*, *prof*, *concurrent-recompilation*, *interpreted-frames-native-stack* or *snapshot* flag)" ;;
     --require*|--import*|--loader*|--experimental-loader*)
@@ -789,6 +823,7 @@ NODE_C="${NODE_DIR%/}/$(basename -- "$NODE_RES")"   # NODE_BIN keeps the user's 
 [[ "$NODE_C" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 NODE_RES=$NODE_C
 [[ "$NODE_RES" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
+[[ "$NODE_RES" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_RES"
 DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
 DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
 [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER (before): cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
@@ -833,6 +868,7 @@ else
   trap 'die "interrupted"' INT TERM
   [[ $IC_SIG == 0 ]] || die "interrupted"
   [[ -n "$IC_TMP" && -d "$IC_TMP" ]] || die "cannot create a private log dir (mktemp -d)"
+  IC_ABS=$(cd -- "$IC_TMP" && pwd) || die "cannot resolve the private log dir $IC_TMP"; IC_TMP=$IC_ABS
   mkdir "$IC_TMP/before" "$IC_TMP/after" || die "cannot create the private log dirs in $IC_TMP"
   RUNROOT="$IC_TMP"
 fi
@@ -852,7 +888,7 @@ run_side() { # side dir base k: one node run; sets RUN_RC (driver exit) RUN_LOG 
   local rd="$RUNROOT/$1" out=/dev/null lf n rc=0 ar=0
   local -a LF
   if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi
-  ( cd "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd/run.log" "./$3" ) \
+  ( cd "$2" && rd=${rd//%/%%} && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd/run.log" "./$3" ) \
     >"$out" 2>&1 || rc=$?
   RUN_RC=$rc; RUN_LOG=""; RUN_REC=""
   shopt -s nullglob; LF=("$rd"/isolate-0x*-*-run.log); shopt -u nullglob
