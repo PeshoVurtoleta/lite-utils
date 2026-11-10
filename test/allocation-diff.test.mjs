@@ -22,8 +22,9 @@ import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 79;   // self-test ok lines at b43 G-ENV B5 (src 578b5418 / root e10025a9, sha256; 76 at B2a 00ab0dac / 8e795263,
-                // 78 since G5 B1 added checks 77 / 78, 79 since b43 G-ENV added check 79 Q-ENV); a new check moves this literal
+const C = 83;   // self-test ok lines at b63 lane g3 B1 (src cde0ad19 / root 195242d9, sha256; 76 at B2a 00ab0dac / 8e795263,
+                // 78 since G5 B1 added checks 77 / 78, 79 since b43 G-ENV added check 79 Q-ENV, 83 since b63 g3 B1 added
+                // checks 80-83 R6 / PRETEN / R26 / R8); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ROOTUSER = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -61,8 +62,20 @@ const GCNLINE = 'gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"\n';
 // Q-ENV (PLAN-b42-genv TASK 5, b43): the one top line that unsets the 4 node env vars before the prologue; with it in place
 // a per-spawn `env -u NODE_OPTIONS` belt is redundant, so a mutant that drops a belt also deletes this line (E5)
 const ENVTOP = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
+// b63 lane g3 (G3 audit R6 / R8 / R20 / R26 + Q-RL-PRETEN): whole lines of the root, the M-* mutants' anchors.
+// PRETEN_PIN = TRACE_FLAGS with the pretenuring pin; WORKER_LINE = the R20 main-thread line of the guard preload
+const PRETEN_PIN = 'TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring)\n';
+const PRETEN_ARM = '    *allocation-site-pretenuring*)\n';
+const R6_ARM = '    *stress-concurrent-inlining*)\n';
+const R26_LINE = '[[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"\n';
+const R8_Y = "ycount() { printf '%s\\n' \"$1\" | awk '/^Y /{n++} END{print n+0}'; }\n";
+const R8_O = "o=$(printf '%s\\n' \"$1\" | awk '/^O /{n++} END{print n+0}')\n";
+const WORKER_LINE = "if (!require('worker_threads').isMainThread) return;\n";
+const M_PRETEN_PIN = [[PRETEN_PIN, PRETEN_PIN.replace(' --no-allocation-site-pretenuring)', ')')]];
+const M_R8 = [[R8_Y, "ycount() { printf '%s\\n' \"$1\" | grep -c '^Y ' || true; }\n"]];
+const M_WORKER = [[WORKER_LINE, '']];
 
-// The 79 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 83 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ "A1' records: 2",
     /*  2 */ 'A1 records: every',
@@ -143,6 +156,10 @@ const ROW = [null,
     /* 77 */ 'MD-50 refused after',
     /* 78 */ 'MD-50 accepted:',
     /* 79 */ 'Q-ENV e2e:',
+    /* 80 */ 'R6 refused before',
+    /* 81 */ 'PRETEN refused before',
+    /* 82 */ 'R26 refused before',
+    /* 83 */ 'R8 e2e:',
 ];
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
@@ -549,6 +566,23 @@ const NEW = [
     // which exits 7 at --version: row 79 only (2|VERDICT NO-VERDICT|1|0)
     ['M-env-off', [79], 'Q-ENV top unset line deleted',
         [[ENVTOP, '']]],
+    // b63 lane g3 (PLAN-b63-g3 TASK 7): one mutant per new behaviour. M-preten-pin: the pretenuring pin dropped from
+    // TRACE_FLAGS (the spawn argv row 33); M-preten-arm / M-r6-arm: the refusal arm's glob made unmatchable (the flag then
+    // reaches the --v8-options allowlist: 2 spawns, rows 81 / 80); M-r26: the = refusal line deleted (env reads the path as
+    // NAME=value: "cannot run", not the R26 die line, row 82); M-r8 / M-r8o: ycount / the old count back on `grep -c`
+    // (a failing grep leaves the count empty: row 83's verdict and its counts line); M-worker: the R20 main-thread line
+    // deleted (the preload hash, row 15; the live Worker row below is its second kill)
+    ['M-preten-pin', [33], '--no-allocation-site-pretenuring dropped from TRACE_FLAGS', M_PRETEN_PIN],
+    ['M-preten-arm', [81], 'pretenuring refusal arm unmatchable',
+        [[PRETEN_ARM, '    *allocation-site-pretenuringx*)\n']]],
+    ['M-r6-arm', [80], 'stress-concurrent-inlining refusal arm unmatchable',
+        [[R6_ARM, '    *stress-concurrent-inliningx*)\n']]],
+    ['M-r26', [82], 'R26 = in the resolved node path refusal deleted',
+        [[R26_LINE, '']]],
+    ['M-r8', [83], 'ycount back on grep -c (a failing grep reads young as empty)', M_R8],
+    ['M-r8o', [83], 'the old count back on grep -c (a failing grep reads old as empty)',
+        [[R8_O, "o=$(printf '%s\\n' \"$1\" | grep -c '^O ' || true)\n"]]],
+    ['M-worker', [15], 'R20 main-thread line deleted from the guard preload', M_WORKER],
 ];
 const MUTANTS = [...B2, ...NEW];
 const NONROOT = new Set(['B2h']);
@@ -1220,6 +1254,126 @@ test('allocation-diff Q-A1 live: must-fail control (a root whose grammar refuses
         assert.ok(count(r.out, 'does not match the --trace-gc grammar') >= 1, r.out);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+// --- b63 lane g3 live rows (PLAN-b63-g3 ASSERTIONS A1-A3, A7-A9; ADDENDUM A2: tier DETERMINISTIC -- GC counts and exits
+// on the runner's own node, no clock). The drivers are PLAN-b63-g3's "Drivers", inline. Every run: --node
+// process.execPath, cwd = the driver's dir, TMPDIR = a fresh empty dir (A3: nothing left in it, the driver dir holds only
+// driver.js). D-LIT sends ~19 MB of young literals through the 1 MB semi-space; on node v26.8.2 (V8 14.6) allocation-site
+// pretenuring moves that site to old space, so without the script's --no-allocation-site-pretenuring pin it reads young
+// 0, ZERO (the A5 mutant twin: measured on v26 only, skipped with the reason on other majors). The 18 / 19 window-edge flip
+// lands on exit 2, accepted (A1: exit 1 or 2, never ZERO).
+const G3_LIT = ["'use strict';", "const fs = require('fs');", 'function make(i) { return { a: i, b: i + 1, c: null }; }',
+    'const keep = [];', 'for (let i = 0; i < 50000; i++) keep.push(make(i));', 'const ring = new Array(1024).fill(null);',
+    'let rk = 0;', 'function hot(n) {', '  for (let i = 0; i < n; i++) {', '    const o = make(i);',
+    '    if ((i & 1023) === 0) { ring[rk] = o; rk = (rk + 1) & 1023; }', '  }', '}', 'hot(20000);', 'hot(20000);',
+    "fs.writeSync(1, '@@LITE-MARK start\\n');", 'hot(400000);', "fs.writeSync(1, '@@LITE-MARK end\\n');",
+    'globalThis.sink = keep.length + ring.length;', ''].join('\n');
+const G3_F64 = ["'use strict';", "const fs = require('fs');", 'function make(i) { return { a: i, b: i + 1, c: null }; }',
+    'const keep = [];', 'for (let i = 0; i < 50000; i++) keep.push(make(i));', 'const f64 = new Float64Array(1024);',
+    'function fill(n) {', '  for (let i = 0; i < n; i++) f64[i & 1023] = i * 0.5;', '}', 'for (let k = 0; k < 10; k++) fill(100000);',
+    "fs.writeSync(1, '@@LITE-MARK start\\n');", 'fill(4000000);', "fs.writeSync(1, '@@LITE-MARK end\\n');",
+    'globalThis.sink = keep.length + f64[7];', ''].join('\n');
+// R20: an eval Worker allocates in the window; 'end' is written on its 'exit'
+const G3_WORKER = ["'use strict';", "const fs = require('fs');", "const { Worker } = require('worker_threads');",
+    "fs.writeSync(1, '@@LITE-MARK start\\n');", 'const w = new Worker(',
+    "  'const ring = new Array(1024).fill(null);\\n' +", "  'for (let i = 0; i < 400000; i++) ring[i & 1023] = { a: i, b: i + 1 };\\n' +",
+    "  'globalThis.sink = ring;\\n',", '  { eval: true });', "w.on('exit', () => { fs.writeSync(1, '@@LITE-MARK end\\n'); });", ''].join('\n');
+// a child_process.fork() child inherits execArgv, so the guard preload (main thread there too) runs in it as well
+const G3_FORK = ["'use strict';", "const fs = require('fs');", "if (process.argv[2] !== 'child') {",
+    "  fs.writeSync(1, '@@LITE-MARK start\\n');", "  fs.writeSync(1, '@@LITE-MARK end\\n');",
+    "  require('child_process').fork(__filename, ['child'], { stdio: 'inherit' });", '}', ''].join('\n');
+const G3_SKIP = skip || (existsSync(process.execPath) ? false : 'process.execPath is not a file: no real node to run');
+const G3_V26 = /^v26\./.test(process.version) ? false : 'the pretenuring teeth (a mutant reading D-LIT as ZERO) were measured on node v26.8.2 (V8 14.6) only; ' + process.version + ' skipped';
+// the darwin twin: GREP_OPTIONS=-P makes BSD grep -c exit 2 (no -P support); the root's grep -c era read the counts empty
+const G3_GOPT = (() => {
+    if (G3_SKIP) return G3_SKIP;
+    const r = spawnSync('grep', ['-c', 'x'], { input: '', env: { ...ENV, GREP_OPTIONS: '-P' } });
+    return r.status === 2 ? false : 'GREP_OPTIONS=-P does not make this host\'s grep -c fail (exit ' + r.status + '; the twin needs BSD grep, darwin)';
+})();
+function g3Live(script, driver, args, env = {}) {
+    const d = mkdtempSync(join(tmpdir(), 'ad-g3l-'));
+    try {
+        const dd = join(d, 'drv'); const tmp = join(d, 'tmp');
+        mkdirSync(dd); mkdirSync(tmp);
+        writeFileSync(join(dd, 'driver.js'), driver);
+        const r = capSync('bash', [script, '--node', process.execPath, ...args, join(dd, 'driver.js')], { encoding: 'utf8', cwd: dd, env: { ...ENV, TMPDIR: tmp, ...env } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return { status: r.status, out: r.stdout + r.stderr, L: r.stdout.split('\n'), left: readdirSync(tmp), drv: readdirSync(dd) };
+    } finally { rmSync(d, { recursive: true, force: true }); }
+}
+// A1 on one D-LIT run, A3 on its dirs
+function g3LitOk(r) {
+    assert.ok(r.status === 1 || r.status === 2, 'D-LIT exit ' + r.status + '\n' + r.out);
+    assert.equal(count(r.out, 'VERDICT ZERO'), 0, r.out);
+    assert.match(r.out, /^ {2}driver: run 1 young [1-9]/m, r.out);
+    assert.ok(r.L.some((l) => l.startsWith('mode    zero  runs 3  v8 flags ') && l.endsWith(' --no-concurrent-recompilation --no-allocation-site-pretenuring')), r.out);
+    assert.deepEqual(r.left, [], 'left in TMPDIR');
+    assert.deepEqual(r.drv, ['driver.js']);
+}
+test('allocation-diff Q-RL-PRETEN live L1 (A1 + A3): D-LIT (a pretenurable literal site) --zero --runs 3, 3 invocations -> each exit 1 or 2, never ZERO, run 1 young >= 1, the pin in the head; TMPDIR empty', { skip: G3_SKIP }, () => {
+    for (let k = 0; k < 3; k++) g3LitOk(g3Live(SCRIPT, G3_LIT, ['--zero', '--runs', '3']));
+});
+test('allocation-diff Q-RL-PRETEN live L1 teeth (A5 mutant twin): the root minus the --no-allocation-site-pretenuring pin reads D-LIT as exit 0 VERDICT ZERO, and L1 fails on it', { skip: G3_SKIP || G3_V26 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-g3t-'));
+    try {
+        const r = g3Live(variant(dir, 'M-preten-pin-live', M_PRETEN_PIN), G3_LIT, ['--zero', '--runs', '3']);
+        assert.equal(r.status, 0, r.out);
+        assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', r.out);
+        assert.throws(() => g3LitOk(r), assert.AssertionError);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('allocation-diff Q-RL-PRETEN live L2 (A2 control): D-F64 (no allocation in the window) --zero --runs 3 -> exit 0 VERDICT ZERO, young 0,0,0, old 0', { skip: G3_SKIP }, () => {
+    const r = g3Live(SCRIPT, G3_F64, ['--zero', '--runs', '3']);
+    assert.equal(r.status, 0, r.out);
+    assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', r.out);
+    assert.ok(r.L.some((l) => /^ {2}driver: run 1 young 0, old 0 in the window; .*; young per run 0,0,0$/.test(l)), r.out);
+    assert.deepEqual([r.left, r.drv], [[], ['driver.js']]);
+});
+// A8 (R20): the preload returns at once in a Worker (no fence, no count); the Worker's trace lines reach the trace only
+function g3WorkerOk(script) {
+    const r = g3Live(script, G3_WORKER, ['--zero', '--runs', '2']);
+    assert.equal(r.status, 2, r.out);
+    const nv = r.L.filter((l) => l.startsWith('  NO-VERDICT -- driver: '));
+    assert.equal(nv.length, 1, r.out);
+    assert.ok(nv[0].includes(' the guard did not count (guard count '), nv[0]);
+    assert.equal(count(nv[0], '@@LITE-MARK gcn'), 0, nv[0]);
+}
+test('allocation-diff R20 live (A8): D-WORKER (a Worker allocating in the window) --zero --runs 2 -> exit 2, NO-VERDICT "the guard did not count", never a @@LITE-MARK gcn reason', { skip: G3_SKIP }, () => {
+    g3WorkerOk(SCRIPT);
+});
+test('allocation-diff R20 live: revert check (M-worker, the main-thread line deleted: the Worker writes its own gcn) fails the row', { skip: G3_SKIP }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-g3w-'));
+    try {
+        const p = variant(dir, 'M-worker-live', M_WORKER);
+        assert.throws(() => g3WorkerOk(p), (e) => { if (capErr(e)) throw e; t.diagnostic('M-worker: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// A9 control: a fork() child's guard is a second main thread, with or without the R20 line (documented, unchanged)
+test('allocation-diff R20 live control (A9): D-FORK (fork() after end) -> exit 2, "@@LITE-MARK gcn given twice", on the root and on M-worker', { skip: G3_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-g3f-'));
+    try {
+        for (const p of [SCRIPT, variant(dir, 'M-worker-fork', M_WORKER)]) {
+            const r = g3Live(p, G3_FORK, ['--zero', '--runs', '2']);
+            assert.equal(r.status, 2, r.out);
+            assert.equal(r.L.filter((l) => l === '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice').length, 1, r.out);
+        }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// A7 (R8, darwin): GREP_OPTIONS=-P with the host's real grep first on PATH; D-YOUNG (A1_LIVE_DRIVER) still NONZERO
+function g3GoptOk(script) {
+    const r = g3Live(script, A1_LIVE_DRIVER, ['--zero', '--runs', '2'], { GREP_OPTIONS: '-P' });
+    assert.equal(r.status, 1, r.out);
+    assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT NONZERO', r.out);
+    assert.match(r.out, /^ {2}driver: run 1 young [1-9]\d* \[[^\]]*\], old 0 in the window; /m, r.out);
+}
+test('allocation-diff R8 live (A7): GREP_OPTIONS=-P (grep -c exits 2) -> D-YOUNG --zero --runs 2 still exit 1 VERDICT NONZERO, old 0', { skip: G3_GOPT }, () => {
+    g3GoptOk(SCRIPT);
+});
+test('allocation-diff R8 live: revert check (M-r8, ycount back on grep -c: young read empty, ZERO) fails the row', { skip: G3_GOPT }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-g3g-'));
+    try {
+        const p = variant(dir, 'M-r8-live', M_R8);
+        assert.throws(() => g3GoptOk(p), (e) => { if (capErr(e)) throw e; t.diagnostic('M-r8: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test('allocation-diff -h: the A4 Driver-contract paragraph (scalar replacement is not an allocation), each phrase once', { skip }, () => {
     withRig((g) => {
         const h = g.run(SCRIPT, ['-h']);
@@ -1233,9 +1387,10 @@ test('allocation-diff -h: the A4 Driver-contract paragraph (scalar replacement i
     });
 });
 
-// --- anchors: every edit this file makes (mutants, wiring, Y7, -h and refusal teeth) matches EXACTLY once in the script
+// --- anchors: every edit this file makes (mutants, wiring, Y7, -h and refusal teeth, the g3 live teeth) matches EXACTLY once in the script
 test('allocation-diff anchors: every mutant / wiring / Y7 / teeth anchor matches exactly once in allocation-diff.sh', () => {
-    const all = [...MUTANTS.map((m) => [m[0], m[3]]), ...EW, Y7, ...HELP_TEETH, ...RF.flatMap((r) => r[2]), ...A1_TEETH, ...A1_OPEN_TEETH, A1_LIVE_TEETH];
+    const all = [...MUTANTS.map((m) => [m[0], m[3]]), ...EW, Y7, ...HELP_TEETH, ...RF.flatMap((r) => r[2]), ...A1_TEETH, ...A1_OPEN_TEETH, A1_LIVE_TEETH,
+        ['M-preten-pin-live', M_PRETEN_PIN], ['M-worker-live', M_WORKER], ['M-r8-live', M_R8]];
     assert.ok(all.length >= MUTANTS.length + 20);
     for (const [name, edits] of all) {
         for (const [from, to] of edits) {

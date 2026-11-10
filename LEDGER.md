@@ -24,25 +24,25 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 3. **Refuse before the first spawn or write.** Every unverified input (node binary, `--out`, symlinks, hard links)
    is refused exit 2 with 0 spawns; accepting it and failing later is a fail-open. A `--v8-flags` refusal comes at
    the latest after one `--v8-options` read (#10, #33; gap #66). *(#2, #3, #21, #22,
-   #24, #26, #27, #29, #31, #93)*
+   #24, #26, #27, #29, #31, #93, #99)*
 4. **Allowlist, never denylist.** A denylist of dangerous flags missed one (`--run`, `--prof`, `--report-*`,
    `--require-module`); the runtime V8 allowlist is the winner, and its one known gap is recorded, not hidden.
    *(#6, #8, #9, #22, #66)*
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
-   accept every form or probe the host. *(#32, #39, #54)*
+   accept every form or probe the host. *(#32, #39, #54, #99)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
    could not have run; check the exit first. Size caps to the slowest CI leg, and `--test-timeout` to the slowest
-   FILE. *(#40, #42, #43)*
+   FILE. *(#40, #42, #43, #100)*
 9. **A history pin must be reachable from a ref, and a CI view must include `.git`.** Otherwise it passes locally
    and dies (or silently skips) in CI. *(#11, #38, #55, #94)*
 10. **Never kill by pattern, never share a scratch dir, never run a test on the live tree.** Lanes work in private
     `mktemp -d` dirs, kill only their own PIDs, and test in an overlay. *(#57-#61, #93)*
 11. **A literal REJECT gets one in-burst fix round; a design REJECT stops the unit.** Rejected diffs are parked
-    against the overlay base, never reset to HEAD. *(#25, #62, #63)*
+    against the overlay base, never reset to HEAD. *(#25, #62, #63, #100)*
 
 ---
 
@@ -382,6 +382,38 @@ GREEN on 74c2fcb5. Counts: self-test 54 -> 85, audit-g5 43 `test(` calls. Eviden
 `REPRO-b62-before.txt`, `REPRO-b62-after5a.txt`, `REPRO-b62-final.txt`, `NPMTEST-b62-g5a-prereview.txt`,
 `NPMTEST-b62-g5b-prereview.txt` (local, untracked).
 
+**#99 G3 allocation-diff (b63): five mechanisms and what proves each.** Hex labels in #99 .. #101 are sha256/8 of
+the named file, not commits: before build = commit 7c91d1c / allocation-diff.sh e0b55101 (frozen in
+`.handoff/frozen/b63-g3/`); final root 195242d9 (src cde0ad19, was 056870fc); gcn.cjs heredoc 279a5f87 -> 2089e91f.
+(a) Q-RL-PRETEN pin + refusal: TRACE_FLAGS gains `--no-allocation-site-pretenuring` (head line, spawn argv, A14(e));
+`*allocation-site-pretenuring*` in `--v8-flags` is refused before any spawn. Proved by self-test row 81 (3 spellings
+run: `--`, `_`, `--no-`; the glob covers every spelling, 0 spawns, 0 mktemp, the die line once), the live row L1 of
+test/allocation-diff.test.mjs (a pretenurable literal driver, `--zero --runs 3`, 3 invocations: each exit 1 or 2,
+never ZERO, run 1 young >= 1) and its teeth twin (the root minus the pin reads exit 0 VERDICT ZERO, and L1 fails on
+it), the control L2 (no allocation in the window: ZERO, young 0,0,0), and mutants M-preten-pin (row 33) and
+M-preten-arm (row 81). MEASURED on v26.8.2: before the unit young 0,0,0 exit 0 in 3 of 3 (golden-before.txt); after
+young 19,19,19 exit 1 (b1-gate.txt). (b) R6: the `*stress-concurrent-inlining*` refusal, proved by row 80 and
+M-r6-arm; a reviewer sweep of all 754 V8 bool flags on v26.8.2 (each + the pins + --print-flag-values) found only the
+two stress-concurrent-inlining flags flipping a pin (concurrent-recompilation true despite its `--no-` pin) and none
+re-enabling pretenuring. (c) R8: ycount / the old count in awk, no grep in the run path; proved by row 83, the live
+row A7 (`GREP_OPTIONS=-P`, grep -c exits 2: D-YOUNG still exit 1 NONZERO, old 0) with revert check, mutants M-r8 /
+M-r8o (M-r8o is verdict-equivalent: the judge reads O records with awk; row 83 catches it through the counts line,
+'old 0' read as 'old '), and audit-g3 A6 / A7 (red on the frozen root; A2 kills mutant MB, #101 d). (d) R20:
+`if (!require('worker_threads').isMainThread) return;` in the guard preload; proved by row 15 (A14 byte pin) and
+M-worker, the live row A8 (D-WORKER, a Worker allocating in the window, `--zero --runs 2`: exit 2, "the guard did not
+count", never `@@LITE-MARK gcn`) with revert check (M-worker reads `@@LITE-MARK gcn before @@LITE-MARK end`, as the
+before build did), and the control A9 (D-FORK: exit 2 "@@LITE-MARK gcn given twice" on the root and on M-worker). (e)
+R26: `*=*` on the resolved node path refused after the newline check (the G2 template, deopt-diff.sh G2 line pair);
+proved by row 82, M-r26 and audit-g3 A5 / A5b (relative `--node` in an `a=b` cwd; the A5b mutant on NODE_RES and the
+frozen root go red). Tier: the new live rows are DETERMINISTIC (GC counts, no clock); PLAN-b63-g3 ADDENDUM A2.
+Parity: build.sh regenerates the root byte-identical; the other four roots equal HEAD; `--self-test` rows 1-79 equal
+selftest-before.txt (only A14's label differs); `exit 0` census 12 -> 12; 83 ok x 5 runs. Counts: self-test 79 -> 83,
+audit-g3 13 `test(` calls (18 rows at r2 incl. the controls A2 / A3 / A9, per REVIEW-b63-g3-r1.md), `npm test` lane copy
+(PRELIMINARY host, pre-review run, before the r2 test fix; the integrated run belongs to the integration step) 2710
+tests, 2702 pass, 0 fail, 8 skip. Evidence: `.handoff/lanes/g3/PLAN-b63-g3.md`, `.handoff/RULINGS-reading-2026-11-10.md`
+(Q-RL-PRETEN), `.handoff/RULINGS-b57-audit.md` (R6, R8, R20, R26), `.handoff/lanes/g3/evidence/golden-before.txt`,
+`b1-gate.txt`, `b2-gate.txt`, `NPMTEST-b63-g3-prereview.txt`, `REVIEW-b63-g3-r1.md` (local, untracked).
+
 ---
 
 ## C. CI / platform lessons
@@ -591,6 +623,19 @@ context, drop `(`, revert DONE_AWK). (j) A shared lib change moves two roots at 
 so the parity pins and mutant anchors of both were re-swept (the shared-fragment lesson). Evidence:
 `.handoff/evidence/REVIEW-b62-g5a-r1.md` .. `-r3.md`, `REVIEW-b62-g5b-r1.md`, `-r2.md`, `NPMTEST-b62-g5a-prereview.txt`,
 `NPMTEST-b62-g5b-prereview.txt` (local, untracked).
+
+**#100 G3: defects and gate lessons the unit caught.** (a) Review r1 REJECTED (1 LITERAL, test-only): the audit-g3
+A10 row capped the 83-row self-test (~60 script spawns) at 170000 ms; at load 32-35 it timed out on BOTH builds (head
+170457 ms, frozen 171193 ms), so it flaked on the head and on the old root went red from the timeout, not from 79 vs 83
+(law 8). Fix: cap 600000 (as test/allocation-diff.test.mjs); A3 `--runs 2` -> 3 (the assertion says 3 x A1); new A5b.
+r2 APPROVED (full file 18/18 at load 13-24, A10 self-test 36.3 s against the 600 s cap). (b) R26 "resolved path"
+had no row that fails when it breaks: mutant MA (`[[ "$NODE_RES" != *=* ]]`) passed self-test 82 and audit-g3 A5 (both
+absolute paths); A5b closes it (relative `--node` in an `a=b` cwd; MA red). MA is verdict-equivalent (both give exit 2,
+different text). (c) A literal pretenuring teeth row is a fact about V8 14.6 (node v26.8.2): the mutant twin gates on
+node major 26 (any 26.x, e.g. CI's floating 26 leg, unmeasured there; measured on v26.8.2 only) and skips on other
+majors, so a green skip elsewhere proves nothing about the pin; CI has to carry it (law 6). (d) Rows 1-79 stayed
+byte-identical except A14's label (row 15), so a row-count move (79 -> 83) is checked by parity against the frozen
+vectors, not by the count.
 
 ---
 
@@ -911,3 +956,16 @@ import check refuses a real import that follows `'http://x';` on the same line, 
 next line (READ, reviewer r1; fail closed). (j) bash 5, Linux, uutils `mktemp`, mawk / gawk and node 22 / 24 are proved
 only by CI; local proof is bash 3.2.57, macOS, node 26.8.2. Evidence: `.handoff/evidence/REVIEW-b62-g5b-r1.md`,
 `REVIEW-b62-g5b-r2.md`, `b62-g5b/CENSUS.md`, `b62-g5b/a5-probe-matrix.out.txt` (local, untracked).
+
+**#101 G3 open limits.** Measured, read or argued is stated per item. (a) A Worker that triggers no GC is not detected
+(named in -h; the guard cannot count a Worker's isolate; MEASURED: a Worker's bootstrap alone causes young GCs on v26,
+so a Worker that does anything usually reads NO-VERDICT). (b) Worker / main isolate line interleaving in the trace
+(the grammar NO-VERDICT instead of "did not count"): theoretical, not seen in 7+ runs (reviewer r1). (c) The
+pretenuring row's teeth are measured on node v26.8.2 only; node 22 / 24 live rows are UNVERIFIED here (CI proves
+them). (d) ycount `+0` / an empty Y: the verdict `[[ $Y -eq 0 ]]` reads an empty Y as 0, guarded only by set -e /
+pipefail; `[[ $Y =~ ^[0-9]+$ ]] || die` would close it (reviewer NIT, a FILLER, not fixed in G3; mutant MB, `+0`
+dropped, passes the self-test and is caught by audit-g3 A2 and L2). (e) Under `GREP_OPTIONS=-P` on darwin only
+`--self-test` fails closed (rc 1, 60 checks FAILED, MEASURED in b1-gate.txt): its own greps, not the run path. (f) The
+reviewer did not run the full test/allocation-diff.test.mjs: estimated +15-20% wall time (~1.8 ks at the coder's load,
+under the 3600 s cap; estimate, CI baseline unknown). (g) audit-g3.test.mjs:6 header lists "(A1 A4 A5 A6 A7 A8 A10)":
+add A5b (FILLER).

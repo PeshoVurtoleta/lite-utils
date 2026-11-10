@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G3 allocation-diff (reading-list finding Q-RL-PRETEN; audit R6 = DD-fable-2 / cross-opus R2 sibling, R8, R20, R26 =
+  ICD-opus-3 sibling; Q-RL-PRETEN, Q-B57-FLAG, Q-B57-C1, Q-B57-MINOR). Q-RL-PRETEN: TRACE_FLAGS now holds
+  `--no-allocation-site-pretenuring` (head line and spawn argv: `--trace-gc --min-semi-space-size=1
+  --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring`), and a `--v8-flags` holding
+  `*allocation-site-pretenuring*` (every spelling, `--no-` included) is refused by name, exit 2, 0 spawns (a pretenured
+  literal site allocates straight into old space: no young GC, a wrong ZERO). Before, on node v26.8.2, a
+  literal-factory driver read `VERDICT ZERO`, exit 0, young 0,0,0 in 3 of 3 invocations (golden-before.txt, frozen
+  root, every "Old:" column); after, `VERDICT NONZERO`, exit 1, young 19,19,19 (b1-gate.txt). R6 sibling: a
+  `--v8-flags` holding `*stress-concurrent-inlining*` is refused by name, exit 2, 0 spawns (the reviewer swept all 754
+  V8 bool flags on v26.8.2: only `--stress-concurrent-inlining` and `--stress-concurrent-inlining-attach-code` flip a
+  pin, and no bool flag turns pretenuring back on: on v26.8.2 the two refusal arms cover every bool flag that undoes
+  a pin). R8: ycount and the old-GC count
+  use awk, not `grep -c ... || true`; a failing grep (a PATH shim, or darwin `GREP_OPTIONS=-P`) gave empty counts and a
+  wrong ZERO; no grep is left in the run path (under `GREP_OPTIONS=-P` only `--self-test` fails closed: its own
+  greps). R20: the guard preload (`gcn.cjs`) returns at once off the main thread (worker_threads isMainThread); a
+  Worker that triggers a GC now reads NO-VERDICT `<d> GC line(s) in run <k> the guard did not count` (before:
+  `@@LITE-MARK gcn before @@LITE-MARK end`, the Worker writing its own fence); a Worker that triggers no GC is not
+  detected, nor is a lost line cancelled by an extra one (e.g. a worker isolate's), which -h still lists (a Worker GC
+  can be cancelled out that way); a `child_process.fork()` child still reads `@@LITE-MARK gcn given twice`. The guard
+  grows 1989 B (sha256/8 279a5f87) -> 2042 B (2089e91f); the A14 row is re-pinned. R26: an `=` in the resolved node
+  path is refused, exit 2, 0 spawns (after the newline check, the G2 template). `-h` names the pin, the refusals and
+  the Worker / fork limits. Roots (sha256/8): allocation-diff.sh 195242d9 (before e0b55101 at 7c91d1c), src 056870fc
+  -> cde0ad19; deopt-diff, bytecode-budget, ic-diff and inlining-budget-diff roots are byte-identical to HEAD
+  (b1-gate.txt gate 2); `exit 0` census 12 -> 12. `--self-test` 79 -> 83 checks (80 R6, 81 PRETEN, 82 R26, 83 R8; rows
+  1-79 are byte-identical to the before build except A14's label), 5 of 5 runs green (b1-gate.txt). Tests:
+  test/audit-g3.test.mjs added (13 `test(` calls, 18 rows with the 6-case A4 loop, review r2: A1 pretenuring, A2
+  control, A3 retention, A4 x6 refusals, A5 / A5b R26, A6 / A7 R8, A8 Worker, A9 fork control, A10 heredoc / -h /
+  self-test; on the frozen before root A1, A4 x6, A5, A6, A7, A8 and A10 x3 are red and A2, A3, A9 green (reviewer r1;
+  A5b red on it at r2)); test/allocation-diff.test.mjs re-pinned to 83 (+7 mutant rows M-preten-pin,
+  M-preten-arm, M-r6-arm, M-r26, M-r8, M-r8o, M-worker, each with a revert check, and 8 live rows on real node:
+  L1 / L1 teeth, L2 control, R20 + revert, R20 fork control, R8 + revert). Tier: the new live rows are DETERMINISTIC
+  (GC counts, no clock); the pretenuring row's teeth (the mutant that drops the pin reads ZERO) are measured on node
+  v26.8.2 only; the teeth twin gates on node major 26 (any 26.x, e.g. CI's floating 26 leg, unmeasured there) and
+  skips on other majors; node 22 / 24 are CI-only (unverified here). Known limits:
+  LEDGER #101. Review: r1 REJECTED (1 LITERAL, test-only: a 170000 ms cap on the 83-row self-test timed out at load
+  32-35 on both builds), r2 APPROVED. `npm test` (lane copy with .git, quiet lock, host PRELIMINARY, pre-review run of
+  this lane, before the r2 test fix): 2710 tests, 2702 pass, 0 fail, 8 skip; the integrated final-tree run is not
+  recorded here. Proven locally on bash 3.2.57 / macOS / node v26.8.2 only; bash 5 / Linux / node 22 / 24 are CI-only.
 - G5 inlining-budget-diff (audit R2 = BB-opus-1 reach, R4 sibling, R9 = IBD-opus-1, R10 = IBD-opus-2, R11 = IBD-opus-3,
   R12 = IBD-opus-5, R15 = IBD-fable-1 / IBD-opus-6, R16 = IBD-fable-3 / IBD-opus-7, R18 = IBD-fable-2, R26 = ICD-opus-3;
   Q-B57-C1, Q-B57-COMPILE, Q-B57-TIERS, Q-B57-MINOR, Q-B57-BB3, Q-B57-PIPE, Q-B60-TMPFULL, Q-B62-REPRO, Q-B62-FLAG,
@@ -589,7 +627,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   NONZERO); exit 2 NO-VERDICT. Options: `--zero`, `--runs` 2..20 (default 5), `--node`, `--v8-flags`,
   `--out DIR`, `--self-test`, `-h` / `--help` (exit 2). ZERO means less than one semi-space (1 MB) of
   young allocation in the window, not zero bytes. Each run is `node [v8 flags] --trace-gc
-  --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --require <tmp>/gcn.cjs
+  --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
+  --no-allocation-site-pretenuring --require <tmp>/gcn.cjs
   ./<driver>` with cwd = the driver's directory and NODE_OPTIONS stripped (b43 G-ENV: all four);
   the driver marks the window
   with the whole lines `@@LITE-MARK start` and `@@LITE-MARK end`. The tool's own guard preload counts
@@ -597,13 +636,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unparseable trace, a missing guard count, an old-generation GC in the window, a driver failure and a
   failed null control (runs 2..N must give run 1's multiset). The `-h` text holds the driver contract,
   every record and NO-VERDICT reason, and the Not detected list. Tier: the script logic is
-  DETERMINISTIC (`--self-test`, 76 checks, 78 after MD-46, no real node); a verdict on a user driver is STATISTICAL,
-  REPORTED only (no statistical host in this repo).
-- `test/allocation-diff.test.mjs`: `--self-test` exact count (76; 78 after MD-46) on the in-repo script and a copy
-  outside the repo, one row per printed check, self-test mutant rows (each an exact-once edit of a temp
+  DETERMINISTIC (`--self-test`, 76 checks, 78 after MD-46, 79 after b43, 83 after G3, no real node); a verdict
+  on a user driver is STATISTICAL, REPORTED only (no statistical host in this repo).
+- `test/allocation-diff.test.mjs`: `--self-test` exact count (76; 78 after MD-46; 79 after b43; 83 after G3) on the
+  in-repo script and a copy outside the repo, one row per printed check, self-test mutant rows (each an exact-once edit of a temp
   copy that must turn the self-test red at its designed rows, with a revert check on the unmutated
   copy), the exit wiring, `-h` / `--help` exit 2, and refusal rows on the file's own fake node and
-  mktemp shim. 200 tests (206 after MD-46, 208 after CI on Linux). DETERMINISTIC; no real V8 run.
+  mktemp shim. 200 tests (206 after MD-46, 208 after CI on Linux, 239 at G3 on darwin / node v26.8.2).
+  DETERMINISTIC; real node since G-ALLOC-CLOSE (2 Q-A1 live rows), 8 more live rows since G3.
 - `deopt-diff.sh` / `bytecode-budget.sh` / `ic-diff.sh` / `allocation-diff.sh`: `--v8-flags` is a runtime allowlist
   (`lib/v8flags.sh`, MD-46 G1-G5, MD-50..58; one shared entry, per-tool deltas below). Right after its `--version`
   probe each tool makes one `node --v8-options` read (even with no `--v8-flags`), then every token must be a V8

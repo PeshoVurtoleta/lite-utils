@@ -17,16 +17,20 @@
 #                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
 #                      file, else exit 2 before any spawn ("node binary not found", "node binary is not a file on
 #                      PATH (...)", "node binary is not an executable file", "node binary: cannot resolve the
-#                      directory of ...", "node binary: a newline is not allowed in the resolved path"). The
-#                      --version probe and every run (each in its driver's directory) run that one file, and the
-#                      head names it.
+#                      directory of ...", "node binary: a newline is not allowed in the resolved path", "node
+#                      binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand,
+#                      not as the program): PATH"). The --version probe and every run (each in its driver's
+#                      directory) run that one file, and the head names it.
 #   --v8-flags STR     extra V8 flags for every run, split on spaces (flags only, each `--` and a letter). Refused,
 #                      with `_` read as `-`: any *trace-gc*, *semi-space* or *concurrent-recompilation* flag (the
 #                      script sets the trace and a fixed 1 MB semi-space), any *predictable-gc-schedule* flag (it
-#                      forces both semi-spaces to 4 MB), every --require* / --import* / --loader* /
-#                      --experimental-loader* flag, a prefix match (a module of yours, preload or loader, is part of
-#                      the measured process, and a --require one runs ahead of the guard's own; -r is refused as a
-#                      non-flag), every --env-file* / --experimental-config-file* /
+#                      forces both semi-spaces to 4 MB), any *stress-concurrent-inlining* flag (every spelling:
+#                      --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the
+#                      script's --no-concurrent-recompilation), any *allocation-site-pretenuring* flag (every
+#                      spelling: the script pins --no-allocation-site-pretenuring), every --require* / --import* /
+#                      --loader* / --experimental-loader* flag, a prefix match (a module of yours, preload or loader,
+#                      is part of the measured process, and a --require one runs ahead of the guard's own; -r is
+#                      refused as a non-flag), every --env-file* / --experimental-config-file* /
 #                      --experimental-default-config-file* flag, a prefix match (it loads environment variables or
 #                      node options from a file into the measured process), and every --eval* / --print* flag, a
 #                      prefix match (node runs that code in the measured process instead of the driver, which
@@ -54,11 +58,12 @@
 #
 # DRIVER: an existing readable file (two in diff mode, one with --zero), each run as
 #   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
-#   --require <tmp>/gcn.cjs ./<driver file name> 3><tmp>/gcn.<side>.<k>` with cwd = its directory (`./` keeps a
-#   file name starting with `-` a path), NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS
-#   stripped (unset at start, for every spawn), stderr to its own file (never merged into stdout), stdout piped
-#   through tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL)
-#   and the record awk. Only records are held in memory, never trace text. Runs alternate before / after, k = 1..N.
+#   --no-allocation-site-pretenuring --require <tmp>/gcn.cjs ./<driver file name> 3><tmp>/gcn.<side>.<k>` with cwd =
+#   its directory (`./` keeps a file name starting with `-` a path), NODE_OPTIONS, NODE_V8_COVERAGE,
+#   NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped (unset at start, for every spawn), stderr to its own file
+#   (never merged into stdout), stdout piped through tee (to the --out raw file, else /dev/null), tr (every NUL byte
+#   becomes `?`; the raw file keeps the NUL) and the record awk. Only records are held in memory, never trace text.
+#   Runs alternate before / after, k = 1..N.
 # Driver contract: write each marker with fs.writeSync(1, '@@LITE-MARK start\n') (and end); never use
 #   console.log or process.stdout in the driver, and never make stdout non-blocking. Observed on node v26.8.2
 #   (p4-probe, 5 of 5 runs): a console.log driver (pipe stdout touched) with a slow reader lost 268 of 666
@@ -68,9 +73,10 @@
 #   and reads one field can read young 0, ZERO, once it is optimized (escape analysis removed the object). ZERO is the
 #   correct measurement there: the optimized code does not allocate. To measure the allocation, fix the driver and keep
 #   the objects reachable: `keep[i & 1023] = hot(i)`.
-# Guard: gcn.cjs (the tool's own preload, an absolute path) counts the run's GCs with v8.GCProfiler. Its 'exit'
-#   listener, registered before any driver listener, allocates past two semi-spaces (>= 1 young GC after your
-#   `end`: the exit fence), writes `@@LITE-MARK gcn` to fd 1, then the count to fd 3. The count must equal g
+# Guard: gcn.cjs (the tool's own preload, an absolute path) counts the run's GCs with v8.GCProfiler, on the main
+#   thread only (in a Worker it returns at once: no profiler, no listener, no fence). Its 'exit' listener,
+#   registered before any driver listener, allocates past two semi-spaces (>= 1 young GC after your `end`: the
+#   exit fence), writes `@@LITE-MARK gcn` to fd 1, then the count to fd 3. The count must equal g
 #   (below), else the side reads NO-VERDICT: it catches a GC line lost from the trace (or glued after other text
 #   outside the window). GCs in your own 'exit' listeners land after gcn and are not counted; an allocating one
 #   can read "the guard did not count". The guard is proven for drivers that write markers with fs.writeSync(1);
@@ -118,10 +124,14 @@
 #   anything is written), one `node --v8-options` (also with no --v8-flags; a failing one exits 2 the same way), then
 #   2 x runs driver runs (1 x runs with --zero): runs 5 -> 12 spawns (7 with --zero), runs 3 -> 8 (5).
 # Not detected: young allocation under one semi-space (1 MB) in the window; large-object and old-space allocation
-#   (no young GC); allocation in workers or other isolates; markers written asynchronously (a marker that lands
-#   late moves the window); a GC line moved across a marker; a lost line cancelled by an extra one (e.g. a worker
-#   isolate's); GCs after the count read (your 'exit' listeners). A cold window over-reports (S-7): start the window
-#   after warm-up, or tier-up and lazy compilation allocate in it.
+#   (no young GC); a Worker that triggers no GC; markers written asynchronously (a marker that lands late moves
+#   the window); a GC line moved across a marker; a lost line cancelled by an extra one (e.g. a worker isolate's);
+#   GCs after the count read (your 'exit' listeners). A cold window over-reports (S-7): start the window after
+#   warm-up, or tier-up and lazy compilation allocate in it. A Worker's GC lines are in the trace but not in the
+#   guard count: NO-VERDICT "<d> GC line(s) in run <k> the guard did not count". A child_process.fork() child runs
+#   the guard preload on its own main thread and writes its own fence to the shared stdout: NO-VERDICT "@@LITE-MARK
+#   gcn given twice". The script pins --no-allocation-site-pretenuring: a pretenured literal site allocates
+#   straight into old space (no young GC), which would read a young-allocating window as ZERO.
 # Tier: the script logic is DETERMINISTIC (--self-test); a verdict on a user driver is STATISTICAL, and REPORTED
 #   only (this repo has no statistical host).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
@@ -181,13 +191,13 @@ END {
 # @include lib/tracked.sh
 # @include lib/v8flags.sh
 
-TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation)
+TRACE_FLAGS=(--trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring)
 ST_RE='^@ ([0-9]+) ([0-9]+) ([0-9]+) ([0-9]+)$'
 G_RE='^G ([0-9]+) ([0-9]+)$'
 CNT_RE=$'^(0|[1-9][0-9]{0,8})\n$'   # the guard's fd-3 file: exactly one canonical decimal line
 
 # gcn.cjs, the guard preload: written once per invocation into the private temp dir (text = PLAN-phase4-g1 TASK 0d's
-# evidence/p4-guard/0d/gcn.cjs, byte for byte). A heredoc, never $( ): no trailing-newline loss.
+# evidence/p4-guard/0d/gcn.cjs + the R20 main-thread line). A heredoc, never $( ): no trailing-newline loss.
 gcn_cjs() {
 cat <<'GCN_CJS'
 'use strict';
@@ -199,6 +209,7 @@ cat <<'GCN_CJS'
 // 1st (its statistics array is the big allocation) with one more loop turn, so the GCs that causes are
 // counted. Counted gcTypes: Scavenge, MinorMarkSweep, MarkSweepCompact (IncrementalMarking prints no
 // --trace-gc line; an unknown type is not counted, so the count reads low and the judge fails closed).
+if (!require('worker_threads').isMainThread) return;
 const v8 = require('v8');
 const fs = require('fs');
 const gcnBuf = Buffer.alloc(24);
@@ -241,11 +252,11 @@ GCN_CJS
 # records -> the null-control multiset (Y and O, as "*<TAB><kind>"); records -> the verdict multiset (Y only)
 nc_ms() { printf '%s\n' "$1" | awk '/^[YO] /{ print "*\t" substr($0, 3) }' | multiset; }
 y_ms() { printf '%s\n' "$1" | awk '/^Y /{ print "*\t" substr($0, 3) }' | multiset; }
-ycount() { printf '%s\n' "$1" | grep -c '^Y ' || true; }
+ycount() { printf '%s\n' "$1" | awk '/^Y /{n++} END{print n+0}'; }
 # records -> "young <y> [<kind> x<n>, ..], old <o> in the window; <g> GC line(s) before the fence, <p> after end"
 counts() {
   local y o u gl
-  y=$(ycount "$1"); o=$(printf '%s\n' "$1" | grep -c '^O ' || true)
+  y=$(ycount "$1"); o=$(printf '%s\n' "$1" | awk '/^O /{n++} END{print n+0}')
   u=$(printf '%s\n' "$1" | awk '/^Y /{ print substr($0, 3) }' | multiset | awk '{ n = $1; sub(/^ *[0-9]+ /, ""); printf "%s%s x%d", (NR > 1 ? ", " : ""), $0, n }')
   gl=${1##*$'\n'}
   if [[ "$gl" =~ $G_RE ]]; then gl="${BASH_REMATCH[1]} GC line(s) before the fence, ${BASH_REMATCH[2]} after end"; else gl="no G record"; fi
@@ -388,11 +399,12 @@ self_test() {
   check "A5' records: 5,000 GC lines before start + 5,000 between end and gcn -> exactly 1 record line 'G 10000 5000'" \
     "$(rec "$(rep "$LS" 5000)"$'\n'"$S start"$'\n'"$S end"$'\n'"$(rep "$LS" 5000)"$'\n'"$S gcn")" "G 10000 5000;"
 
-  # --- the guard preload text: gcn_cjs() == PLAN-phase4-g1 TASK 0d's evidence/p4-guard/0d/gcn.cjs (A14) ---
+  # --- the guard preload text: gcn_cjs() == PLAN-phase4-g1 TASK 0d's evidence/p4-guard/0d/gcn.cjs + the R20 main-thread
+  # line before `const v8` (A14) ---
   gcn_cjs >"$d/gcn.ref"
   if command -v sha256sum >/dev/null 2>&1; then x=$(sha256sum <"$d/gcn.ref"); else x=$(shasum -a 256 <"$d/gcn.ref"); fi
-  check "A14 gcn_cjs() is p4-guard/0d/gcn.cjs byte for byte: sha256 279a5f87.., 1989 bytes" \
-    "${x%% *}|$(wc -c <"$d/gcn.ref" | tr -d ' ')" "279a5f8742cfd3e8504c2221b0908359e20f566592c996845d7eafb6bd9f0a1e|1989"
+  check "A14 gcn_cjs() is p4-guard/0d/gcn.cjs + the R20 main-thread line: sha256 2089e91f.., 2042 bytes" \
+    "${x%% *}|$(wc -c <"$d/gcn.ref" | tr -d ' ')" "2089e91faaf7896ba2585c4a7a3a324699adae09b1d42cf525e140fd3891b481|2042"
 
   # --- this script end to end on a fake node (bash): it appends its argv to <its dir>/log and "<rq> <fd3> <req>" to
   # <its dir>/req (rq: ok = an absolute --require cmp-equal to gcn_cjs(), else none / rel / bad), exits 7 if
@@ -525,7 +537,7 @@ FAKE_MKTEMP
     "$(spawn -- "$NO" --runs 2 --zero --out "$d/oz" "$dr/z0/driver.js")|$(ls "$d/oz/raw" | tr '\n' ' ')|$(grep -c '^VERDICT ZERO$' "$d/oz/report.txt" || true)" "0|VERDICT ZERO|4|driver |1"
   check "A14(e) e2e: spawn argv = v8 flags first, the trace flags, --require <T>/gcn.cjs, ./<driver>" \
     "$(spawn -- "$NO" --runs 2 --v8-flags '--expose-gc' --zero "$dr/z0/driver.js" | cut -d'|' -f1)|$(sed -n 3p "$fk/log" | sed -E "s#$d/tmp/allocation-diff\\.[A-Za-z0-9]{6}/#<T>/#")" \
-    "0|--expose-gc --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --require <T>/gcn.cjs ./driver.js"
+    "0|--expose-gc --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring --require <T>/gcn.cjs ./driver.js"
   mkdir -p "$dr/dash"; : >"$dr/dash/-p.js"; printf '%s\n' "$(win "$(rep "$LS" 3)")" >"$dr/dash/trace.txt"
   check "A14(e) e2e: a driver named '-p.js' runs as ./-p.js (never read as a node option): 6 argvs end ' ./-p.js', SAME" \
     "$(spawn -- "$NO" --runs 3 "$dr/dash/-p.js" "$dr/dash/-p.js")|$(grep -c -e ' \./-p\.js$' "$fk/log" || true)" "0|VERDICT SAME|8|6"
@@ -743,6 +755,33 @@ FAKE_MKTEMP
     "$(spawn NODE_OPTIONS=--st-probe NODE_V8_COVERAGE="$d/cov" NODE_COMPILE_CACHE="$d/cc" NODE_REDIRECT_WARNINGS="$d/warn.txt" -- "$NO" --runs 3 "$dr/y3/driver.js" "$dr/y3b/driver.js")|$(has "allocation-diff  node v26.8.2  $fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)")" \
     "0|VERDICT SAME|8|1"
 
+  # --- R6 (Q-B57-FLAG) / Q-RL-PRETEN: every spelling of a flag that undoes a pinned trace flag, refused before any spawn ---
+  o=""
+  for x in --stress-concurrent-inlining --stress_concurrent_inlining_attach_code --no-stress-concurrent-inlining; do
+    o="$o#$(spawn -- "$NO" --v8-flags "$x" "$dr/y3/driver.js" "$dr/y5/driver.js")|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: --v8-flags must not set $x: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (every spelling of the flag is refused)" "$d/sp.out" || true)"
+  done
+  check "R6 refused before any spawn: --v8-flags --stress-concurrent-inlining / --stress_concurrent_inlining_attach_code / --no-stress-concurrent-inlining -> exit 2, 0 spawns, 0 mktemp, the die line once" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3)"
+  o=""
+  for x in --allocation-site-pretenuring --allocation_site_pretenuring --no-allocation-site-pretenuring; do
+    o="$o#$(spawn -- "$NO" --runs 2 --v8-flags "$x" --zero "$dr/z0/driver.js")|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: --v8-flags must not set $x: the script pins --no-allocation-site-pretenuring (a pretenured literal site allocates straight into old space: no young GC, a wrong ZERO)" "$d/sp.out" || true)"
+  done
+  check "PRETEN refused before any spawn: --v8-flags --allocation-site-pretenuring / --allocation_site_pretenuring / --no-allocation-site-pretenuring -> exit 2, 0 spawns, 0 mktemp, the die line once" \
+    "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3)"
+  # R26: env reads an argument with an = as NAME=value; a wrapper at $d/a=b/node would exec the fake (its log counts)
+  mkdir -p "$d/a=b"; printf '%s\n' "#!$BASH" "exec $(printf '%q' "$fk/node") \"\$@\"" >"$d/a=b/node"; chmod +x "$d/a=b/node"
+  check "R26 refused before any spawn: --node <d>/a=b/node (an = in the resolved path) -> exit 2, 0 spawns, 0 mktemp, 'node binary: an = is not allowed in the resolved path'" \
+    "$(spawn -- --node "$d/a=b/node" --runs 2 --zero "$dr/z0/driver.js")|$(wc -l <"$d/mk.log" | tr -d ' ')|$(grep -c -F -x -e "allocation-diff: node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $d/a=b/node" "$d/sp.out" || true)" \
+    "2|VERDICT NO-VERDICT|0|0|1"
+  # R8 (Q-B57-C1): the young / old counts never come from `grep -c` (a grep that fails left them empty, read as 0: ZERO).
+  # A grep shim first on PATH exits 2 on any -c argument, else runs the real grep
+  mkdir -p "$d/sh/gc"
+  { printf '#!%s\n' "$BASH"; printf 'for a in "$@"; do if [ "$a" = -c ]; then exit 2; fi; done\n'; printf 'exec %q "$@"\n' "$(command -v grep)"; } >"$d/sh/gc/grep"
+  chmod +x "$d/sh/gc/grep"
+  check "R8 e2e: a grep shim that fails every -c, first on PATH, --zero on 3 Scavenge -> exit 1 NONZERO, 'young 3 [Scavenge x3], old 0'" \
+    "$(spawn PATH="$d/sh/gc:$mk:$PATH" -- "$NO" --runs 3 --zero "$dr/y3/driver.js")|$(has '  driver: run 1 young 3 [Scavenge x3], old 0 in the window; 4 GC line(s) before the fence, 1 after end; young per run 3,3,3')|$(has '  NONZERO -- 3 young GC(s) in the window (every run equal to run 1)')" \
+    "1|VERDICT NONZERO|5|1|1"
+
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
 }
@@ -791,8 +830,12 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   case "$g" in
     *trace-gc*|*concurrent-recompilation*)
       die "--v8-flags must not set $f: the script sets ${TRACE_FLAGS[*]} itself" ;;
+    *stress-concurrent-inlining*)
+      die "--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (every spelling of the flag is refused)" ;;
     *semi-space*)
       die "--v8-flags must not set $f: the script fixes both semi-spaces at 1 MB (--min-semi-space-size=1 --max-semi-space-size=1)" ;;
+    *allocation-site-pretenuring*)
+      die "--v8-flags must not set $f: the script pins --no-allocation-site-pretenuring (a pretenured literal site allocates straight into old space: no young GC, a wrong ZERO)" ;;
     *predictable-gc-schedule*)
       die "--v8-flags must not set $f: it forces both semi-spaces to 4 MB (the script fixes them at 1 MB)" ;;
     --require*|--import*|--loader*|--experimental-loader*)
@@ -839,6 +882,7 @@ NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot res
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
+[[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
 DRV_DIR=(); DRV_BASE=(); DESC=()
 for ((i = 0; i < ${#POS[@]}; i++)); do
   DRV_DIR[$i]=$(cd -- "$(dirname -- "${POS[$i]}")" && pwd); DRV_BASE[$i]=$(basename -- "${POS[$i]}")
