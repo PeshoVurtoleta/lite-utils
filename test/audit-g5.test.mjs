@@ -270,14 +270,14 @@ test('A2 R10 control: driver mode with GIT_DIR set still prints a verdict (SAME,
     code(r, 0, 'driver mode under GIT_DIR'); assert.equal(verdict(r), 'SAME', msg(r));
 });
 const lsCount = (repo) => gitIn(repo, ['ls-files']).stdout.split('\n').filter((l) => l !== '').length;
-test('A2 R10: --self-test under GIT_DIR=<index-only repo>/.git -> exit 0, 85 ok, no FAIL, that repo\'s ls-files count unchanged', { skip }, () => {
+test('A2 R10: --self-test under GIT_DIR=<index-only repo>/.git -> exit 0, 89 ok, no FAIL, that repo\'s ls-files count unchanged', { skip }, () => {
     const c = mkCase(), g = mkGit(c);
     const before = lsCount(g.repo);
     assert.equal(before, 1, 'fixture: 1 tracked file');
     const r = run(TOOL, c, ['--self-test'], { cwd: c.dir, env: { GIT_DIR: join(g.repo, '.git') } });
     code(r, 0, 'self-test under GIT_DIR');
     assert.equal(/^FAIL/m.test(r.stdout + r.stderr), false, msg(r));
-    assert.equal((r.stdout.match(/^ok /gm) || []).length, 85, `85 ok rows (b62 5a 64 + 5b TASK 4 + B2 probe self-test rows + B2b 7 tear rows + r1 fix e-acute row: the coder's count, re-pin if it moves)\n${msg(r)}`);
+    assert.equal((r.stdout.match(/^ok /gm) || []).length, 89, `89 ok rows (b62 5a 64 + 5b TASK 4 + B2 probe self-test rows + B2b 7 tear rows + r1 fix e-acute row + b65 5c 4 Turbolev rows: the coder's count, re-pin if it moves)\n${msg(r)}`);
     assert.equal(lsCount(g.repo), before, 'the self-test wrote entries into the caller repo index');
 });
 test('A2 R10 old twin: GIT_DIR / WORK_TREE / INDEX_FILE / OBJECT_DIRECTORY / CEILING -> exit 0 SAME; COMMON_DIR -> "git-tracked"; self-test under GIT_DIR FAILs', { skip: OLDSKIP }, () => {
@@ -728,4 +728,183 @@ test('A5 real held pipe: each of 3 attempts prints `  f: 3,50 -> 3,50`, a `?` on
 test('A5 real held pipe twin: the 7c91d1c root drops 50 in at least 1 of 3 attempts (local only; red-on-old pin of the row above)', { skip: skip || OLDSKIP || (CI_STRICT ? 'local only: the old root pipe drop depends on the host' : false) || hold5Skip() }, () => {
     const x = hold5Runs(oldRoot());
     assert.ok(x.some((r) => { const s = f5(r); return s[0] === null || s.some((v) => !v.includes('50')); }), `old root never lost 50 in 3 attempts: ${x.map((r) => f5(r).join('/')).join(' | ')}`);
+});
+
+// --- 5c ---
+//
+// b62 G5 batch 5c (helper B3): rows of .handoff/PLAN-b62-g5c.md ASSERTIONS A1-A5 + ADDENDUM A1 (Q-B62-TL: header absent = off).
+// Oracle: the PLAN text (refusal key phrases, exit codes, spawn counts, the B-row shape); the coder's exact wording is matched
+// only where the plan quotes it. Old = 7c91d1c: each gate row is paired with an old twin showing the gate red on the old root.
+// Mutants: drop-arm is in the coder's MUTANTS table; glob, prefix match, `?` as off and the @TF anchor mutants are killed
+// by the A1 controls, the A3 controls, the :738-deleted row and the A2 OSR / TF-named rows (reviewer b65, measured).
+// Real-node twin (old root through real node) is opt-in with LITEUTILS_REAL_HOLD=1 (Q-B62-A5 style: host dependent).
+
+const TL_OPT = { skip };
+const ML2 = (fn, cand, id) => nl(TFC(fn, id, ', mode: ConcurrencyMode::kSynchronous]', 'MAGLEV'),
+    `== Inlining 0x2a8c1dc1afb1 <SharedFunctionInfo ${cand}>`, `== Inlining 0x2a8c1dc1afb2 <SharedFunctionInfo ${cand}>`, TFD(fn, id, 'MAGLEV'));
+const M5 = (c, out, extra = [], pos = ['a.mjs', 'b.mjs']) => ['--tiers', 'maglev', '--runs', '2', '--fn', 'm0', '--no-bytecode', '--node', c.node, ...extra, '--out', out, ...pos];
+const snap2 = (c, cwd) => [ls(c.tmp), ls(cwd)];
+
+// ---- A1 (gate b): --turbolev / --turbolev-future in --v8-flags ----
+for (const f of ['--turbolev', '--turbolev-future']) {
+    test(`5c A1 (b): --tiers maglev --v8-flags=${f} -> exit 2, named, NO-VERDICT, empty stdout, exactly 2 spawns, OUT not created`, TL_OPT, () => {
+        const c = mkCase(ML2('m0', 'l1', '1d86'), ML2('m0', 'l1', '1d86')), O = join(c.dir, 'o');
+        const r = run(TOOL, c, M5(c, O, [`--v8-flags=${f}`]));
+        nv(r, '--v8-flags must not set', `${f}`);
+        assert.ok(r.stderr.includes('--turbolev changes which tier --trace-maglev-inlining describes'), `${f}: the reason\n${msg(r)}`);
+        assert.equal(c.spawns().length, 2, `${f}: 2 spawns (-p, --v8-options): ${JSON.stringify(c.spawns())}`);
+        assert.equal(existsSync(O), false, `${f}: OUT must not be created`);
+    });
+    test(`5c A1 (b) old twin: 7c91d1c with --v8-flags=${f} reaches exit 0 SAME`, { skip: OLDSKIP }, () => {
+        const c = mkCase(ML2('m0', 'l1', '1d86'), ML2('m0', 'l1', '1d86'));
+        const r = run(oldRoot(), c, M5(c, join(c.dir, 'o'), [`--v8-flags=${f}`]));
+        code(r, 0, `old ${f}`); assert.equal(verdict(r), 'SAME', msg(r));
+    });
+}
+for (const f of ['--no-turbolev', '--no-turbolev-future', '--max-turbolev-inline-depth=40']) {
+    test(`5c A1 control: --v8-flags=${f} passes the refusal -> exit 0 SAME`, TL_OPT, () => {
+        const c = mkCase(ML2('m0', 'l1', '1d86'), ML2('m0', 'l1', '1d86'));
+        const r = run(TOOL, c, M5(c, join(c.dir, 'o'), [`--v8-flags=${f}`]));
+        code(r, 0, f); assert.equal(verdict(r), 'SAME', msg(r));
+    });
+}
+// real node: a null pair (l1; m0 = 3x l1; hot = 2x m0; 200k iterations; byte-identical copies). The refusal fires before any run.
+const REAL_DRV = [
+    'function l1(x) { return x + 1; }',
+    'function m0(x) { return l1(x) + l1(x) + l1(x); }',
+    'function hot(x) { return m0(x) + m0(x); }',
+    'let s = 0;',
+    'for (let i = 0; i < 200000; i++) s += hot(i);',
+    'if (s === -1) console.log(s);',
+    '',
+].join('\n');
+const realListsTurbolev = spawn(process.execPath, ['--v8-options'], {}, 'real node --v8-options', 30000).stdout.includes('\n  --turbolev (');
+function realCase() {
+    const c = mkCase(); writeFileSync(join(c.w, 'a.mjs'), REAL_DRV); writeFileSync(join(c.w, 'b.mjs'), REAL_DRV);
+    return c;
+}
+const realArgs = (c, out, extra) => ['--node', process.execPath, '--tiers', 'maglev', '--runs', '2', '--no-bytecode', ...extra, '--out', out, 'a.mjs', 'b.mjs'];
+test('5c A1 real node: null pair with --v8-flags=--turbolev -> exit 2 named NO-VERDICT, raw/ absent (skip unless this node lists --turbolev)', { skip: skip || (realListsTurbolev ? false : 'this node --v8-options does not list `  --turbolev (`') }, () => {
+    const c = realCase(), O = join(c.dir, 'o');
+    const r = run(TOOL, c, realArgs(c, O, ['--v8-flags=--turbolev']), { env: { ME: 'm0' } });
+    nv(r, '--v8-flags must not set', 'real --turbolev');
+    assert.equal(existsSync(join(O, 'raw')), false, 'raw/ absent');
+});
+test('5c A1 real node old twin (opt-in LITEUTILS_REAL_HOLD=1): 7c91d1c on the same null pair with --turbolev -> exit 0 SAME', { skip: skip || OLDSKIP || (!HOLD5_OPTIN ? 'opt-in real-node row: set LITEUTILS_REAL_HOLD=1' : false) || (realListsTurbolev ? false : 'node lacks --turbolev') }, () => {
+    const c = realCase();
+    const r = run(oldRoot(), c, realArgs(c, join(c.dir, 'o'), ['--v8-flags=--turbolev']), { env: { ME: 'm0' }, cap: 170000 });
+    code(r, 0, 'old real --turbolev'); assert.equal(verdict(r), 'SAME', msg(r));
+});
+
+// ---- A2 (gate a): @TF unit in a maglev-tier dec file ----
+const HOTL = '== Inlining 0x3a1 <SharedFunctionInfo q>';
+const TFU = (n, extra = [], osr = false) => nl(TFC('hot', '7d86', osr ? ' OSR, mode: ConcurrencyMode::kSynchronous]' : undefined), ...Array(n).fill(HOTL), ...extra, TFD('hot', '7d86', 'TURBOFAN_JS', osr ? ' OSR' : ''));
+const A2_BEFORE = (osr) => ML2('m0', 'l1', '1d86') + TFU(7, [], osr);
+const A2_AFTER = (osr) => ML2('m0', 'l1', '1d86') + TFU(6, ['Main budget exhausted (978 > 920)'], osr);
+for (const [what, osr] of [['TF unit hot 7 vs 6 `== Inlining` q', false], ['TF unit only as `(target TURBOFAN_JS) OSR`', true]]) {
+    test(`5c A2 (a): maglev dec with @ML lines equal and ${what} -> exit 2 "=== maglev: NO-VERDICT" naming @TF, no "all decision lines:"`, TL_OPT, () => {
+        const c = mkCase(A2_BEFORE(osr), A2_AFTER(osr));
+        const r = run(TOOL, c, M5(c, join(c.dir, 'o')));
+        code(r, 2, 'A2'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+        assert.ok(r.stdout.includes('=== maglev: NO-VERDICT'), msg(r));
+        assert.ok(r.stdout.includes('@TF'), `names @TF\n${msg(r)}`);
+        assert.equal(r.stdout.includes('all decision lines:'), false, msg(r));
+    });
+}
+test('5c A2 (a) old twin: the same pair is `maglev DIFF` exit 1 on 7c91d1c', { skip: OLDSKIP }, () => {
+    const c = mkCase(A2_BEFORE(false), A2_AFTER(false));
+    const r = run(oldRoot(), c, M5(c, join(c.dir, 'o')));
+    code(r, 1, 'old A2'); assert.equal(verdict(r), 'DIFF', msg(r));
+});
+test('5c A2 control: an @ML-only pair for a function named `TF` -> exit 0 SAME (the @TF anchor needs the tag, not the name)', TL_OPT, () => {
+    const c = mkCase(ML2('TF', 'l1', '1d86'), ML2('TF', 'l1', '1d86'));
+    const r = run(TOOL, c, ['--tiers', 'maglev', '--runs', '2', '--fn', 'TF', '--no-bytecode', '--node', c.node, '--out', join(c.dir, 'o'), 'a.mjs', 'b.mjs']);
+    code(r, 0, 'TF-named fn'); assert.equal(verdict(r), 'SAME', msg(r));
+});
+
+// ---- A3 (gate c): Turbolev on by default in --v8-options ----
+const V8TXT = rd(V8OPT).split('\n');
+const L_ON = '        type: bool  default: --no-turbolev';
+const L_ONF = '        type: bool  default: --no-turbolev-future';
+function withOpts(c, lines) { writeFileSync(join(c.bin, 'v8-options.txt'), lines.join('\n')); return c; }
+function modOpts(edit) { const l = V8TXT.slice(); edit(l); return l; }
+test('5c A3 fixture anchors: v8-options.v26.8.2.txt :737-744 are the --turbolev / --turbolev-future headers and defaults', { skip }, () => {
+    assert.ok(V8TXT[736].startsWith('  --turbolev ('), V8TXT[736]); assert.equal(V8TXT[737], L_ON);
+    assert.ok(V8TXT[742].startsWith('  --turbolev-future ('), V8TXT[742]); assert.equal(V8TXT[743], L_ONF);
+});
+const A3_ON = [
+    ['--turbolev default on (:738)', (l) => { l[737] = '        type: bool  default: --turbolev'; }, 'Turbolev is on by default'],
+    ['--turbolev-future default on (:744)', (l) => { l[743] = '        type: bool  default: --turbolev-future'; }, 'Turbolev is on by default'],
+    ['--turbolev default line deleted (:738)', (l) => { l.splice(737, 1); }, 'cannot read the --turbolev default'],
+];
+for (const [what, edit, die] of A3_ON) {
+    test(`5c A3 (c): ${what} -> exit 2 "${die}", exactly 3 spawns (-p, --v8-options x2), raw/ and dec/ empty`, TL_OPT, () => {
+        const c = withOpts(mkCase(), modOpts(edit)), O = join(c.dir, 'o');
+        const r = run(TOOL, c, B(c, O, []).concat(['a.mjs', 'a2.mjs']));
+        nv(r, die, what);
+        assert.equal(c.spawns().length, 3, `${what}: 3 spawns: ${JSON.stringify(c.spawns())}`);
+        assert.deepEqual(ls(join(O, 'raw')), [], 'raw/ empty'); assert.deepEqual(ls(join(O, 'dec')), [], 'dec/ empty');
+    });
+}
+const A3_CTL = [['unmodified fixture', (l) => {}], ['fixture minus :737-744 (header absent = off, Q-B62-TL)', (l) => { l.splice(736, 8); }]];
+for (const [what, edit] of A3_CTL) {
+    test(`5c A3 control: ${what} -> a verdict (exit 0 SAME)`, TL_OPT, () => {
+        const c = withOpts(mkCase(), modOpts(edit));
+        const r = run(TOOL, c, [...B(c, join(c.dir, 'o')), 'a.mjs', 'a2.mjs']);
+        code(r, 0, what); assert.equal(verdict(r), 'SAME', msg(r));
+    });
+}
+test('5c A3 (c) old twin: all five fixtures reach a verdict (exit 0 SAME) on 7c91d1c', { skip: OLDSKIP }, () => {
+    for (const [what, edit] of [...A3_ON.map(([w, e]) => [w, e]), ...A3_CTL]) {
+        const c = withOpts(mkCase(), modOpts(edit));
+        const r = run(oldRoot(), c, [...B(c, join(c.dir, 'o')), 'a.mjs', 'a2.mjs']);
+        code(r, 0, `old ${what}`); assert.equal(verdict(r), 'SAME', `old ${what}\n${msg(r)}`);
+    }
+});
+
+// ---- A4 (gate d, REPORTED): the real lowercase budget line ----
+const BUDL = ['> generated 13 nodes. regular_budget += 54 ~~> 54', '> generated 13 nodes. small_budget += 67 ~~> 67'];
+const MUB = (withB) => nl(TFC('m0', '1d86', ', mode: ConcurrencyMode::kSynchronous]', 'MAGLEV'), ...(withB ? BUDL : []),
+    '== Inlining 0x2a8c1dc1afb1 <SharedFunctionInfo l1>', TFD('m0', '1d86', 'MAGLEV'));
+const A4_NOTE = 'no Maglev budget counter in run 1';
+test('5c A4 (d): `generated N nodes. regular_budget / small_budget` lines -> two exact B rows, no NOTE, same VERDICT as without them', TL_OPT, () => {
+    const c = mkCase(MUB(true), MUB(true)), O = join(c.dir, 'o');
+    const r = run(TOOL, c, M5(c, O));
+    const c0 = mkCase(MUB(false), MUB(false));
+    const r0 = run(TOOL, c0, M5(c0, join(c0.dir, 'o')));
+    assert.equal(verdict(r), verdict(r0), msg(r)); assert.equal(r.status, r0.status);
+    assert.deepEqual(wl(join(O, 'bud', 'maglev.before.1.tsv')).filter((l) => l.startsWith('B\t')), ['B\tm0@ML\tregular\t54\t54', 'B\tm0@ML\tsmall\t67\t67']);
+    assert.equal(r.stdout.includes(A4_NOTE), false, `no budget-counter NOTE\n${msg(r)}`);
+});
+test('5c A4 (d) old twin: 7c91d1c emits 0 B rows and prints the "prints no Maglev budget counters" NOTE', { skip: OLDSKIP }, () => {
+    const c = mkCase(MUB(true), MUB(true)), O = join(c.dir, 'o');
+    const r = run(oldRoot(), c, M5(c, O));
+    assert.deepEqual(wl(join(O, 'bud', 'maglev.before.1.tsv')).filter((l) => l.startsWith('B\t')), []);
+    assert.ok(r.stdout.includes('prints no Maglev budget counters'), msg(r));
+});
+
+// ---- A5: spawns and retention ----
+test('5c A5: a normal run spawns exactly as many times as on 7c91d1c (regression pin: the gates add 0 spawns)', { skip: skip || OLDSKIP }, () => {
+    const c = mkCase(ML2('m0', 'l1', '1d86'), ML2('m0', 'l1', '1d86')), c2 = mkCase(ML2('m0', 'l1', '1d86'), ML2('m0', 'l1', '1d86'));
+    code(run(TOOL, c, M5(c, join(c.dir, 'o'))), 0, 'live'); code(run(oldRoot(), c2, M5(c2, join(c2.dir, 'o'))), 0, 'old');
+    assert.equal(c.spawns().length, c2.spawns().length, `live ${JSON.stringify(c.spawns())} vs old ${JSON.stringify(c2.spawns())}`);
+});
+test('5c A5: 20 cycles of the A1 refusal add 0 entries to TMPDIR or cwd (OUT never created)', TL_OPT, () => {
+    const c = mkCase(), O = join(c.dir, 'o');
+    const s0 = snap2(c, c.w);
+    for (let i = 0; i < 20; i++) {
+        const r = run(TOOL, c, M5(c, O, ['--v8-flags=--turbolev']));
+        assert.equal(r.status, 2, `cycle ${i}\n${msg(r)}`); assert.ok(r.stderr.includes('--v8-flags must not set'));
+    }
+    assert.deepEqual(snap2(c, c.w), s0, 'TMPDIR / cwd unchanged'); assert.equal(existsSync(O), false);
+    assert.equal(c.spawns().length, 40, '20 cycles x 2 spawns');
+});
+test('5c A5: 20 cycles of the A3 refusal on one OUT leave exactly raw dec bud ms stage + a 0-byte report.txt', TL_OPT, () => {
+    const c = withOpts(mkCase(), modOpts(A3_ON[0][1])), O = join(c.dir, 'o');
+    for (let i = 0; i < 20; i++) {
+        const r = run(TOOL, c, [...B(c, O), 'a.mjs', 'a2.mjs']);
+        assert.equal(r.status, 2, `cycle ${i}\n${msg(r)}`);
+    }
+    assert.deepEqual(ls(O), ['bud', 'dec', 'ms', 'raw', 'report.txt', 'stage']);
+    assert.equal(statSync(join(O, 'report.txt')).size, 0, 'report.txt stays 0 bytes');
 });

@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'inlining-budget-diff.sh');
-const CHECKS = 85;   // every `check` call in self_test(); a new check moves this literal (b62 G5a: 54 -> 64, G5b: 64 -> 72 -> 77 -> 81 -> 84 -> 85)
+const CHECKS = 89;   // every `check` call in self_test(); a new check moves this literal (b62 G5a: 54 -> 64, G5b: 64 -> 72 -> 77 -> 81 -> 84 -> 85, b65 G5c: 85 -> 89)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
 // The child env (deopt-diff-stage.test.mjs form): none of the 6 GIT_* location vars ref / file mode refuses, no editor vars,
@@ -64,7 +64,12 @@ test('inlining-budget-diff --self-test: an unmodified copy outside the repo pass
 // Mutants that survive the current self-test (no row, recorded in .handoff/NEXT.md): removing the
 // `cn = ""` reset on `Budget used:` (killable by a canned multi-round check: a target with no candidate
 // line after a new round) and turning lim()'s `printf -v "$1" '%s' "$v"` back into `eval "$1=\$v"`
-// (equivalent: `\$v` is never parsed twice). Both leave all 54 checks green.
+// (equivalent: `\$v` is never parsed twice). Both leave every check green (re-run at 89 checks, b65 G5c).
+// v8fl-check-after-mkdir moves v8fl_check below the mkdir; the Q-RL-TURBO 1 block between them is read from the root, so the
+// anchor still pins v8fl_check, that block and the mkdir as one adjacent run
+const IBD_ROOT_TEXT = readFileSync(SCRIPT, 'utf8');
+const IBD_MKDIR = 'mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage';
+const IBD_TL_BLOCK = IBD_ROOT_TEXT.slice(IBD_ROOT_TEXT.indexOf('# Turbolev on the command line (Q-RL-TURBO 1)'), IBD_ROOT_TEXT.indexOf(IBD_MKDIR));
 const MUTANTS = [
     ['multiset-sort-u', 'multiset() { sort | uniq -c; }', 'multiset() { sort -u; }',
         'multiset keeps call-site multiplicity'],
@@ -101,7 +106,7 @@ const MUTANTS = [
         'options: a newline in an input (--fn) is refused (exit 2, named die)'],
     ['no-flag-shape-check', '      [[ "$f" =~ ^--[^=]+=[0-9]{1,9}$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =N (an integer of 1..9 digits)" ;;', '      : ;;',
         'options: a --v8-flags shape token and a non-numeric limit value are refused (exit 2, named dies)'],
-    ['v8fl-check-after-mkdir', 'v8fl_check "$NODE_BIN"\nmkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage', 'mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage\nv8fl_check "$NODE_BIN"',
+    ['v8fl-check-after-mkdir', 'v8fl_check "$NODE_BIN"\n' + IBD_TL_BLOCK + IBD_MKDIR, IBD_TL_BLOCK + IBD_MKDIR + '\nv8fl_check "$NODE_BIN"',
         '--v8-flags: a refused node option (--snapshot-blob) exits 2 with a named die and OUT not created'],
     ['no-out-reuse-refusal', '    [[ -z "$n" ]] || die "--out: $OUT/$sub is not empty (give a new or empty DIR)"', '    true',
         '--out: a reused non-empty subdir is refused (exit 2, named die)'],
@@ -237,6 +242,15 @@ const MUTANTS = [
         'bytecode probe: digits then junk on a length line -> ?'],
     ['tear-length-no-cr', '[0-9]+\\r?$/ { torn = 1 }', '[0-9]+$/ { torn = 1 }',
         'bytecode probe: a CR-terminated length line still reads'],
+    // b65 G5c (Q-RL-TURBO 1-4): each drops one Turbolev mechanism; the budget regex goes back to its capital-G-only form
+    ['tl-no-cmdline-arm', '    --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)\n', '    --turbolev-OFF)\n',
+        '--v8-flags: --turbolev and --turbolev_future are refused by name'],
+    ['tl-no-default-on', '[[ $\'\\n\'"$LIMITS"$\'\\n\' != *$\'\\n\'turbolev=on$\'\\n\'* ]] || die "Turbolev is on by default', 'true || die "Turbolev is on by default',
+        'Turbolev: a --v8-options default of --turbolev is NO-VERDICT for every tier'],
+    ['tl-no-tf-unit-check', '    if [[ $ntf != 0 ]]; then\n', '    if false; then\n',
+        'Turbolev (fake node): maglev decision lines in TurboFan-tier units'],
+    ['budget-capital-g-only', 'else if (l ~ /^[Gg]enerated [0-9]+ nodes', 'else if (l ~ /^Generated [0-9]+ nodes',
+        "maglev: V8 14.6's lowercase '> generated N nodes. regular_budget' line"],
 ];
 
 // ---- Q-IBD-ENV (U3 B3): the top-of-file unset, seen from every node spawn ----
@@ -412,6 +426,22 @@ test('inlining-budget-diff -h: the bytecode probe temp file, its 64 KiB append, 
     assert.match(h, /\(not measured; the verdict is unmoved\); a failed node, tr or awk is a named die, exit 2 NO-VERDICT\n {4}\("bytecode probe of <fn>: <step> exited <rc>"\)\./);
     assert.match(h, /Bytecode probe temp file: a signal mid-probe can leave one inlining-budget-diff\.XXXXXX in\nTMPDIR; a TMPDIR that was full during the probe and freed before the 64 KiB append still passes that check/);
     assert.equal(countOf(knownLimitsParagraph(), 'Bytecode probe temp file:'), 1, 'the two probe limits sit in the Known limits paragraph');
+});
+
+test('inlining-budget-diff -h: the Turbolev refusals, header absent = off, the residual and the 14.6 budget line (b65 G5c)', { skip }, () => {
+    const h = helpText(SCRIPT);
+    assert.match(h, /every spelling \("--turbolev changes which tier --trace-maglev-inlining describes; unsupported"\);\n/);
+    assert.match(h, /--no-turbolev, --no-turbolev-future and the other turbolev tuning flags \(--max-turbolev-inline-depth=N\) pass\.\n/);
+    assert.match(h, /Also refused, exit 2: --turbolev or --turbolev-future in --v8-flags; a report\.txt under --out/);
+    assert.match(h, /Turbolev: when this node's --v8-options shows --turbolev or\n--turbolev-future on by default, or a listed default reads as neither on nor off, every tier is NO-VERDICT, exit 2\n/);
+    assert.match(h, /a refusal after the --out dir is\ncreated and before any driver spawn/);
+    assert.match(h, /A V8 that lists neither flag reads as off \(ruling Q-B62-TL\)/);
+    assert.match(h, /which --concurrent \(units carry no\ntag\) turns off\./);
+    assert.match(h, /The lowercase\n"generated N nodes\. regular_budget \+= B ~~> T" line is V8 14\.6's own/);
+    assert.equal(countOf(h, 'the SKIP / INLINE / budget-counter / colour / emoji formats'), 0, 'the pre-G5c canned-only sentence is gone');
+    const k = knownLimitsParagraph();
+    assert.equal(countOf(k, 'Turbolev:'), 1, 'the Turbolev limit sits in the Known limits paragraph');
+    assert.equal(countOf(k, 'exit 0'), 0, 'no exit 0 wording in Known limits');
 });
 
 for (const [name, from, to, failing] of MUTANTS) {

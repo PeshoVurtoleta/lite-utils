@@ -7,6 +7,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- G5c inlining-budget-diff (reading-list finding Q-RL-TURBO; Q-B62-TL). A Turbolev run is no longer mislabelled as
+  a Maglev one: V8 14.6 with Turbolev on prints TurboFan-tier (@TF) units under --trace-maglev-inlining, so the old
+  build compared them and could say SAME or DIFF about a different tier (MEASURED on real node v26.8.2: `--tiers
+  maglev --v8-flags=--turbolev` null pair, old and before builds exit 0 SAME with 11 @TF lines in
+  dec/maglev.before.1.tsv). Now: (1) `--v8-flags` with --turbolev or --turbolev-future (exact names,
+  `--turbolev_future` and every `=value` form too) is refused after v8fl_check and before any run, exit 2, named
+  reason; --no-turbolev, --no-turbolev-future and --max-turbolev-inline-depth=N pass. (2) When the captured
+  --v8-options shows Turbolev on by default (a V8 default flip; the check also holds under `--concurrent`, where
+  units carry no tag), or its default cannot be read (a row other than exactly on / off, e.g. `--turbolev-future`
+  under the --turbolev header), every tier is NO-VERDICT, exit 2, before any driver spawn (0 extra spawns; ref /
+  file mode leaves staged files, stated in -h). A V8 that lists neither flag reads as off (Q-B62-TL). (3) In tag
+  mode, any @TF / @TF-OSR unit in a maglev-tier dec file makes that tier NO-VERDICT with the count ("N decision
+  line(s) in TurboFan-tier (@TF) units (Turbolev?)"), never a DIFF; a unit merely named `TF` does not count. (4)
+  Doc truth: the lowercase V8 14.6 line `generated N nodes. regular_budget += B ~~> T` (printed for non-eager
+  Maglev inlining) is now read as a budget event (the regex took only capital G), so no "no budget counters" NOTE;
+  -h and the Known limits say so. `--self-test` 85 -> 89 checks (tl node default, @TF count 6 not 4, lowercase
+  budget, --v8-flags refusal). Gates: audit-g5 73 -> 98 tests (25 new 5c rows; all 11 gate rows red on the old
+  build 7c91d1c, 8 controls green, a real-node old-build twin opt-in via LITEUTILS_REAL_HOLD=1),
+  test/inlining-budget-diff.test.mjs CHECKS 85 -> 89 with 4 new MUTANTS (tl-no-cmdline-arm, tl-no-default-on,
+  tl-no-tf-unit-check, budget-capital-g-only), v8fl-check-after-mkdir re-anchored, a new -h phrase row, PARITY pin
+  e297d240. Tier: DETERMINISTIC (fake-node rows) plus MEASURED on real node v26.8.2 only: of 509 default-off bool
+  flags only --turbolev and --turbolev-future can turn Turbolev on (--future does not), and a Turbolev-off real
+  maglev + turbo run is SAME with 0 @TF lines. Limits: LEDGER #109. Other roots unchanged (bb f1070535, dd
+  2ce1d32e, alloc 195242d9, ic 50a6fc34); lib/ unchanged. Review r1 APPROVED. mawk / gawk / bash 5 / Linux:
+  UNPROVEN until CI.
 - G4 ic-diff (audit R13 = ICD-fable-1 / ICD-opus-1, R14 = ICD-fable-2 / ICD-opus-2, R26 = ICD-opus-3, R6 name guard;
   Q-B57-MINOR, Q-B57-FLAG, Q-B64-REPRO). R13 (Q-B57-MINOR, Opus form): V8 expands `%p` (pid), `%t` and `%%` in
   --logfile, so a `%` in the run dir (`--out DIR` or TMPDIR holding one) made the trace write elsewhere and the run

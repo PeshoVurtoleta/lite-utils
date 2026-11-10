@@ -27,7 +27,10 @@
 #                    measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
 #                    --snapshot-blob, ...), every string-valued V8 flag, the tool's own flags above, and any
 #                    *stress-concurrent-inlining* flag, every spelling (it implies --concurrent-recompilation in V8,
-#                    which overrides the script's --no-concurrent-recompilation), before any spawn.
+#                    which overrides the script's --no-concurrent-recompilation), before any spawn. Also refused,
+#                    exit 2 after that read and before the --out dir is created: --turbolev and --turbolev-future,
+#                    every spelling ("--turbolev changes which tier --trace-maglev-inlining describes; unsupported");
+#                    --no-turbolev, --no-turbolev-future and the other turbolev tuning flags (--max-turbolev-inline-depth=N) pass.
 #   --out DIR        artifact dir (default: $OUTDIR, else $TMPDIR/inl-diff-<timestamp>); always kept
 #                    Must be new or empty: a symlinked, non-writable or non-empty raw/ dec/ bud/ ms/ stage/ is refused, exit 2.
 #                    A refusal in ref / file mode can leave staged files in stage/, and a rerun needs a fresh --out.
@@ -65,8 +68,8 @@
 #     TurboFan charges only non-small inlines and skips a candidate SILENTLY when
 #     used + int(1.2 * (size + existing inlined size)) > 920 (V8 truncates the reserve; probed on
 #     node v26.8.2); those are listed as "dropped".
-#     Maglev on V8 <= 14.6 (node <= 26) prints no budget counters; newer V8 prints
-#     small_budget / regular_budget, which are reported when present.
+#     Maglev budget counters ("generated N nodes. small_budget / regular_budget += B ~~> T") are reported when
+#     present; V8 14.6 (node 26) prints them only for non-eager inlining.
 #   * "small" CROSSES lines: TurboFan is small at <= max-inlined-bytecode-size-small (30), or <= the heapnum
 #     limit (75) where a HeapNumber may cross the call; both are reported. Maglev's "greedy inlining ... small
 #     function" follows max-maglev-eager-inlined-bytecode-size (< 30): measured on node v26.8.2, the cutoff was 29,
@@ -96,17 +99,25 @@
 # set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make
 # a tracked --before read as untracked): each repo is found from its path. Driver mode does not read them.
 # Ref mode (--before-ref) is frozen by construction.
-# Newer V8 (> 14.6): the SKIP / INLINE / budget-counter / colour / emoji formats are verified only
-# against canned sample text in --self-test, not against a real newer node binary.
+# Newer V8 (> 14.6): the SKIP / INLINE / colour / emoji formats and the capital-G "Generated N nodes." budget counter are
+# verified only against canned sample text in --self-test, not against a real newer node binary. The lowercase
+# "generated N nodes. regular_budget += B ~~> T" line is V8 14.6's own (node v26.8.2, non-eager inlining).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
 # Known limits: a refusal after the --out dir is created (a wrong mode combination or driver count, a DRIVER_BEFORE /
 # DRIVER_AFTER path or --before / --after not found, an unknown --before-ref) leaves empty raw/ dec/ bud/ ms/ stage/ and
 # a 0-byte report.txt there, and a rerun on that OUT is accepted; a refusal after files were staged (ref / file mode: an
 # unknown --after-ref, a bad --driver) and a run that fails later (raw/ and report.txt partly written) leave a non-empty
 # subdir, so a rerun on that OUT is refused. A refusal before the first write (an unknown option, a bad --runs or --fn,
-# --v8-flags, the --out checks) leaves OUT as it was. Driver output glued to a V8 compile line is a real case: it was
+# --v8-flags, the --out checks) leaves OUT as it was. Turbolev: when this node's --v8-options shows --turbolev or
+# --turbolev-future on by default, or a listed default reads as neither on nor off, every tier is NO-VERDICT, exit 2
+# ("Turbolev is on by default in this V8" / "cannot read the --turbolev default"), a refusal after the --out dir is
+# created and before any driver spawn (driver mode leaves the empty subdirs above; ref / file mode also its staged files).
+# A V8 that lists neither flag reads as off (ruling Q-B62-TL); if such a V8 runs Turbolev anyway, the maglev tier is
+# NO-VERDICT only through its check for decision lines in TurboFan-tier (@TF) units, which --concurrent (units carry no
+# tag) turns off. Driver output glued to a V8 compile line is a real case: it was
 # observed on node v26.8.2 in front of a Maglev OSR compile; a glued TurboFan header is UNVERIFIED (never observed on a
-# real node). Also refused, exit 2: a report.txt under --out that is a symlink, not a regular writable file or hard-linked
+# real node). Also refused, exit 2: --turbolev or --turbolev-future in --v8-flags; a report.txt under --out that is a
+# symlink, not a regular writable file or hard-linked
 # elsewhere; an fn or tier given twice; --before and --after the same file; an empty value on a value option; --runs of
 # more than 2 digits (even 003); a failed <node> -p probe; a value on -h, --help, --self-test, --only-fn, --concurrent or
 # --no-bytecode ("<flag> takes no value"); an empty --tiers; a backslash in --out, or in the current directory for a relative
@@ -242,7 +253,7 @@ tier == "maglev" {
   else if (l ~ /^cannot inline /) { greedy = 0; ev("X\t" unit "\t" sfi(l) "\t" reason_of(l)) }
   else if (l ~ /^INLINE /) { ev("I\t" unit "\t" f[2] "\t" eager); if (eager) l = "INLINE(eager)" substr(l, 7) }
   else if (l ~ /^SKIP /) ev("X\t" unit "\t" f[2] "\t" substr(l, length(f[2]) + 7))
-  else if (l ~ /^Generated [0-9]+ nodes\. (small|regular)_budget \+= [0-9]+ ~~> [0-9]+/)
+  else if (l ~ /^[Gg]enerated [0-9]+ nodes\. (small|regular)_budget \+= [0-9]+ ~~> [0-9]+/)
     ev("B\t" unit "\t" (l ~ /small_budget/ ? "small" : "regular") "\t" f[6] "\t" f[8])
   else if (l ~ /^(Small|Main) budget exhausted/) ev("E\t" unit "\t" f[1])
   n = norm_maglev(l)
@@ -336,6 +347,29 @@ want && /^Bytecode length: [0-9]+/ { v = $3 + 0; if (!(v in seen)) { seen[v] = 1
 /^Bytecode length:/ { if (!pend) torn = 1; pend = 0 }
 END { if (pend) torn = 1; out = ""; for (i = 1; i <= nv; i++) out = out (out == "" ? "" : ",") ord[i]; print (torn ? "?" : out) }   # first-seen order
 '
+
+# Turbolev default (Q-RL-TURBO 2), read from the same --v8-options capture (0 extra spawns): one row turbolev=on|off|?,
+# none when neither `  --turbolev (` nor `  --turbolev-future (` is listed (absent = off, ruling Q-B62-TL). Per header, its
+# first default: line before the next `  --` header, trailing spaces / CR trimmed: the flag's own --name or true = on,
+# --no-name or false = off, any other text or no default line = ?. Any on -> on, else any ? -> ?, else off. Put in FRONT
+# of the limit rules (they `next` past their own headers, which must still close a Turbolev section); tl_* names only.
+# shellcheck disable=SC2016
+LIMITS_AWK='
+/^  --/ { tl_k = "" }
+/^  --turbolev(-future)? \(/ { tl_k = $1; tl_v[tl_k] = "?"; tl_n++ }
+tl_k != "" && !/^  --/ && index($0, "default:") {
+  tl_s = substr($0, index($0, "default:") + 8); sub(/^ +/, "", tl_s); sub(/[ \r]+$/, "", tl_s)
+  tl_v[tl_k] = (tl_s == tl_k || tl_s == "true") ? "on" : (tl_s == "--no-" substr(tl_k, 3) || tl_s == "false") ? "off" : "?"
+  tl_k = ""
+}
+END {
+  if (tl_n) {
+    tl_o = "off"
+    for (tl_k in tl_v) { if (tl_v[tl_k] == "on") tl_o = "on"; else if (tl_v[tl_k] == "?" && tl_o != "on") tl_o = "?" }
+    print "turbolev=" tl_o
+  }
+}
+'"$LIMITS_AWK"
 
 # bud(before run 1) + bud(after run 1) -> per-unit budget rows (TSV) for every unit
 # shellcheck disable=SC2016
@@ -640,7 +674,7 @@ EOF
     "$(awk -F '\t' '$1=="before"{print $13}' "$d/b4.tsv")" "MISMATCH(model 100 < printed 500)"
   local fk="$d/fake" rc2
   mkdir -p "$fk"
-  printf '%s\n' '#!/bin/sh' 'case "$1" in --v8-options) echo "  --turbofan (enable TurboFan)"; echo "        type: bool  default: --turbofan"; echo "  --stack-size (stack size)"; echo "        type: int  default: --stack-size=984"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; exit 0 ;; -p) echo "v0 (V8 0)"; exit 0 ;; esac' \
+  printf '%s\n' '#!/bin/sh' 'case "$1" in --v8-options) echo "  --turbofan (enable TurboFan)"; echo "        type: bool  default: --turbofan"; echo "  --stack-size (stack size)"; echo "        type: int  default: --stack-size=984"; echo "  --max-inlined-bytecode-size (maximum size of bytecode for a single inlining)"; echo "        type: int  default: --max-inlined-bytecode-size=460"; echo "  --turbolev (enable Turbolev)"; echo "        type: bool  default: --no-turbolev"; echo "  --turbolev-future (enable future Turbolev features)"; echo "        type: bool  default: --no-turbolev-future"; exit 0 ;; -p) echo "v0 (V8 0)"; exit 0 ;; esac' \
     'for a; do last="$a"; done' 'cat "$last"' >"$fk/node"
   chmod +x "$fk/node"
   if command -v git >/dev/null 2>&1; then
@@ -812,6 +846,25 @@ EOF
   check "guard (fake node): an aborted TurboFan compile of m0 is no evidence: NO-VERDICT" "$(fkr r15c turbo m0 cc.trace cc.trace)" "$NV"
   check "guard (fake node): another unit's completion (or a non-OSR completion of an OSR unit) does not complete m0: NO-VERDICT" \
     "$(fkr r15d turbo m0 cd.trace cd.trace)/$(fkr r15e turbo m0 ce.trace ce.trace)" "$NV/$NV"
+
+  # b65 G5c rows (Q-RL-TURBO, Q-B62-TL): --turbolev on the command line is refused by name; a --v8-options default of
+  # --turbolev refuses every tier before any driver spawn; a maglev decision line in a TurboFan-tier unit is NO-VERDICT;
+  # V8 14.6's lowercase `generated N nodes.` line is a budget event (the fake node lists both Turbolev flags, default off)
+  check "--v8-flags: --turbolev and --turbolev_future are refused by name (exit 2, OUT not created); --no-turbolev passes (SAME)" \
+    "$(refusal "$d" 'must not set --turbolev: --turbolev changes which tier --trace-maglev-inlining describes; unsupported' "${A[@]}" --v8-flags=--turbolev --out "$d/o-tl1" "$fk/before.trace" "$fk/same.trace")|$([[ -e "$d/o-tl1" ]] && echo present || echo absent)/$(refusal "$d" 'must not set --turbolev_future: --turbolev changes' "${A[@]}" --v8-flags=--turbolev_future --out "$d/o-tl2" "$fk/before.trace" "$fk/same.trace")/$(refusal "$d" '^VERDICT SAME$' "${A[@]}" --v8-flags=--no-turbolev --out "$d/o-tl3" "$fk/before.trace" "$fk/same.trace")" "2|1|absent/2|1/0|1"
+  mkdir -p "$d/tl"; sed 's/default: --no-turbolev"/default: --turbolev"/' "$fk/node" >"$d/tl/node"; chmod +x "$d/tl/node"
+  check "Turbolev: a --v8-options default of --turbolev is NO-VERDICT for every tier before any driver spawn (exit 2, raw/ dec/ empty)" \
+    "$(refusal "$d" 'Turbolev is on by default in this V8 (--v8-options)' "${A[@]}" --node "$d/tl/node" --out "$d/o-tlon" "$fk/before.trace" "$fk/same.trace")|$(find "$d/o-tlon/raw" "$d/o-tlon/dec" -type f | wc -l | tr -d ' ')" "2|1|0"
+  local MLC="${TC/TURBOFAN_JS/MAGLEV}" MLE="${TE/TURBOFAN_JS/MAGLEV}" MLI='== Inlining 0x3 <SharedFunctionInfo l1>' HQI='== Inlining 0x7 <SharedFunctionInfo q>'
+  local HTC='[compiling method 0x5 <JSFunction hot (sfi = 0x6)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]'
+  local HTE='[completed compiling 0x5 <JSFunction hot (sfi = 0x6)> (target TURBOFAN_JS) - took 0.1, 0.1, 0.1 ms]'
+  printf '%s\n' "$MLC" "$MLI" "$MLI" "$MLE" "$HTC" "$HQI" "$HQI" "$HTE" >"$fk/tf1.trace"
+  printf '%s\n' "$MLC" "$MLI" "$MLI" "$MLE" "${HTC/), mode:/) OSR, mode:}" "$HQI" "${HTE/) - took/) OSR - took}" >"$fk/tf2.trace"
+  check "Turbolev (fake node): maglev decision lines in TurboFan-tier units (@TF before, @TF-OSR after) are NO-VERDICT and counted, never a DIFF" \
+    "$(fkr tfa maglev m0 tf1.trace tf2.trace)|$(grep -cxF '=== maglev: NO-VERDICT -- 6 decision line(s) in TurboFan-tier (@TF) units (Turbolev?)' "$d/fkr-tfa.out" || true)" "2|VERDICT NO-VERDICT||1"
+  printf '%s\n' "$MLC" '> generated 13 nodes. regular_budget += 54 ~~> 54' "$MLE" >"$d/lg"
+  awk -v tier=maglev -v tag=1 -v dec="$d/lg.dec" -v bud="$d/lg.bud" "$NORMALIZE_AWK" "$d/lg"
+  check "maglev: V8 14.6's lowercase '> generated N nodes. regular_budget' line is a budget event of its unit" "$(grep '^B' "$d/lg.bud" | cut -f2-)" "$(printf 'm0@ML\tregular\t54\t54')"
 
   # b62 G5b rows (audit R2, Q-B57-PIPE, Q-B60-TMPFULL): the bytecode probe reads a regular temp file, appends 64 KiB, removes it
   local bq bs=""
@@ -1055,6 +1108,15 @@ OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; d
 # bad --out with 0 spawns; a path only mkdir can see through (ENAMETOOLONG) still takes these 2 spawns (LEDGER #76)
 NODE_V=$(env -u NODE_OPTIONS "$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"') || die "cannot run $NODE_BIN -p"
 v8fl_check "$NODE_BIN"
+# Turbolev on the command line (Q-RL-TURBO 1): exact names only, every =value form too; --no-turbolev* and the other
+# *turbolev-* tuning flags (--max-turbolev-inline-depth=N, ...) pass. After v8fl_check, before the first write.
+for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
+  g="${f//_/-}"
+  case "$g" in
+    --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)
+      die "--v8-flags must not set $f: --turbolev changes which tier --trace-maglev-inlining describes; unsupported" ;;
+  esac
+done
 mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage
 OUT=$(cd "$OUT" && pwd)
 REPORT="$OUT/report.txt"; : >"$REPORT"
@@ -1178,6 +1240,11 @@ lim SCALE reserve-inline-budget-scale-factor 1.2
 lim MG_SMALL max-maglev-inlined-bytecode-size-small 27; lim MG_ONE max-maglev-inlined-bytecode-size 100
 lim MG_EAGER max-maglev-eager-inlined-bytecode-size 30
 lim MG_CUM max-maglev-inlined-bytecode-size-cumulative 920
+# Turbolev on by default (Q-RL-TURBO 2): every tier NO-VERDICT before any driver spawn; a row other than on / off fails closed
+if [[ $'\n'"$LIMITS"$'\n' == *$'\n'turbolev=* ]]; then
+  [[ $'\n'"$LIMITS"$'\n' != *$'\n'turbolev=on$'\n'* ]] || die "Turbolev is on by default in this V8 (--v8-options): --trace-maglev-inlining may describe TurboFan-tier units; every tier is NO-VERDICT"
+  [[ $'\n'"$LIMITS"$'\n' == *$'\n'turbolev=off$'\n'* ]] || die "cannot read the --turbolev default in --v8-options: every tier is NO-VERDICT"
+fi
 
 # ---------------------------------------------------------------------------------------------
 # run
@@ -1266,6 +1333,15 @@ for tier in "${TIER_LIST[@]}"; do
     say "=== $tier: NO-VERDICT -- the trace has no inlining decisions at all$hint"
     VERDICT=NO-VERDICT; say ""; continue
   fi
+  # Turbolev (Q-RL-TURBO 3): a TurboFan-tier unit in a maglev trace means --trace-maglev-inlining described a TF compile
+  if [[ $tier == maglev && $TAG == 1 ]]; then
+    ntf=$(awk -F '\t' '$1 ~ /@TF(-OSR)?(#[0-9]+)?$/ { n++ } END { print n + 0 }' "$OUT"/dec/maglev.*.tsv) \
+      || die "cannot scan $OUT/dec for TurboFan-tier units in the maglev trace"
+    if [[ $ntf != 0 ]]; then
+      say "=== maglev: NO-VERDICT -- $ntf decision line(s) in TurboFan-tier (@TF) units (Turbolev?)"
+      VERDICT=NO-VERDICT; say ""; continue
+    fi
+  fi
 
   say "=== $tier"
   # guard: every run must carry evidence about each fn
@@ -1321,7 +1397,7 @@ for tier in "${TIER_LIST[@]}"; do
     say "  NOTE budget model MISMATCH (see budget.$tier.tsv): V8 printed more than the summed inline sizes (REPORTED; verdict unaffected)"
   fi
   if [[ $tier == maglev ]] && ! grep -q '^B' "$OUT/bud/maglev.before.1.tsv" "$OUT/bud/maglev.after.1.tsv" 2>/dev/null; then
-    say "  (this V8 prints no Maglev budget counters: regular/small show '-'; sizes and limits below still apply)"
+    say "  (no Maglev budget counter in run 1 (V8 14.6 prints them only for non-eager inlining): regular/small show '-'; sizes and limits below still apply)"
   fi
   say ""
 done

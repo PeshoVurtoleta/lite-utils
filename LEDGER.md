@@ -24,14 +24,14 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 3. **Refuse before the first spawn or write.** Every unverified input (node binary, `--out`, symlinks, hard links)
    is refused exit 2 with 0 spawns; accepting it and failing later is a fail-open. A `--v8-flags` refusal comes at
    the latest after one `--v8-options` read (#10, #33; gap #66). *(#2, #3, #21, #22,
-   #24, #26, #27, #29, #31, #93, #99)*
+   #24, #26, #27, #29, #31, #93, #99, #107; gap #109 d)*
 4. **Allowlist, never denylist.** A denylist of dangerous flags missed one (`--run`, `--prof`, `--report-*`,
    `--require-module`); the runtime V8 allowlist is the winner, and its one known gap is recorded, not hidden.
    *(#6, #8, #9, #22, #66)*
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -548,6 +548,38 @@ form (law 7; memory `ci-ubuntu-uutils-userland`). Counts: fillers 26/26, audit-g
 1 skip (opt-in A8), unchanged. Evidence: those CI runs; `.handoff/RULINGS-b65-ci.md`, `.handoff/evidence/b65-ci/`
 (local, untracked).
 
+**#107 G5c inlining-budget-diff (b65, Q-RL-TURBO / Q-B62-TL): four mechanisms and what proves each.** Before build
+= commit f23b6c6 / root sha256/8 74c2fcb5 (src 520b96e3); after = root e297d240 (src 61a570cb); old for the gates =
+7c91d1c / dc5927cc. Other roots unchanged; lib/ unchanged (lib/v8flags.sh stays as is: deopt-diff is stable under
+Turbolev). Local darwin, bash 3.2.57, BSD awk, node v26.8.2 (V8 14.6.202.34). (a) Command line (ruling 1):
+--turbolev and --turbolev-future, with `-` or `_` and any `=value`, are refused by exact name after v8fl_check and
+before mkdir (exit 2, 0 spawns beyond node's two setup spawns, OUT absent). A glob `*turbolev*` was rejected: it
+refuses --no-turbolev and --max-turbolev-inline-depth. MEASURED by the reviewer on real node: of 509 default-off
+bool flags only these two turn Turbolev on (--future does not), so the exact-name arm leaves no gap on that node.
+Proof: self-test row, audit-g5 gate rows red on 7c91d1c, mutants tl-no-cmdline-arm, `glob`, `before v8fl_check` (B1
+mutants, spawns 0). (b) Default (ruling 2): tl_* awk rules read the --v8-options row of each flag from the same
+capture (0 extra spawns); a default token counts only for its own flag, a header line containing `default:` is not
+its default line, `--turbolev-future` under the --turbolev header reads `?`, CR is stripped, `true` / `false` count
+as on / off. on -> die "Turbolev is on by default in this V8", any row but exactly on / off -> die "cannot read the
+--turbolev default", both exit 2 before any driver spawn, every tier NO-VERDICT; neither flag listed -> off. Proof:
+audit-g5 A3 rows (on, on-with-future, :738 deleted; controls unmodified and header absent); the CR strip and the
+`true` / `false` arms by a BSD awk hand check only (no committed row, #109 c), mutants tl-no-default-on and `?`
+read as off. (c) Tag mode (ruling 3): in the maglev tier, count dec lines whose unit matches
+`/@TF(-OSR)?(#[0-9]+)?$/`; any count != "0" -> `=== maglev: NO-VERDICT -- N decision line(s) in TurboFan-tier (@TF)
+units (Turbolev?)`, no "all decision lines:" list; an awk failure dies. The row proves the exact count (2 @TF lines
+per before run + 1 @TF-OSR line per after run, x 2 runs = 6 lines, where `/@TF$/` would read 4). Proof:
+tl-no-tf-unit-check and B1 mutants /@TF$/ (OSR variant DIFF rc 1) and unanchored /TF/ (control fn named TF
+NO-VERDICT). MEASURED on the old twin (B0, real node): --turbolev null pair gave SAME with 11 @TF lines; new build
+exit 2. (d) Doc truth (ruling 4): the budget regex accepts `^[Gg]enerated`; the V8 14.6 lowercase line gives `B
+m0@ML regular 54 54` and `small 67 67`, no NOTE (old: 0 B rows plus the NOTE). -h and the Known limits were
+reworded (the `Newer V8` sentence stays: the capital-G format is canned-sample only). Proof: budget-capital-g-only,
+B1 mutants ^Generated and ^generated (self-test "newer-V8 regular_budget event" fails), a new -h phrase row. Rules
+sit in FRONT of the shared LIMITS_AWK (#108 c). Counts: --self-test 85 -> 89 (the 4 new rows: v8-flags refusal, tl
+default, @TF count, lowercase budget); audit-g5 73 -> 98 tests (25 new: 11 gate rows red on 7c91d1c, 8 controls
+green, 6 old twins, one of them the real-node twin opt-in via LITEUTILS_REAL_HOLD=1, Q-B62-A5). Normal-run spawns
+unchanged (9, cmp-equal to the 74c2fcb5 golden); census [2,5,{1,2,0,2}] unchanged. Evidence:
+.handoff/evidence/b65-g5c/ (local, untracked); .handoff/PLAN-b62-g5c.md.
+
 ---
 
 ## D. Test-gate lessons
@@ -727,6 +759,25 @@ label says `o%pz` but its body checks no argv; :204 still says `--out o%pz` (fix
 the "no <d>/o<digits>z" in the :165 label); :35 a timing comment with no provenance (mark PRELIMINARY or remove);
 test/ic-diff.test.mjs:462 comment credits mut-b1 for all 9 mutants. Evidence: .handoff/lanes/g4/evidence/
 REVIEW-b64-g4-r1.md, REVIEW-b64-g4-r2.md (local, untracked).
+
+**#108 G5c: defects and gate lessons the unit caught.** (a) The MUTANT `v8fl-check-after-mkdir` matched 0 times
+(before B2 re-anchored it) once the task-1 --v8-flags block sat between `v8fl_check` and `mkdir`: a mutant whose
+anchor matches nothing went red as a stale anchor (B1: 1 of its 3 red tests, a test-owned fix by the next batch).
+Fix: anchor on v8fl_check + the task-1 block (sliced from the root text) + mkdir, moved as one adjacent run; red
+evidence got 2|1|present (want absent). Lesson: a new block between two anchored lines breaks every mutant anchored
+across them; run the mutant table after each source hunk. (b) The dropped-`$` mutant of `/@TF(-OSR)?(#[0-9]+)?$/`
+SURVIVES every committed row: it can only misread a function named like `x@TF`, giving a false NO-VERDICT (fails
+closed); not fixed, FILLER (#109 b). Lesson: a survivor is recorded with its direction (here fail closed), never
+silently accepted. (c) Decision (coder, plan silent): the tl_* rules are PREPENDED to LIMITS_AWK, not appended: the
+limit rules `next` past their own header lines, so appended rules never see the max-* header that must close a
+Turbolev section (a default token would bleed into the next flag). Related: a default token counts only for its own
+flag, and a header line containing `default:` is not its default line. (d) Fake node lists --turbolev and
+--turbolev-future default off, so every older row still reads Turbolev off; the on case uses a sed copy with
+`default: --turbolev`. (e) The PARITY pin (deopt-diff-boundary.test.mjs:603 and the fillers-final copy) moved
+74c2fcb5 -> e297d240 (one line of that file; the fillers-final copy was red too, B1 557 / 558). (f) Reviewer r1
+APPROVED, no blockers; every plan mutant is killed by a committed test except the `$` drop. Review shas: src
+61a570cb, root e297d240, ibd test 08cbf657, deopt-diff-boundary 1fc4ee68, audit-g5 4be52244 (then a comment-only
+fix). Test of the gate, per law 6: every one of the 11 gate rows fails on 7c91d1c.
 
 ---
 
@@ -1089,3 +1140,17 @@ reviewer (Phase 7), Q-B65-SIGTERM. (b) READ: bb's refusal text "(as `node --vers
 (src/bytecode-budget.sh:852) is false for prerelease nodes (v27.0.0-alpha.0.0.0 is refused); FILLER for Phase 7,
 Q-B65-NODEPRE. (c) UNPROVEN until the next ubuntu CI run: the bash 5 branch of A3 and the pad fix of #105 (a) (no bash
 5 or Linux here).
+
+**#109 G5c open limits.** Measured, read or argued is stated per item. (a) ARGUED: a V8 that drops --turbolev from
+--v8-options (or lists it under a name this build does not read) while `--concurrent` is on gives units with no
+tag, so neither the default check nor the @TF count fires; -h says the maglev tier is NO-VERDICT only through its
+check for decision lines in TurboFan-tier (@TF) units, which --concurrent turns off. The turbo tier under an
+always-on Turbolev is unverified. Not reproduced (no such V8). (b) MEASURED survivor: the `$` of
+`/@TF(-OSR)?(#[0-9]+)?$/` dropped survives; the direction is a false NO-VERDICT for a function named like `x@TF`
+(fail closed). FILLER: a self-test row for a function named `x@TF`. (c) No committed row for the CR strip or the
+`true` / `false` arms of the turbolev awk (hand-checked on BSD awk only, B1 A3 "by awk alone"); dropping one dies
+"cannot read", fails closed. (d) READ: in ref / file mode the default-on refusal leaves staged files in stage/
+(modes.sh runs before the limits read); a rerun needs a fresh --out, stated in -h. (e) UNPROVEN until CI: mawk,
+gawk, bash 5 and Linux (everything above ran on BSD awk, bash 3.2.57, macOS); the real-node old twin is opt-in only
+(LITEUTILS_REAL_HOLD=1). (f) MEASURED only on node v26.8.2: a Turbolev-off real maglev + turbo run is SAME with 0
+@TF lines (no false NO-VERDICT there); node 22 / 24 are not run (UNPROVEN).
