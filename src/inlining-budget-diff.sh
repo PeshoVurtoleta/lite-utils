@@ -15,7 +15,9 @@
 #   --only-fn        narrow the verdict to lines that name <fn> or were made while compiling <fn> itself
 #                    (blind to <fn>'s callees once <fn> is inlined into a caller; the default is not)
 #   --concurrent     keep V8's concurrent recompilation (default: off, so compiles are synchronous)
-#   --driver FILE    ref/file modes: driver importing './Signal.js' (default: the inline-diff driver)
+#   --driver FILE    ref/file modes: driver importing './Signal.js' (default: the inline-diff driver). The import check
+#                    strips // and /* */ comments and needs import, from or require before the quoted './Signal.js' on
+#                    one line: a plain string holding that text passes it (Known limit); a mention in a comment is refused.
 #   --repo DIR       ref mode: the git repo (default: the repo around the current directory)
 #   --node BIN       node binary (default: $NODE, else node)
 #   --v8-flags STR   extra V8 flags for BOTH sides, e.g. "--max-maglev-inlined-bytecode-size=120"
@@ -23,7 +25,9 @@
 #                    --noflag), numeric as --flag=N -- except log / trace / print / prof / perf / dump / snapshot
 #                    / file flags. Refused, exit 2 at the latest after one --v8-options read and before any
 #                    measured run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
-#                    --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
+#                    --snapshot-blob, ...), every string-valued V8 flag, the tool's own flags above, and any
+#                    *stress-concurrent-inlining* flag, every spelling (it implies --concurrent-recompilation in V8,
+#                    which overrides the script's --no-concurrent-recompilation), before any spawn.
 #   --out DIR        artifact dir (default: $OUTDIR, else $TMPDIR/inl-diff-<timestamp>); always kept
 #                    Must be new or empty: a symlinked, non-writable or non-empty raw/ dec/ bud/ ms/ stage/ is refused, exit 2.
 #                    A refusal in ref / file mode can leave staged files in stage/, and a rerun needs a fresh --out.
@@ -38,15 +42,25 @@
 #     greedy inlining / cannot inline, and on newer V8 SKIP / INLINE / budget exhausted. Same line
 #     set as lite-signal 1.6.0-dev bench/inline-diff.mjs, plus the unit tag and the newer format.
 #   * Compared as a MULTISET (sort | uniq -c, never sort -u): inlined at 2 sites -> 1 site is a DIFF.
-#   * Guard: a run with no line naming <fn> (and no compile of <fn>) is NO-VERDICT, never "identical".
+#   * Guard: a run with no decision line naming <fn> and no completed compile of <fn> by that tier (a unit that
+#     reached `[completed compiling`; an aborted compile is no evidence) is NO-VERDICT, never "identical".
+#     --concurrent attributes no compile, so there only a decision line counts.
 #     The default scope is the whole trace, so the diff is printed once per tier for all <fn>;
 #     --only-fn gives one diff per <fn>.
 #   * Null control: all before runs must match each other, and all after runs, else NO-VERDICT.
 #   * A driver that exits non-zero, or a tier that prints no trace at all, is NO-VERDICT.
 #   * Driver output glued to a V8 compile line (no newline before it) is NO-VERDICT, exit 2; not checked under --concurrent.
+#   * Without --concurrent, a run whose trace has a line starting `[compiling method ` with ConcurrencyMode::kConcurrent
+#     is NO-VERDICT, exit 2 ("background compile (--no-concurrent-recompilation overridden by a V8 flag implication)": a
+#     compile off the main thread makes the trace a race). Only compile lines count: `[marking ...` says kConcurrent on every run.
 #
 # Budget report (REPORTED from run 1, NEVER part of the verdict):
 #   * bytecode length of each <fn> (from --print-bytecode; a torn stream prints ?) and every limit it crosses;
+#     node's stdout and stderr go to one temp file per side, ${TMPDIR:-/tmp}/inlining-budget-diff.XXXXXX, never to a pipe
+#     (V8's writes to a full pipe are dropped while the run ends cleanly). The file is read after node ends, then 64 KiB
+#     of spaces are appended to it and it is removed. A failed mktemp or append prints "(<step> exited N)" for that side
+#     (not measured; the verdict is unmoved); a failed node, tr or awk is a named die, exit 2 NO-VERDICT
+#     ("bytecode probe of <fn>: <step> exited <rc>").
 #   * per compile unit that involves <fn>: inlines, bytes charged and the cumulative budget.
 #     TurboFan charges only non-small inlines and skips a candidate SILENTLY when
 #     used + int(1.2 * (size + existing inlined size)) > 920 (V8 truncates the reserve; probed on
@@ -78,7 +92,9 @@
 # refused with NO-VERDICT when it, or the end of its symlink chain, is git-tracked, or when it is the
 # same file (device:inode) as a tracked <top>/Signal.js or <top>/<same name>, <top> = the repo around
 # the current directory, around --after, around --before and its link target, and --repo. A hard
-# link made from outside all of those repos is NOT detected. File mode needs git for this check.
+# link made from outside all of those repos is NOT detected. File mode needs git for this check. Ref and file modes refuse a
+# set GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES (each can make
+# a tracked --before read as untracked): each repo is found from its path. Driver mode does not read them.
 # Ref mode (--before-ref) is frozen by construction.
 # Newer V8 (> 14.6): the SKIP / INLINE / budget-counter / colour / emoji formats are verified only
 # against canned sample text in --self-test, not against a real newer node binary.
@@ -92,7 +108,16 @@
 # observed on node v26.8.2 in front of a Maglev OSR compile; a glued TurboFan header is UNVERIFIED (never observed on a
 # real node). Also refused, exit 2: a report.txt under --out that is a symlink, not a regular writable file or hard-linked
 # elsewhere; an fn or tier given twice; --before and --after the same file; an empty value on a value option; --runs of
-# more than 2 digits (even 003); a failed <node> -p probe.
+# more than 2 digits (even 003); a failed <node> -p probe; a value on -h, --help, --self-test, --only-fn, --concurrent or
+# --no-bytecode ("<flag> takes no value"); an empty --tiers; a backslash in --out, or in the current directory for a relative
+# --out; an = in the resolved node path; a DRIVER_BEFORE / DRIVER_AFTER whose directory does not resolve to the file named (a
+# symlink before '..'). Bytecode probe temp file: a signal mid-probe can leave one inlining-budget-diff.XXXXXX in
+# TMPDIR; a TMPDIR that was full during the probe and freed before the 64 KiB append still passes that check, so a cut
+# stream can read as a shorter length. Bytecode probe tear: driver output (a Worker's writes, say) interleaved with the
+# --print-bytecode text prints ? for that side on a glued or broken header, a length line that is not exactly
+# "Bytecode length: <digits>", a header with no length before the next header or EOF, or an orphan length; a driver
+# write that starts with a newline, or with digits then a newline, inside or right after a length's digits is not
+# detected: the length reads short or as other digits.
 
 unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
@@ -112,13 +137,32 @@ function sfi(s,   i, r, j) {                     # first <SharedFunctionInfo NAM
   r = substr(r, 2); j = index(r, ">"); return (j > 0) ? substr(r, 1, j - 1) : "?"
 }
 function num_after(s, re, skip) { return match(s, re) ? substr(s, RSTART + skip, RLENGTH - skip) : "" }
+function addr(l,   o, c) {                       # collapse V8 addresses only: a 0x at line start or after a space, { or (
+  # (the only address contexts in real traces; Q-B62-ADDR); after any other byte, ASCII or not, it is part of a name (h0x1)
+  o = ""
+  while (match(l, /0x[0-9a-fA-F]+/)) {
+    c = (RSTART > 1) ? substr(l, RSTART - 1, 1) : ""
+    o = o substr(l, 1, RSTART - 1) ((c == "" || c == " " || c == "{" || c == "(") ? "0x" : substr(l, RSTART, RLENGTH))
+    l = substr(l, RSTART + RLENGTH)
+  }
+  return o l
+}
+# unit key of a compile line, its completion and its abort: <JSFunction NAME (sfi = A)> (target X), plus " OSR" when it
+# follows (an OSR and a non-OSR unit of one function never share a key); "" when the line has no such text
+function ukey(s,   i, j) {
+  i = index(s, "<JSFunction "); if (i == 0) return ""
+  s = substr(s, i); j = index(s, "> (target "); if (j == 0) return ""
+  i = index(substr(s, j + 10), ")"); if (i == 0) return ""
+  j = j + 9 + i
+  return substr(s, 1, j) ((substr(s, j + 1, 4) == " OSR") ? " OSR" : "")
+}
 function norm_turbo(l) {
-  gsub(/0x[0-9a-fA-F]+/, "0x", l); gsub(/#[0-9]+/, "#N", l)
+  l = addr(l); gsub(/#[0-9]+/, "#N", l)
   gsub(/frequency [0-9.eE+-]+/, "frequency F", l); gsub(/took [0-9.]+ ?ms/, "took T ms", l)
   return l
 }
 function norm_maglev(l) {
-  gsub(/0x[0-9a-fA-F]+/, "0x", l); gsub(/frequency \([0-9.eE+-]+\)/, "frequency (F)", l)
+  l = addr(l); gsub(/frequency \([0-9.eE+-]+\)/, "frequency (F)", l)
   gsub(/max-size \(/, "@MAXSIZE@", l); gsub(/size \([0-9]+\)/, "size (S)", l); gsub(/@MAXSIZE@/, "max-size (", l)
   gsub(/Score: ?[0-9.]+/, "Score: F", l); gsub(/Node: n[0-9]+/, "Node: nN", l)
   gsub(/\([0-9]+ \+ [0-9]+ >/, "(U + S >", l); gsub(/exhausted \([0-9]+ >/, "exhausted (U >", l)
@@ -149,10 +193,17 @@ l ~ /^\[compiling method / {
   t = (l ~ /target MAGLEV/) ? "ML" : (l ~ /target TURBOFAN/) ? "TF" : "?"
   if (l ~ /\) OSR/) t = t "-OSR"
   u = nm "@" t; occ[u]++; unit = (occ[u] > 1) ? u "#" occ[u] : u
-  ev("K\t" unit "\t" nm)
+  ev("K\t" unit "\t" nm); key = ukey(l)
   next
 }
-l ~ /^\[(completed compiling|aborted|bailout)/ { greedy = 0; if (tag == 1) unit = "?"; next }
+# D = the open unit reached `[completed compiling` (its own key, never an abort or the completion of another unit; Q-B57-COMPILE)
+l ~ /^\[(completed compiling|aborted|bailout)/ {
+  greedy = 0
+  if (tag != 1) next
+  if (substr(l, 1, 21) == "[completed compiling " && key != "" && ukey(l) == key) ev("D\t" unit "\t" nm)
+  unit = "?"; key = ""
+  next
+}
 l ~ /^\[/ { next }
 tier == "turbo" {
   l = trim(l)
@@ -201,6 +252,18 @@ index(l, tok) > 0 || u == fn || ((f[1] == "SKIP" || f[1] ~ /^INLINE/) && f[2] ==
 END { exit !found }
 '
 
+# bud file -> 0 if a unit of fn compiled by THIS tier (t = @TF or @ML, OSR and #N units included) reached
+# `[completed compiling` (a D row; an aborted compile writes none). --concurrent writes no K / D rows.
+# shellcheck disable=SC2016
+DONE_AWK='
+$1 == "D" && $3 == fn && index($2, fn t) == 1 { f = 1; exit }
+END { exit !f }
+'
+
+# bytecode probe exits (node tr awk append) -> BC_RC: the first failed step of awk > tr > append, else node's exit. An
+# append failure outranks node's: a TMPDIR that is full can be why node failed (Q-B60-TMPFULL)
+bc_rc() { if [[ $3 != 0 ]]; then BC_RC="awk:$3"; elif [[ $2 != 0 ]]; then BC_RC="tr:$2"; elif [[ $4 != 0 ]]; then BC_RC="append:$4"; else BC_RC=$1; fi; }
+
 # dec file -> lines in scope (all, or only lines naming fn / made while compiling fn)
 # shellcheck disable=SC2016
 SCOPE_AWK='
@@ -210,7 +273,9 @@ only != 1 { print; next }
 index(l, tok) > 0 || u == fn || ((f[1] == "SKIP" || f[1] ~ /^INLINE/) && f[2] == fn) { print }
 '
 
-# raw trace (NUL read as ?) -> prints "glued" if driver text is glued in front of a V8 compile line, else "clean", after the same ANSI +
+# raw trace (NUL read as ?) -> prints "concurrent" if a line starts `[compiling method ` and says ConcurrencyMode::kConcurrent (a
+# background compile: a V8 flag implication overrode --no-concurrent-recompilation; `[marking ...` says kConcurrent on every run and is
+# not read), else "glued" if driver text is glued in front of a V8 compile line, else "clean", after the same ANSI +
 # compilation-id strip NORMALIZE_AWK does. No early exit: awk leaving first under pipefail is a SIGPIPE, a fail-open.
 # shellcheck disable=SC2016
 GLUE_AWK='
@@ -219,8 +284,9 @@ GLUE_AWK='
   gsub(/\033\[[0-9;]*[mK]/, "", l)
   sub(/^\[(ML|TLV):[0-9]+\] */, "", l)
   if (index(substr(l, 2), "[compiling method ") || index(substr(l, 2), "[completed compiling ")) f = 1
+  if (substr(l, 1, 18) == "[compiling method " && index(l, "ConcurrencyMode::kConcurrent")) c = 1
 }
-END { print (f ? "glued" : "clean") }
+END { print (c ? "concurrent" : (f ? "glued" : "clean")) }
 '
 
 # @include lib/msdiff.sh
@@ -373,11 +439,13 @@ EOF
   chmod +x "$fk/node"
   if command -v git >/dev/null 2>&1; then
     local rc out x
+    # the six GIT_* vars ref / file mode refuses: unset for the repo set-up and every spawn below, so the rows also run from a git hook
+    nogit() { (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES; "$@"); }
     mkdir -p "$d/repo/sub" "$d/alias" "$d/alias2" "$d/sym" "$d/frozen" "$d/frozen3" "$d/frozen4" "$d/after"
     printf 'export const x = 1;\n' >"$d/repo/Signal.js"; printf 'export const w = 1;\n' >"$d/repo/Watch.js"
     cp "$d/repo/Signal.js" "$d/after/Signal.js"
     for x in frozen frozen3 frozen4; do cp "$d/repo/Signal.js" "$d/$x/Signal.js"; done
-    git -C "$d/repo" init -q && git -C "$d/repo" add Signal.js Watch.js
+    nogit git -C "$d/repo" init -q && nogit git -C "$d/repo" add Signal.js Watch.js
     ln "$d/repo/Signal.js" "$d/alias/Signal.js"; ln "$d/repo/Signal.js" "$d/alias2/Signal.js"
     ln "$d/repo/Signal.js" "$d/repo/sub/Signal.js"; ln -s ../repo/Signal.js "$d/sym/Signal.js"
     ln -s "$d/repo/Watch.js" "$d/frozen3/Watch.js"; ln "$d/repo/Watch.js" "$d/frozen4/Watch.js"
@@ -385,7 +453,7 @@ EOF
     printf '%s\n' '#!/bin/sh' 'case "$1" in -p) echo "v0 (V8 0)" ;; --v8-options) [ ! -e "$0.read" ] || exit 1; : >"$0.read"; echo "  --turbofan (enable TurboFan)"; echo "        type: bool  default: --turbofan" ;; esac' >"$d/failnode"; chmod +x "$d/failnode"
     refusal() { # cwd pattern args... -> "rc|lines matching pattern" (the fake node answers -p and --v8-options; the driver is never spawned)
       local cwd="$1" pat="$2"; shift 2
-      out=$(cd "$cwd" && "$BASH" "$SELF" --node "$fk/node" "$@" 2>&1) && rc=0 || rc=$?
+      out=$(cd "$cwd" && nogit "$BASH" "$SELF" --node "$fk/node" "$@" 2>&1) && rc=0 || rc=$?
       printf '%s|%s' "$rc" "$(printf '%s\n' "$out" | grep -c -- "$pat" || true)"
     }
     check "file mode: a git-tracked --before is refused (exit 2)" \
@@ -402,7 +470,7 @@ EOF
       "$(refusal "$d" 'Watch.js beside --before is a git-tracked' --before "$d/frozen3/Signal.js" --after "$d/after/Signal.js" --out "$d/o7")" "2|1"
     check "file mode: a hard-linked Watch.js beside --before is refused (cwd in the repo)" \
       "$(refusal "$d/repo" 'Watch.js beside --before is the same file' --before "$d/frozen4/Signal.js" --after "$d/after/Signal.js" --out "$d/o8")" "2|1"
-    out=$(cd "$d/repo" && "$BASH" "$SELF" --node "$d/failnode" --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o3" 2>&1) && rc=0 || rc=$?
+    out=$(cd "$d/repo" && nogit "$BASH" "$SELF" --node "$d/failnode" --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o3" 2>&1) && rc=0 || rc=$?
     check "file mode: a frozen copy passes the check; an unexpected failure exits 2, never 1" \
       "$rc|$(printf '%s\n' "$out" | grep -ci 'frozen' || true)|$(printf '%s\n' "$out" | grep -c 'cannot run' || true)" "2|0|1"
     check "options: --node resolving to a builtin (false) is refused (exit 2, named die)" \
@@ -416,6 +484,20 @@ EOF
     mkdir -p "$d/fw"; printf "export * from './Watch.js';\n" >"$d/fw/Signal.js"
     check "file mode: a single-quoted ./Watch.js re-export with no Watch.js beside --before is refused (exit 2)" \
       "$(refusal "$d" 'no Watch.js beside' --before "$d/fw/Signal.js" --after "$d/after/Signal.js" --out "$d/o-f4b")" "2|1"
+    # b62 G5a: one of the six GIT_* vars set (the rest unset) -> refused by name in ref / file mode only
+    genv() { # NAME=VALUE cwd pattern args... -> "rc|lines matching pattern"
+      local kv="$1" cwd="$2" pat="$3"; shift 3
+      out=$(cd "$cwd" && unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES && export "$kv" && "$BASH" "$SELF" --node "$fk/node" "$@" 2>&1) && rc=0 || rc=$?
+      printf '%s|%s' "$rc" "$(printf '%s\n' "$out" | grep -c -- "$pat" || true)"
+    }
+    x='GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES is set'
+    check "file mode: a set GIT_DIR / GIT_CEILING_DIRECTORIES is refused by name (exit 2), not read as untracked" \
+      "$(genv "GIT_DIR=$d/nogit" "$d" "$x" --before "$d/repo/Signal.js" --after "$d/after/Signal.js" --out "$d/o-g1")/$(genv "GIT_CEILING_DIRECTORIES=$d/repo" "$d" "$x" --before "$d/repo/Signal.js" --after "$d/after/Signal.js" --out "$d/o-g2")" "2|1/2|1"
+    printf '%s\n' '// import { x } from "./Signal.js";' "import { x } from '$d/frozen/Signal.js';" \
+      '/* import { x } from "./Signal.js"; */' '/**' ' * example:' " * import { x } from './Signal.js';" ' */' "const s = './Signal.js';" >"$d/cdrv.mjs"
+    printf '%s\n' '/* c */ import { x } from "./Signal.js"; // ok' >"$d/idrv.mjs"
+    check "file mode: a --driver that names ./Signal.js only in a comment is refused; a real import passes the check" \
+      "$(refusal "$d" "must import './Signal.js'" --driver "$d/cdrv.mjs" --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-cd")/$(refusal "$d" "must import './Signal.js'" --driver "$d/idrv.mjs" --before "$d/frozen/Signal.js" --after "$d/after/Signal.js" --out "$d/o-id")" "2|1/2|0"
   else
     check "git available (the file-mode frozen-copy checks need it)" "missing" "present"
   fi
@@ -449,6 +531,29 @@ EOF
   check "driver mode (fake node): driver output glued to a compile line is refused (exit 2, named die, not DIFF)" \
     "$(refusal "$d" 'driver output glued to a V8 compile line' --tiers turbo --no-bytecode --fn read.set --out "$d/o-n2" "$fk/before.trace" "$fk/glued.trace")" "2|1"
   check "driver mode (fake node): a legal [ML:7] compilation-id prefix is not read as glue" "$(fake before.trace idprefix.trace)" "0|VERDICT SAME"
+  # b62 G5a rows: refusals before any spawn, the -ef driver join, the GIT_* driver control, the kConcurrent evidence check
+  local A=(--tiers turbo --no-bytecode --fn read.set)
+  check "options: a value on a boolean flag is refused (--only-fn=0 / --concurrent=no / --no-bytecode=x / --help=x: exit 2, named die)" \
+    "$(refusal "$d" '^inlining-budget-diff: --only-fn takes no value$' "${A[@]}" --only-fn=0 --out "$d/o-b1" "$fk/before.trace" "$fk/drop.trace")/$(refusal "$d" '^inlining-budget-diff: --concurrent takes no value$' "${A[@]}" --concurrent=no --out "$d/o-b2" "$fk/before.trace" "$fk/drop.trace")/$(refusal "$d" '^inlining-budget-diff: --no-bytecode takes no value$' "${A[@]}" --no-bytecode=x --out "$d/o-b3" "$fk/before.trace" "$fk/drop.trace")/$(refusal "$d" '^inlining-budget-diff: --help takes no value$' --help=x)" "2|1/2|1/2|1/2|1"
+  check "driver mode: GIT_DIR set does not refuse (the GIT_* refusal is ref / file mode only)" \
+    "$(genv "GIT_DIR=$d/nogit" "$d" '^VERDICT SAME$' "${A[@]}" --out "$d/o-gd" "$fk/before.trace" "$fk/same.trace")" "0|1"
+  mkdir -p "$d/x" "$d/real/a/b"; ln -s "$d/real/a/b" "$d/x/lnk"; cp "$fk/before.trace" "$d/real/a/drv.trace"; cp "$fk/drop.trace" "$d/x/drv.trace"
+  check "driver mode: a symlink before '..' in a driver path is refused (DRIVER_AFTER / DRIVER_BEFORE, exit 2), never measured as another file" \
+    "$(refusal "$d/x" 'DRIVER_AFTER: cannot resolve the directory of' "${A[@]}" --out "$d/o-e1" "$d/real/a/drv.trace" lnk/../drv.trace)/$(refusal "$d/x" 'DRIVER_BEFORE: cannot resolve the directory of' "${A[@]}" --out "$d/o-e2" lnk/../drv.trace "$d/real/a/drv.trace")" "2|1/2|1"
+  mkdir -p "$d/bs\\q"
+  check "--out: a backslash in DIR, or in the cwd of a relative DIR, is refused (exit 2); an absolute DIR under that cwd runs" \
+    "$(refusal "$d/bs\\q" 'a backslash is not allowed' "${A[@]}" --out rel "$fk/before.trace" "$fk/same.trace")/$(refusal "$d" 'a backslash is not allowed' "${A[@]}" --out "o/x\\ty" "$fk/before.trace" "$fk/same.trace")/$(refusal "$d/bs\\q" '^VERDICT SAME$' "${A[@]}" --out "$d/o-bsabs" "$fk/before.trace" "$fk/same.trace")" "2|1/2|1/0|1"
+  mkdir -p "$d/a=b"; cp "$fk/node" "$d/a=b/node"
+  check "options: an empty --tiers and an = in the resolved node path are refused (exit 2, named dies)" \
+    "$(refusal "$d" 'tiers is empty' --tiers " " --no-bytecode --fn read.set --out "$d/o-t1" "$fk/before.trace" "$fk/same.trace")/$(refusal "$d" 'an = is not allowed in the resolved path' "${A[@]}" --node "$d/a=b/node" --out "$d/o-t2" "$fk/before.trace" "$fk/same.trace")" "2|1/2|1"
+  check "--v8-flags: any *stress-concurrent-inlining* spelling is refused by name (exit 2)" \
+    "$(refusal "$d" 'must not set --stress-concurrent-inlining: --stress-concurrent-inlining implies' "${A[@]}" --v8-flags=--stress-concurrent-inlining --out "$d/o-s1" "$fk/before.trace" "$fk/same.trace")/$(refusal "$d" 'must not set --no-stress-concurrent-inlining: --stress-concurrent-inlining implies' "${A[@]}" --v8-flags=--no-stress-concurrent-inlining --out "$d/o-s2" "$fk/before.trace" "$fk/same.trace")" "2|1/2|1"
+  sed '1s/kSynchronous]$/kConcurrent]/' "$d/t2" >"$fk/kc.trace"
+  { printf '%s\n' '[marking 0x1 <JSFunction read.set (sfi = 0x2)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]'; cat "$d/t2"; } >"$fk/km.trace"
+  check "driver mode: a kConcurrent compile line without --concurrent is NO-VERDICT (exit 2, named)" \
+    "$(refusal "$d" 'background compile (--no-concurrent-recompilation overridden' "${A[@]}" --out "$d/o-k1" "$fk/before.trace" "$fk/kc.trace")" "2|1"
+  check "driver mode: a kConcurrent compile line under --concurrent, and a kConcurrent [marking line, still give a verdict" \
+    "$(refusal "$d" '^VERDICT SAME$' "${A[@]}" --concurrent --out "$d/o-k2" "$fk/before.trace" "$fk/kc.trace")/$(fake before.trace km.trace)" "0|1/0|VERDICT SAME"
   # awk PATH shim: exits 2 on the GLUE program only (keyed on code the live and parked forms share, not on the word "glued")
   mkdir -p "$d/shim"
   printf '%s\n' '#!/bin/sh' 'case "$*" in *"index(substr(l, 2)"*) exit 2 ;; esac' "exec \"$(command -v awk)\" \"\$@\"" >"$d/shim/awk"; chmod +x "$d/shim/awk"
@@ -459,6 +564,70 @@ EOF
     >"$d/o-09.out" 2>&1 && rc2=0 || rc2=$?
   check "--v8-flags: a leading-zero limit (=09) reads as base 10 in the bytecode report (SAME, no unexpected error)" \
     "$rc2|$(grep '^VERDICT ' "$d/o-09.out" || true)|$(grep -c 'unexpected' "$d/o-09.out" || true)" "0|VERDICT SAME|0"
+
+  # b62 G5b rows (audit 2026-11-09 IBD-opus-1 = R9, IBD-fable-1 = IBD-opus-6 = R15; Q-B57-COMPILE): a 0x inside a name is
+  # kept, an address collapses; a compile of fn by THIS tier that reached `[completed compiling` is evidence
+  printf '%s\n' 'Inlining 0x3 {0x4 <SharedFunctionInfo a_0x1$0x2.0x3h0x4k90x5>} into 0x1 {0x2 <SharedFunctionInfo M0xa>}' >"$d/an"
+  printf '%s\n' '== Inlining 0x3 <SharedFunctionInfo a_0x1$0x2.0x3h0x4k90x5>' >"$d/am"
+  awk -v tier=turbo -v tag=0 -v dec="$d/an.dec" -v bud="$d/an.bud" "$NORMALIZE_AWK" "$d/an"
+  awk -v tier=maglev -v tag=0 -v dec="$d/am.dec" -v bud="$d/am.bud" "$NORMALIZE_AWK" "$d/am"
+  check "normalize: a 0x after a byte other than line start, space, { or ( stays in the name, an address collapses (turbo + maglev, exact lines)" \
+    "$(cut -f2 "$d/an.dec")|$(cut -f2 "$d/am.dec")" \
+    'Inlining 0x {0x <SharedFunctionInfo a_0x1$0x2.0x3h0x4k90x5>} into 0x {0x <SharedFunctionInfo M0xa>}|== Inlining 0x <SharedFunctionInfo a_0x1$0x2.0x3h0x4k90x5>'
+  fkr() { # out tiers fn before after -> "rc|VERDICT line|guard ok / NO-VERDICT line of fn"
+    "$BASH" "$SELF" --node "$fk/node" --tiers "$2" --no-bytecode --runs 2 --fn "$3" --out "$d/o-$1" "$fk/$4" "$fk/$5" >"$d/fkr-$1.out" 2>&1 && rc2=0 || rc2=$?
+    printf '%s|%s|%s' "$rc2" "$(grep '^VERDICT ' "$d/fkr-$1.out" || true)" "$(grep -e '^  guard ok:' -e "^  $3: NO-VERDICT" "$d/fkr-$1.out" || true)"
+  }
+  local TC='[compiling method 0x1 <JSFunction m0 (sfi = 0x2)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]'
+  local TE='[completed compiling 0x1 <JSFunction m0 (sfi = 0x2)> (target TURBOFAN_JS) - took 0.1, 0.1, 0.1 ms]'
+  local OC='[compiling method 0x5 <JSFunction oth (sfi = 0x6)> (target TURBOFAN_JS), mode: ConcurrencyMode::kSynchronous]'
+  local OI='Inlining 0x7 {0x8 <SharedFunctionInfo leaf>} into 0x5 {0x6 <SharedFunctionInfo oth>}'
+  local OE='[completed compiling 0x5 <JSFunction oth (sfi = 0x6)> (target TURBOFAN_JS) - took 0.1, 0.1, 0.1 ms]'
+  printf '%s\n' "$TC" 'Inlining 0x3 {0x4 <SharedFunctionInfo h0x1>} into 0x1 {0x2 <SharedFunctionInfo m0>}' "$TE" >"$fk/h1.trace"
+  sed 's/h0x1/h0x2/' "$fk/h1.trace" >"$fk/h2.trace"
+  printf '%s\n' "${TC/TURBOFAN_JS/MAGLEV}" '== Inlining 0x3 <SharedFunctionInfo h0x1>' "${TE/TURBOFAN_JS/MAGLEV}" >"$fk/g1.trace"
+  sed 's/h0x1/h0x2/' "$fk/g1.trace" >"$fk/g2.trace"
+  check "driver mode (fake node): m0 inlining h0x1 vs h0x2 is a DIFF (turbo), not an erased name" "$(fkr r9t turbo m0 h1.trace h2.trace)" "1|VERDICT DIFF|  guard ok: m0"
+  check "driver mode (fake node): --fn h0x1 finds its own decision line (no h0x1 compile): SAME" "$(fkr r9s turbo h0x1 h1.trace h1.trace)" "0|VERDICT SAME|  guard ok: h0x1"
+  check "driver mode (fake node): Maglev == Inlining h0x1 vs h0x2 is a DIFF" "$(fkr r9m maglev m0 g1.trace g2.trace)" "1|VERDICT DIFF|  guard ok: m0"
+  # Q-B62-ADDR: a 0x after a non-ASCII byte (U+00E9 as UTF-8 \303\251) is part of the name, never an address
+  printf '%s\n%b\n%s\n' "$TC" 'Inlining 0x3 {0x4 <SharedFunctionInfo \0303\02510x1>} into 0x1 {0x2 <SharedFunctionInfo m0>}' "$TE" >"$fk/n1.trace"
+  printf '%s\n%b\n%s\n' "$TC" 'Inlining 0x3 {0x4 <SharedFunctionInfo \0303\02510x2>} into 0x1 {0x2 <SharedFunctionInfo m0>}' "$TE" >"$fk/n2.trace"
+  check "driver mode (fake node): m0 inlining <e-acute>0x1 vs <e-acute>0x2 is a DIFF (a 0x after a non-ASCII byte is kept)" "$(fkr rna turbo m0 n1.trace n2.trace)" "1|VERDICT DIFF|  guard ok: m0"
+  local NV="2|VERDICT NO-VERDICT|  m0: NO-VERDICT -- no trace of m0 in before run 1 (no decision line names it, no completed turbo compile of it: no evidence)"
+  printf '%s\n' "$TC" "$TE" "$OC" "$OI" "$OE" >"$fk/ca.trace"
+  printf '%s\n' "${TC/TURBOFAN_JS/MAGLEV}" "${TE/TURBOFAN_JS/MAGLEV}" "$OC" "$OI" "$OE" >"$fk/cb.trace"
+  printf '%s\n' "$TC" '[aborted optimizing 0x1 <JSFunction m0 (sfi = 0x2)> (target TURBOFAN_JS) because: Function is too big to be optimized - took 0.1, 0.0, 0.0 ms]' \
+    "$OC" "$OI" "$OE" >"$fk/cc.trace"
+  printf '%s\n' "$TC" "$OE" "$OC" "$OI" "$OE" >"$fk/cd.trace"
+  printf '%s\n' "${TC/), mode:/) OSR, mode:}" "$TE" "$OC" "$OI" "$OE" >"$fk/ce.trace"
+  check "guard (fake node): a completed TurboFan compile of m0 with no decision line naming it is evidence: SAME" "$(fkr r15a turbo m0 ca.trace ca.trace)" "0|VERDICT SAME|  guard ok: m0"
+  check "guard (fake node): only a Maglev compile of m0 is no turbo evidence: NO-VERDICT" "$(fkr r15b turbo m0 cb.trace cb.trace)" "$NV"
+  check "guard (fake node): an aborted TurboFan compile of m0 is no evidence: NO-VERDICT" "$(fkr r15c turbo m0 cc.trace cc.trace)" "$NV"
+  check "guard (fake node): another unit's completion (or a non-OSR completion of an OSR unit) does not complete m0: NO-VERDICT" \
+    "$(fkr r15d turbo m0 cd.trace cd.trace)/$(fkr r15e turbo m0 ce.trace ce.trace)" "$NV/$NV"
+
+  # b62 G5b rows (audit R2, Q-B57-PIPE, Q-B60-TMPFULL): the bytecode probe reads a regular temp file, appends 64 KiB, removes it
+  local bq bs=""
+  for bq in "3 5 7 1" "3 5 0 1" "3 0 0 1" "3 0 0 0" "0 0 0 0"; do bc_rc $bq; bs="$bs/$BC_RC"; done
+  check "bytecode probe: step precedence awk > tr > append > node" "$bs" "/awk:7/tr:5/append:1/3/0"
+  bcr() { # out -> "rc|count of lines matching $2|VERDICT line"; the rest of the argv picks node / env (fake node, both .bc traces)
+    local o="$1" pat="$2"; shift 2
+    "$@" --tiers turbo --fn read.set --out "$d/o-$o" "$fk/bcb.trace" "$fk/bca.trace" >"$d/bcr-$o.out" 2>&1 && rc2=0 || rc2=$?
+    printf '%s|%s|%s' "$rc2" "$(grep -cE -- "$pat" "$d/bcr-$o.out" || true)" "$(grep '^VERDICT ' "$d/bcr-$o.out" || true)"
+  }
+  mkdir -p "$d/rt/rel"
+  check "bytecode probe: a relative TMPDIR names the caller-cwd temp file, read then removed (285 -> 285, 0 left)" \
+    "$(cd "$d/rt" && TMPDIR=rel bcr rt '^  read\.set: 285 -> 285 bytes \(\+0\)$' "$BASH" "$SELF" --node "$fk/node")|$(ls "$d/rt/rel" | wc -l | tr -d ' ')" \
+    "0|1|VERDICT SAME|0"
+  : >"$d/notadir"
+  check "bytecode probe: a failed mktemp prints (mktemp exited N) for each side; the verdict is unmoved (SAME)" \
+    "$(TMPDIR="$d/notadir" bcr mt '^  read\.set: \(mktemp exited [1-9][0-9]*\) -> \(mktemp exited [1-9][0-9]*\)$' "$BASH" "$SELF" --node "$fk/node")" "0|1|VERDICT SAME"
+  check "bytecode probe: ulimit -f 32 (XFSZ ignored) fails the 64 KiB append: (append exited N) for each side, SAME" \
+    "$(trap '' XFSZ; ulimit -f 32; bcr ul '^  read\.set: \(append exited [1-9][0-9]*\) -> \(append exited [1-9][0-9]*\)$' "$BASH" "$SELF" --node "$fk/node")" "0|1|VERDICT SAME"
+  { printf '%s\n' '#!/bin/sh' 'case " $* " in *" --print-bytecode "*) exit 3 ;; esac'; tail -n +2 "$fk/node"; } >"$fk/node3"; chmod +x "$fk/node3"
+  check "bytecode probe: node failing --print-bytecode is a named die (exit 2, one VERDICT NO-VERDICT line)" \
+    "$(bcr n3 '^inlining-budget-diff: bytecode probe of read\.set: node exited 3$' "$BASH" "$SELF" --node "$fk/node3")" "2|1|VERDICT NO-VERDICT"
 
   # --- 2026-10-30 fixes, each from a real node v26.8.2 trace shape -------------------------------------------
   bud() { # canned-trace tag want fn [tier] -> BUDGET_AWK rows for side=before
@@ -550,6 +719,26 @@ EOF
     '[generated bytecode for function: f (0x4 <SharedFunctionInfo f>)]' 'Bytecode length: 106' >"$d/bc2"
   # (for-in order printed 210,106,35 here on BSD awk: the order of the SET, not of the input)
   check "bytecode probe: same-name functions -> first-seen order, no duplicates" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc2")" "106,35,210"
+  # Q-B62-TEAR / -TEAR2: the two tear shapes measured on node v26.8.2 (a driver Worker's newlines inside the probe text) + digits then junk
+  printf '%s\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' 'Bytecode length: 3' \
+    '[generated bytecode for function: ' 'f (' '0x2 <SharedFunctionInfo f>)]' 'Bytecode length: 50' >"$d/bc-hdr"
+  check "bytecode probe: a header split by a newline (not whole) -> ?" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-hdr")" "?"
+  printf '%s\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' 'Bytecode length: 3' \
+    '[generated bytecode for function: f (0x2 <SharedFunctionInfo f>)]' 'Bytecode length: ' '50' >"$d/bc-len"
+  check "bytecode probe: a length line split before its digits -> ?" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-len")" "?"
+  printf '%s\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' 'Bytecode length: 5w' >"$d/bc-junk"
+  check "bytecode probe: digits then junk on a length line -> ?" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-junk")" "?"
+  printf '%s\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' \
+    '[generated bytecode for function: f (0x2 <SharedFunctionInfo f>)]' 'Bytecode length: 5' >"$d/bc-pend"
+  check "bytecode probe: a header with no length before the next header -> ?" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-pend")" "?"
+  printf '%s\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' 'Bytecode length: 3' \
+    '[generated bytecode for function: f (0x2 <SharedFunctionInfo f>)]' >"$d/bc-eof"
+  check "bytecode probe: a header with no length before EOF -> ?" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-eof")" "?"
+  printf '%s\n' '[generated bytecode for function:  (0x1 <SharedFunctionInfo>)]' 'Bytecode length: 7' \
+    '[generated bytecode for function: f (0x2 <SharedFunctionInfo f>)]' 'Bytecode length: 106' >"$d/bc-anon"
+  check "bytecode probe: an anonymous function's header (empty name) is whole, not torn" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-anon")" "106"
+  printf '%s\r\n' '[generated bytecode for function: f (0x1 <SharedFunctionInfo f>)]' 'Bytecode length: 5' >"$d/bc-cr"
+  check "bytecode probe: a CR-terminated length line still reads (as before the tear rules)" "$(awk -v fn=f "$BYTECODE_AWK" "$d/bc-cr")" "5"
   rm -rf "$d"; echo
   if [[ $fails -eq 0 ]]; then echo "self-test: all checks passed"; return 0; fi
   echo "self-test: $fails check(s) FAILED"; return 1
@@ -566,11 +755,11 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) usage; exit 2 ;;
-    --self-test) if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi ;;
-    --only-fn) ONLY=1 ;;
-    --concurrent) CONCURRENT=1 ;;
-    --no-bytecode) BYTECODE=0 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi ;;
+    --only-fn) [[ $EQ -eq 0 ]] || die "$a takes no value"; ONLY=1 ;;
+    --concurrent) [[ $EQ -eq 0 ]] || die "$a takes no value"; CONCURRENT=1 ;;
+    --no-bytecode) [[ $EQ -eq 0 ]] || die "$a takes no value"; BYTECODE=0 ;;
     --fn|--runs|--tiers|--driver|--repo|--node|--v8-flags|--out|--before-ref|--after-ref|--before|--after)
       if [[ $EQ -eq 0 ]] && ! need "$@"; then shift; fi
       [[ -n "$v" ]] || die "$a needs a non-empty value"
@@ -603,6 +792,7 @@ done
 [[ "$RUNS" =~ ^[0-9]{1,2}$ ]] && RUNS=$((10#$RUNS)) && [[ $RUNS -ge 2 && $RUNS -le 50 ]] \
   || die "--runs must be an integer in [2, 50] (null control), got '$RUNS'"
 IFS=', ' read -r -a TIER_LIST <<<"$TIERS"
+[[ ${#TIER_LIST[@]} -gt 0 ]] || die "--tiers is empty"
 SEEN="|"
 for t in "${TIER_LIST[@]}"; do
   [[ $t == turbo || $t == maglev ]] || die "unknown tier '$t' (turbo, maglev)"
@@ -614,6 +804,8 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
   g="${f//_/-}"; g="${g#--}"; g="${g%%=*}"; g="${g#no}"; g="${g#-}"
   case "$g" in
+    *stress-concurrent-inlining*)
+      die "--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the inlining trace a race; every spelling of the flag is refused)" ;;
     max*inlined*bytecode*)
       [[ "$f" =~ ^--[^=]+=[0-9]{1,9}$ && "${f:2:2}" != no ]] || die "--v8-flags: $f needs =N (an integer of 1..9 digits)" ;;
     reserve*inline*budget*)
@@ -629,11 +821,13 @@ NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot res
 NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
+[[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
 
 # ---------------------------------------------------------------------------------------------
 # stage BEFORE / AFTER
 # ---------------------------------------------------------------------------------------------
 OUT="${OUT:-${TMPDIR:-/tmp}/inl-diff-$(date +%Y%m%d-%H%M%S)-$$}"
+[[ "$OUT" != *\\* && ( "$OUT" == /* || "$PWD" != *\\* ) ]] || die "--out: a backslash is not allowed in DIR or, for a relative DIR, in the current directory (awk -v would rewrite the path): $OUT"
 for sub in raw dec bud ms stage; do
   [[ ! -L "$OUT/$sub" ]] || die "--out: $OUT/$sub is a symlink (refused: the writes would follow it)"
   if [[ -e "$OUT/$sub" ]]; then
@@ -679,6 +873,7 @@ run_trace() { # tier side k driver
   fi
   if [[ $TAG == 1 ]]; then
     glue=$(tr '\000' '?' <"$raw" | awk "$GLUE_AWK") || die "cannot scan $raw for driver output glued to a V8 compile line"
+    [[ "$glue" != concurrent ]] || die "background compile (--no-concurrent-recompilation overridden by a V8 flag implication): a [compiling method .. ConcurrencyMode::kConcurrent] line in $raw (a compile off the main thread makes the inlining trace a race)"
     [[ "$glue" == clean ]] || die "driver output glued to a V8 compile line ($raw): end driver writes with a newline"
   fi
   tr '\000' '?' <"$raw" | awk -v tier="$1" -v tag="$TAG" -v dec="$OUT/dec/$1.$2.$3.tsv" -v bud="$OUT/bud/$1.$2.$3.tsv" "$NORMALIZE_AWK"
@@ -749,11 +944,14 @@ for tier in "${TIER_LIST[@]}"; do
     g=ok
     for k in $(seq 1 "$RUNS"); do
       for side in before after; do
-        if [[ $g == ok ]] && ! awk -v fn="$fn" "$GUARD_AWK" "$OUT/dec/$tier.$side.$k.tsv"; then g="$side run $k"; fi
+        if [[ $g == ok ]] && ! awk -v fn="$fn" "$GUARD_AWK" "$OUT/dec/$tier.$side.$k.tsv" \
+          && ! awk -F '\t' -v fn="$fn" -v t="@$([[ $tier == turbo ]] && echo TF || echo ML)" "$DONE_AWK" "$OUT/bud/$tier.$side.$k.tsv"; then
+          g="$side run $k"
+        fi
       done
     done
     if [[ $g == ok ]]; then guarded="$guarded $fn"
-    else say "  $fn: NO-VERDICT -- no trace of $fn in $g (not compiled, not a callee: no evidence)"; VERDICT=NO-VERDICT; fi
+    else say "  $fn: NO-VERDICT -- no trace of $fn in $g (no decision line names it, no completed $tier compile of it: no evidence)"; VERDICT=NO-VERDICT; fi
   done
   if [[ $ONLY == 1 ]]; then
     for fn in $guarded; do judge "$tier" "$fn" "$fn"; done
@@ -803,10 +1001,27 @@ done
 # ---------------------------------------------------------------------------------------------
 if [[ $BYTECODE == 1 ]]; then
   say "=== bytecode length (REPORTED: --print-bytecode, exact name; several values = several functions with that name)"
-  probe() { # driver fn
+  probe() { # driver fn -> "<status> <lengths>"; status = node's exit, or <step>:<rc> (bc_rc; mktemp:<rc> when no file was made)
     local b; b=$(basename "$1"); [[ $b != -* ]] || b="./$b"
+    local tmp line st nrc=0 ar=0 re='^@ ([0-9]+) ([0-9]+) ([0-9]+)$'
+    # stdout is a regular file, never a pipe (Q-B57-PIPE): once JS touches process.stdout, libuv makes a pipe non-blocking and
+    # V8's C++ writes to a full pipe are dropped (EAGAIN), so a length vanishes while the run still ends cleanly. probe runs in
+    # $( ), where bash clears set -e outside posix mode: every step below carries its own guard. The redirect sits on the
+    # OUTER subshell, ahead of the cd, so a relative TMPDIR still names the same file
+    tmp=$(mktemp "${TMPDIR:-/tmp}/inlining-budget-diff.XXXXXX") || { printf 'mktemp:%s \n' "$?"; return 0; }
     (cd "$(dirname "$1")" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --print-bytecode \
-      --print-bytecode-filter="$2" "$b" 2>&1) | tr '\000' '?' | awk -v fn="$2" "$BYTECODE_AWK"
+      --print-bytecode-filter="$2" "$b") >"$tmp" 2>&1 || nrc=$?
+    line=$(tr '\000' '?' <"$tmp" | awk -v fn="$2" "$BYTECODE_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
+    # the file has been read: 64 KiB more fails if TMPDIR is still full now (Q-B60-TMPFULL). The brace silences a
+    # redirect-open failure too; an inline 2>/dev/null comes after the >> and would not
+    { printf '%65536s' '' >>"$tmp"; } 2>/dev/null || ar=$?
+    rm -f "$tmp" || true
+    # the exits ride on a last "@ node tr awk" line, so a tr / awk failure is never reported as node's
+    st=${line##*$'\n'}
+    if [[ "$line" == *$'\n'* ]]; then line=${line%$'\n'*}; else line=""; fi
+    [[ "$st" =~ $re ]] || die "bytecode probe of $2: cannot read the exit status of the run of $1 (got '$st')"
+    bc_rc "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$ar"
+    printf '%s %s\n' "$BC_RC" "$line"
   }
   cross() { # name op limit before after
     local b=$4 a=$5 ib ia
@@ -814,8 +1029,20 @@ if [[ $BYTECODE == 1 ]]; then
     if [[ $ib != "$ia" ]]; then printf '      CROSSES %s (%s%s): %s -> %s\n' "$1" "$2" "$3" \
       "$([[ $ib == 1 ]] && echo inside || echo outside)" "$([[ $ia == 1 ]] && echo inside || echo outside)"; fi
   }
+  bc_side() { # fn "<status> <lengths>" -> BC_SIDE: the lengths, or "(<step> exited N)" for a failed mktemp / append (that
+    # side is not measured; REPORTED, the verdict is unmoved). A node / tr / awk failure is a named die, here in the main shell
+    local s=${2%% *}
+    BC_SIDE=${2#* }
+    case $s in
+      0) ;;
+      mktemp:*|append:*) BC_SIDE="(${s%%:*} exited ${s#*:})" ;;
+      *:*) die "bytecode probe of $1: ${s%%:*} exited ${s#*:}" ;;
+      *) die "bytecode probe of $1: node exited $s" ;;
+    esac
+  }
   for fn in "${TARGETS[@]}"; do
-    b=$(probe "$DRV_B" "$fn"); a=$(probe "$DRV_A" "$fn")
+    b=$(probe "$DRV_B" "$fn"); bc_side "$fn" "$b"; b=$BC_SIDE
+    a=$(probe "$DRV_A" "$fn"); bc_side "$fn" "$a"; a=$BC_SIDE
     if [[ "$b" =~ ^[0-9]+$ && "$a" =~ ^[0-9]+$ ]]; then
       say "  $fn: $b -> $a bytes ($( [[ $a -ge $b ]] && echo + )$((a - b)))"
       {

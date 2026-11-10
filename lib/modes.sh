@@ -22,7 +22,21 @@ if (acc === 7 && sink[0] === 7) console.log('');
 write_driver() { # dir
   if [[ -n "$DRIVER" ]]; then
     [[ -f "$DRIVER" ]] || die "--driver not found: $DRIVER"
-    grep -qE "['\"]\./Signal\.js['\"]" "$DRIVER" || die "--driver must import './Signal.js'"
+    # a comment or a plain mention of the name must not pass: comments are stripped, then import / from / require must lead the
+    # quoted name on its line (lib/stage.sh's check, STAGE_IMP=./Signal.js)
+    STAGE_IMP=./Signal.js awk '
+      BEGIN { q[1] = "\047" ENVIRON["STAGE_IMP"] "\047"; q[2] = "\"" ENVIRON["STAGE_IMP"] "\"" }
+      { s = $0; o = ""
+        while (s != "") {
+          if (inb) { i = index(s, "*/"); if (!i) { s = ""; break }; s = substr(s, i + 2); inb = 0; continue }
+          i = index(s, "/*"); j = index(s, "//")
+          if (j && (!i || j < i)) { o = o substr(s, 1, j - 1); s = ""; break }
+          if (!i) { o = o s; s = ""; break }
+          o = o substr(s, 1, i - 1); s = substr(s, i + 2); inb = 1
+        }
+        for (k = 1; k <= 2; k++) { i = index(o, q[k]); if (i && substr(o, 1, i - 1) ~ /(^|[^A-Za-z0-9_$.])(import|from|require)[ \t]*\(?[ \t]*$/) found = 1 }
+      }
+      END { exit !found }' <"$DRIVER" || die "--driver must import './Signal.js'"
     cp "$DRIVER" "$1/driver.mjs"
   else
     printf '%s' "$DEFAULT_DRIVER" >"$1/driver.mjs"
@@ -30,6 +44,9 @@ write_driver() { # dir
 }
 
 DESC_B=""; DESC_A=""; STAGED=1
+if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then
+  [[ -z "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_COMMON_DIR+x}${GIT_CEILING_DIRECTORIES+x}" ]] || die "GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR or GIT_CEILING_DIRECTORIES is set: unset it (ref / file mode finds each repo from its path)"
+fi
 if [[ -n "$BEFORE_REF$AFTER_REF" ]]; then
   [[ -n "$BEFORE_REF" && -n "$AFTER_REF" ]] || die "--before-ref and --after-ref go together"
   [[ ${#POS[@]} -eq 0 && -z "$BEFORE_FILE$AFTER_FILE" ]] || die "ref mode takes no driver paths / --before / --after"
@@ -74,5 +91,7 @@ else
   for f in "${POS[@]}"; do [[ -f "$f" ]] || die "driver not found: $f"; done
   DRV_B=$(cd "$(dirname "${POS[0]}")" && pwd)/$(basename "${POS[0]}")
   DRV_A=$(cd "$(dirname "${POS[1]}")" && pwd)/$(basename "${POS[1]}")
+  [[ "$DRV_B" -ef "${POS[0]}" ]] || die "DRIVER_BEFORE: cannot resolve the directory of ${POS[0]} (a symlink before '..'?)"
+  [[ "$DRV_A" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
   DESC_B="$DRV_B  sha256/8 $(sha8 "$DRV_B")"; DESC_A="$DRV_A  sha256/8 $(sha8 "$DRV_A")"
 fi

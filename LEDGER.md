@@ -324,6 +324,64 @@ Evidence: `.handoff/PLAN-b61-g2.md`, `.handoff/RULINGS-b61-g2.md`, `.handoff/evi
 `REVIEW-b61-g2-r2.md`, `REPRO-b61-before.txt`, `REPRO-b61-after.txt`, `REPRO-b61-final.txt`, `RPIPE-b61-before.txt`,
 `NPMTEST-b61-g2.txt`, `NPMTEST-b61-g2-prereview.txt` (local, untracked).
 
+**#96 G5 inlining-budget-diff (b62): mechanisms and what proves each.** Hex labels in #96-#98 are sha256/8 of the named
+file, not commits: before build = commit 7c91d1c / ibd root dc5927cc (frozen in `.handoff/frozen/b62-g5/`); 2e94e012 /
+d195e254 / 0d8929b7 = the 5a roots reviewed by r1 / r2 / r3 (0d8929b7 = after the r2 fixture fix); 74c2fcb5 = the final
+ibd root (src 520b96e3); lib/modes.sh 6b384de8; lib/v8probe.sh 41a3ec9b; bytecode-budget.sh f1070535 (before e0cfec2a).
+(a) R12 (Q-B57-C1): five `takes no value` guards (-h|--help, --self-test, --only-fn, --concurrent, --no-bytecode);
+proved by audit-g5 A1 (exit 2, 0 spawns; old root: `--fn g --only-fn=0` exits 0 SAME, `--help=x` prints usage) and a
+mutant per guard. (b) R10 (Q-B57-C1): the six-name GIT_* block in lib/modes.sh (ref / file mode only) and a subshell
+unset around the self-test's git init / add / refusal spawn; proved by A2 (each of the six names, ref twin, driver-mode
+control still prints a verdict, self-test under GIT_DIR exits 0 with the target repo's ls-files count unchanged; old
+root: 5 rows exit 0 SAME, self-test FAILs) and the mutants (drop `${GIT_CEILING_DIRECTORIES+x}`, unconditional block,
+drop the self-test unset); TASK 0d MEASURED the old self-test under GIT_DIR: 7 FAIL, 47 ok, ls-files 1 -> 3. (c) R11:
+two `-ef` lines, proved by A3 (old root: 3a exit 1 DIFF, 3b exit 0 SAME). (d) R16 / R18 / R26 (Q-B57-MINOR): `--out`
+backslash incl. the relative-cwd clause, empty `--tiers`, `=` in the node path, proved by A4 (0 spawns, OUT absent,
+absolute-OUT control) and A6 retention (20 cycles leave raw dec bud ms stage and a 0-byte report.txt; 20 cycles of each
+A4 refusal add 0 entries). (e) Q-B57-TIERS: audit-g5 "A5 Q-B57-TIERS" removes the tiers line from a root copy (one-match
+anchor) and asserts exit 0 SAME with zero measured runs; on CI linux it FAILs unless /bin/bash is >= 4.4; local bash 3.2
+skips with the reason; the class 1 claim waits for the first CI run (#98 d). (f) R4 sibling (Q-B57-BB3): the
+lib/modes.sh driver check is the lib/stage.sh comment-aware awk (STAGE_IMP=./Signal.js, stdin); TASK 0b reproduced the
+wrong SAME on real node first (`.handoff/evidence/b62-g5a/VERDICT.txt`); proved by the self-test's `cdrv.mjs` fixture
+(`//` line, a 4-line JSDoc block naming the import, a plain string, an absolute-path import; expected `2|1/2|0`) and six
+reviewer mutants (r1 m1 m2 m5, alt1, alt2, alt5; each red on the comment row only, r3) plus the MUTANTS row
+driver-import-block-ends-at-eol. (g) Q-B62-FLAG: name refusal for `*stress-concurrent-inlining*` (every spelling,
+`--no-` included) and the NO-VERDICT on a kConcurrent compile line without `--concurrent`; proved by A7 (old root runs
+both flag forms; the same canned trace gives a verdict without the check and with --concurrent; a trace whose only
+kConcurrent text is `[marking` stays a verdict, which a whole-line mutant turns red). MEASURED (TASK 0c, real node
+26.8.2): compile-line kConcurrent 0 without the flag (3 direct runs); with `--stress-concurrent-inlining` 8-10 in 3
+direct runs and 7-9 in 8 tool runs; `--concurrent-recompilation` is harmless (the trailing --no- wins). A wrong verdict
+from the flag was ARGUED, not shown (10 of 10 tool runs still refused on the glue check; one direct run had no glued
+line). (h) R9 (Q-B62-ADDR): addr() collapses a `0x<hex>` only after line start, a space, `{` or `(` (the only contexts
+in all 22 census logs: space 563, `{` 57, reviewer r2); proved by A1 R9 (`h0x1` vs `h0x2` DIFF, `h0x1` self-pair SAME,
+the exact line `a_0x1$0x2.0x3h0x4k90x5`, a Maglev pair) and a non-ASCII row (self-test, src:596: `<e-acute>0x1` vs
+`<e-acute>0x2`, U+00E9 as UTF-8 bytes, a DIFF, the 0x kept) and the mutants addr-class-rule, addr-always-collapse,
+addr-no-space, addr-no-brace. (i) R15 (Q-B57-COMPILE): the `D` event, ukey() = `<JSFunction ` through `(target X)` plus
+` OSR` (checked against the first cut rule on the 14 concurrency-off logs of b62-g5b/0b/raw: 76 compile and completion
+lines, 39 + 37, 0 key mismatches; the 22 logs hold 154 such lines, and the 8 concurrency-on logs are not part of that
+check); proved by A2 (a) .. (d) (HEAD exit 2 "no trace of m0"; a MAGLEV-only compile, an `[aborted optimizing` unit and
+another function's completion each exit 2; budget.turbo.tsv byte-identical to HEAD) and the mutants done-any-tier,
+accept-`[aborted`, drop the key compare. CENSUS (real node 26.8.2, `.handoff/evidence/b62-g5b/CENSUS.md`): Maglev prints
+`[completed compiling ... (target MAGLEV)`, the OSR suffix follows `(target X)` on both lines, an aborted unit carries
+the compile's key and prints no completion, and with concurrency off no unit has another `[` line inside it. (j) R2
+(Q-B57-PIPE, Q-B60-TMPFULL): the probe is a mktemp regular file plus 64 KiB append, precedence awk > tr > append > node;
+proved by A3 (2 file / 0 pipe per --fn, old root 2 pipe; 9 runs log 18 mktemp calls and leave 0 files, a no-rm mutant
+leaves 18) and A4 (relative TMPDIR, TMPDIR a regular file, `ulimit -f 32` with SIGXFSZ ignored -> `(append exited N)`,
+an awk shim -> `awk exited` with one VERDICT line). (k) Q-B62-TEAR / TEAR2: BYTECODE_AWK strict record shape (header
+whole, length exactly `Bytecode length: <digits>`, no header without a length, no length without a header), proved
+against bb's 23 real fixture pairs (must equal COUNT_AWK; an anonymous header `function: (0x...` stays whole), TR1-TR5 /
+R4d rows and must-fail mutants; A5 real held pipe accepts `3,50`, a `?` on a side, or a glue-check / kConcurrent
+NO-VERDICT with exactly one VERDICT line, never a short list without `?`. MEASURED: before, 28 of 180 file-mode probe
+runs damaged, 26 read `3` with no `?`; after, 180 runs 170 `3,50`, 10 `?`, 0 short (`b62-g5b/a5-probe-matrix.out.txt`,
+`b2b/`). Parity: golden vectors from the frozen before build (`b62-g5a/goldens-dc5927cc`, `b62-g5b/goldens-0d8929b7`;
+deltas explained by the new refusals / D rows); reviewers rebuilt all five roots byte-identical with build.sh. Audit
+repros (Q-B62-REPRO, unmodified copies): REPRO-b62-before.txt had 22 RED rows (fable 1-3, opus 1-3 5-7, cross 1a 1b 2 x5
+3a 3b 5 x4); REPRO-b62-after5a.txt left fable-1, opus-1, opus-6, cross 1a 1b RED (the 5b rows); REPRO-b62-final.txt: all
+GREEN on 74c2fcb5. Counts: self-test 54 -> 85, audit-g5 43 `test(` calls. Evidence: `.handoff/PLAN-b62-g5a.md`,
+`PLAN-b62-g5b.md`, `RULINGS-b62-g5.md`, `evidence/REVIEW-b62-g5a-r1.md` .. `-r3.md`, `REVIEW-b62-g5b-r1.md`, `-r2.md`,
+`REPRO-b62-before.txt`, `REPRO-b62-after5a.txt`, `REPRO-b62-final.txt`, `NPMTEST-b62-g5a-prereview.txt`,
+`NPMTEST-b62-g5b-prereview.txt` (local, untracked).
+
 ---
 
 ## C. CI / platform lessons
@@ -499,6 +557,40 @@ are right). (h) Leads checked, no change: `grep -c ... || true` at the count sit
 verdict is the d_ms comparison, so a grep exit 2 can blank a printed count and never move a verdict (by reading).
 Evidence: `.handoff/evidence/REVIEW-b61-g2-r1.md`, `REVIEW-b61-g2-r2.md`, `NPMTEST-b61-g2-prereview.txt` (local,
 untracked).
+
+**#97 G5: defects and gate lessons the unit caught.** (a) 5a review r1 REJECTED (1 LITERAL): the comment-stripping
+import check had branches with no row; three reviewer mutants survived the full self-test (block comments not stripped,
+the `import|from|require` prefix test dropped, a block comment that never spans lines). Fix: fixture lines for each. (b)
+Re-review r2 REJECTED (1 LITERAL): the 3-line block-comment fixture let alt5 (a block comment ends after its first inner
+line) survive, so a JSDoc example naming the import would have passed. The maintainer waived the second-REJECT stop once
+(Q-B62-WAIVE); the fixture became a 4-line JSDoc block plus the MUTANTS row driver-import-block-ends-at-eol; r3 APPROVED
+with six reviewer mutants each red on the comment row only. Lesson: a multi-line construct needs a fixture longer than
+the shortest mutant that ends it early. (c) 5b: the first TEAR rule ("an empty header name is torn") turned 10 of bb's
+23 real fixture pairs into `?`, because V8 prints an anonymous function's header as `function: (0x...`; found by B2b
+against the real fixtures, amended by Q-B62-TEAR2 (strict record shape, anonymous allowed) and pinned by an
+anonymous-header control row; 1 of 18 real attempts under the first fix still read `3,50 -> 3`. (d) 5b review r1
+REJECTED (2 DESIGN): addr() erased a `0x` after a non-ASCII identifier byte under LC_ALL=C (a wrong SAME for names
+differing only there), fixed by Q-B62-ADDR; and the tear residual was wider than Q-B62-TEAR2 said (Q-B62-TEAR3 reworded
+it, #98 a). One fix round under Q-B62-WAIVE2 (plus the NITs: DONE_AWK anchored on the function and tier, "no completed
+<tier> compile of it", a stale TODO comment); r2 APPROVED. (e) Lesson: a ruling's stated residual is a claim to measure
+-- the reviewer's BSD awk repro found cases the ruling text missed. (f) The 5a pre-review `npm test` caught one fail,
+the deopt-diff-boundary teeth-parity pin on the ibd root (moved by G5), re-pinned with the frozen copy. (g) The 5b
+pre-review `npm test` had 2 fails: the A5 real held-pipe row and its 7c91d1c twin hit the 180000 ms attempt cap (191 s
+and 291 s rows) under full-suite parallelism; both failed by the cap, not by an assertion (reviewer r2 saw 26 spawn-cap
+fails at load1 ~30, no assertion failures). The final tree run (after Q-B62-A5 made the A5 pair opt-in,
+`LITEUTILS_REAL_HOLD=1`, never in `npm test`, and Q-B62-A8 did the same for G2's audit-g2 A8, which ran over its 150 s
+cap in 2 of 3 full runs on this tree; its cause is UNEXPLAINED (run 3 began on a quiet host, load1 1.41; dd root
+2ce1d32e is unchanged by G5; alone it passes in 20 s): the opt-in takes it out of `npm test`, it does not clear it):
+2823 tests, 2811 pass, 0 fail, 12 skip (private copy with .git, quiet lock, host QUIET); alone with the opt-in, audit-g2
+37 pass and audit-g5 72 pass, 1 skip (the CI-only TIERS row). Lesson (the A5 pair, whose rows were over the cap inside
+the full suite but pass alone): a real-node race row inside `npm test` is a timing gate in the DETERMINISTIC tier. (h)
+The ext-audit-inl N1 `probe tr->cat` mutant became verdict-equivalent for a NUL in a header (the cut header is no longer
+whole, `?` either way); a second fixture with a NUL inside a length line (`Bytecode length: 7\0 77`; tr gives `?`, cat
+gives 7) restores the tooth. (i) Mutants confirmed equivalent by reviewer r2 (rc 0, no tooth: drop the line-start
+context, drop `(`, revert DONE_AWK). (j) A shared lib change moves two roots at once: lib/v8probe.sh moved bb and ibd,
+so the parity pins and mutant anchors of both were re-swept (the shared-fragment lesson). Evidence:
+`.handoff/evidence/REVIEW-b62-g5a-r1.md` .. `-r3.md`, `REVIEW-b62-g5b-r1.md`, `-r2.md`, `NPMTEST-b62-g5a-prereview.txt`,
+`NPMTEST-b62-g5b-prereview.txt` (local, untracked).
 
 ---
 
@@ -794,3 +886,28 @@ detected" (a plain line a hostile or careless driver writes can read as a record
 after a `[bailout end. ..` prefix it gives "bailout: no (kind: prefix", after a `[completed compiling ` prefix
 "completed compiling: function name" (still refusals; wording predates r2, deopt-diff.sh:124-127). Evidence:
 `.handoff/evidence/REVIEW-b61-g2-r1.md`, `REVIEW-b61-g2-r2.md` (local, untracked).
+
+**#98 G5 open limits.** Measured, read or argued is stated per item. (a) Tear residual (Q-B62-TEAR3, REPORTED probe
+only, no verdict moves): a driver write that starts with a newline, or with digits then a newline, inside or right after
+a length's digits is not detected; the length reads short or as other digits. MEASURED by reviewer r1 (BSD awk): header
++ `Bytecode length: 3` + header, then `Bytecode length: 5` / `worker line` / `0` reads `3,5`; `Bytecode length: 512` /
+`0` reads `3,512`; `Bytecode length: 12` / `50` reads `3,12`, no `?`. ARGUED by reviewer r2 (BSD awk), not in the ruled
+sentence: a write landing just before the digits (`Bytecode length: ` + `12\n` + `50`) reads 12. The tearing itself is
+MEASURED (28 of 180 runs before the fix, 10 `?` of 180 after). (b) A Maglev abort was not reproduced (`mlabort.js`:
+Maglev ignores `--max-optimized-bytecode-size` and completes); only `[completed compiling` counts, so an unseen abort
+shape cannot count as evidence (argued from the rule). (c) Completion lines were censused on node 26.8.2 only; node 22 /
+24 completion lines are UNPROVEN, and a node that prints none leaves no D row, which fails closed (NO-VERDICT where a
+compile is the only evidence; by reading). (d) Q-B57-TIERS: the CI-only row has not run; class 1 of the `--tiers " "`
+finding is UNPROVEN until the first CI run on the ubuntu legs (bash >= 4.4), and this ledger records PROVEN or KILLED
+from that run. (e) The kConcurrent compile-line check may refuse a run whose Worker isolate compiles concurrently
+(ARGUED, not run; fail closed). The flag-driven wrong verdict itself was argued, not shown (#96 g). (f) TMPFULL: a
+TMPDIR full during the probe and freed before the append check is not caught; a real full disk was not run, only `ulimit
+-f 32` with SIGXFSZ ignored, so node's status on a real full disk is unproven (READ; -h). (g) The probe has no trap: a
+signal mid-probe leaves one `inlining-budget-diff.XXXXXX` file (READ from the design); SIGKILL likewise. (h) With
+`--concurrent` units interleave (MEASURED on the 8 concurrent-on census logs: 0-3 compiles inside an open unit, up to 3
+key mismatches, an orphan completion in every log) and a completion whose key differs from the open unit emits no D, so
+no evidence row is added; there are no D rows for it by design (fail closed, not widened). (i) The comment-stripping
+import check refuses a real import that follows `'http://x';` on the same line, and an `import(` whose path is on the
+next line (READ, reviewer r1; fail closed). (j) bash 5, Linux, uutils `mktemp`, mawk / gawk and node 22 / 24 are proved
+only by CI; local proof is bash 3.2.57, macOS, node 26.8.2. Evidence: `.handoff/evidence/REVIEW-b62-g5b-r1.md`,
+`REVIEW-b62-g5b-r2.md`, `b62-g5b/CENSUS.md`, `b62-g5b/a5-probe-matrix.out.txt` (local, untracked).

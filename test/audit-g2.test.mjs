@@ -435,7 +435,10 @@ test('A7 mutant (append statement before the precedence line): the rc-3 row says
 
 // ======================================================= A8 =======================================================
 // real node, the b57-rpipe drivers (a worker floods fd 1 while the main thread deopts add): never the wrong verdict.
-test('A8 real node, b57-rpipe drivers: 3 attempts, each exit 1 DIFF or exit 2 NO-VERDICT, never exit 0 / SAME', { skip }, () => {
+// Q-B62-A8: a real-node race row is a demonstration, never part of npm test (inside the full suite an attempt can pass its
+// 150 s cap). Opt in with LITEUTILS_REAL_HOLD=1 and run this file alone; each G-unit stop gate records that run in evidence.
+const A8_OPTIN = process.env.LITEUTILS_REAL_HOLD === '1' ? false : 'opt-in real-node race row (Q-B62-A8): set LITEUTILS_REAL_HOLD=1 and run test/audit-g2.test.mjs alone';
+test('A8 real node, b57-rpipe drivers: 3 attempts, each exit 1 DIFF or exit 2 NO-VERDICT, never exit 0 / SAME', { skip: skip || A8_OPTIN }, () => {
     const d = mk('rpipe');
     assert.notEqual(RPIPE_B, RPIPE_A, 'the b driver must differ from a at line 17');
     for (const [s, t] of [['a', RPIPE_A], ['b', RPIPE_B]]) { mkdirSync(join(d, s)); writeFileSync(join(d, s, 'd.mjs'), t); }
