@@ -150,6 +150,7 @@
 unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: once, before any spawn; no probe, allowlist read or trace run inherits them (the per-spawn strips stay)
 unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" join resolve X itself, never a CDPATH entry
 set -euo pipefail
+shopt -u nocasematch   # an inherited BASHOPTS=nocasematch (bash >= 4.1) makes every [[ == ]] / case compare ignore letter case: ic-diff read a key that differs only in case as SAME (ic-fable-1); before any [[ == ]] or case
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e

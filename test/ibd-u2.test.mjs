@@ -353,6 +353,99 @@ row('F10a -p exiting 2 is the named die "cannot run <node> -p": exit 2, exactly 
     return runIbd(b, c, [...BASE, '--node', fakeNode(c, 'node', 'bin', { pRc: 2 }), '--out', join(c.w, 'out'), 'a.mjs', 'b.mjs']);
 }), (o) => { refused(o, /cannot run .*node -p$/, 1); assert.equal(o.verdicts.length, 1, o.out); }, { 'drop the -p die': () => variant('f10a-die', 'NODE_V=$(env -u NODE_OPTIONS', rep(' || die "cannot run $NODE_BIN -p"', '')) });
 
+// ---- b73 F-A FULLSHA (IBD-opus-b-1): ref mode stages by the FULL sha; a tag named like any abbreviation of it cannot win ----
+// ORACLE: audit/2026-11-11-final/fable/cross/CROSSCHECK.md "IBD-opus-b-1" (incl. mutB) + opus/b/REVIEW.md IBD-opus-b-1 GATE.
+// A temp repo (gitIn: every GIT_* / EDITOR / VISUAL var stripped by cleanEnv, user.name / email given per command) with
+// commits A (x = 1) and B (x = 2). The fake node reads the staged ./Signal.js: x = 1 drops the `Inlining` line (the
+// self-test's own drop.trace DIFF), so a correct stage is DIFF exit 1, and B staged on BOTH sides is SAME exit 0 (the
+// full trace on both; A on both would be NO-VERDICT, no decision lines).
+// ALL-AT-ONCE on purpose (one ibd run, not 37): every prefix of A's sha of length 4..40 that `git check-ref-format`
+// accepts becomes refs/tags/<prefix> -> B in ONE repo. The fixed root hands git the 40-hex sha, which git reads as an
+// object id before any ref (it only warns that the name is ambiguous), so the tags cannot collide with it; a build that
+// hands git ANY shorter form (git's own --short, or mutB's ${sha:0:12}) names one of these tags and stages B. So one run
+// convicts every abbreviation length at once, the same verdict as 37 single-tag runs at 1/37 of the cost.
+// A second run carries ONLY the tag git itself prints as --short (the CROSSCHECK reproduction; the old twin's case).
+const FS_OLD = 'ef9cf7f';
+const FS_STRICT = process.env.CI === 'true';
+function gitOut(dir, args) {
+    const r = capSync('git', ['-C', dir, ...args], { env: ENV, encoding: 'utf8' }, 30000, `git ${args[0]}`);
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+}
+function fakeNodeSig(c) {   // fakeNode, but the trace follows the staged Signal.js (cwd = stage/<side>)
+    const p = fakeNode(c, 'node', 'sbin');
+    const t2 = join(c.meta, 'trace2.txt');
+    writeFileSync(t2, T1.split('\n').filter((l) => !l.startsWith('Inlining 0x1d866858')).join('\n'));
+    const s = readFileSync(p, 'utf8');
+    const last = `cat ${q(join(c.meta, 'trace.txt'))}\n`;
+    assert.equal(s.split(last).length - 1, 1, 'fakeNodeSig: the trace line must match once');
+    writeFileSync(p, s.replace(last, () => `if grep -q 'x = 1' ./Signal.js 2>/dev/null; then cat ${q(t2)}; else ${last.trim()}; fi\n`));
+    return p;
+}
+// -> { A, B, blobA, blobB, short, o } after one ibd run; tags: 'all' (every prefix 4..40), 'short' (git's --short only), 'none'
+function fullShaRun(b, c, tags) {
+    refFix(c, 'repo');
+    const repo = join(c.w, 'repo');
+    const A = gitOut(repo, ['rev-parse', 'HEAD~1']), B = gitOut(repo, ['rev-parse', 'HEAD']);
+    const short = gitOut(repo, ['rev-parse', '--short', 'HEAD~1']);
+    assert.match(A, /^[0-9a-f]{40}$/); assert.ok(A.startsWith(short) && short.length >= 4 && short.length < 40, short);
+    const names = tags === 'all' ? Array.from({ length: 37 }, (_, i) => A.slice(0, i + 4)) : tags === 'short' ? [short] : [];
+    let made = 0;
+    for (const n of names) {
+        if (capSync('git', ['check-ref-format', `refs/tags/${n}`], { env: ENV, encoding: 'utf8' }, 30000, 'git check-ref-format').status !== 0) continue;
+        gitIn(repo, ['update-ref', `refs/tags/${n}`, B]); made++;
+    }
+    if (tags === 'all') assert.equal(made, 37, 'every prefix length 4..40 is a legal tag name');
+    if (tags === 'short') assert.equal(made, 1);
+    const blobA = Buffer.from(gitOut(repo, ['show', `${A}:Signal.js`]) + '\n'), blobB = Buffer.from(gitOut(repo, ['show', `${B}:Signal.js`]) + '\n');
+    assert.notDeepEqual(blobA, blobB);
+    const out = join(c.w, 'out');
+    const o = runIbd(b, c, [...BASE, '--node', fakeNodeSig(c), '--out', out, '--repo', 'repo', '--before-ref', 'HEAD~1', '--after-ref', 'HEAD', '--driver', '-d.mjs']);
+    o.stB = existsSync(join(out, 'stage/before/Signal.js')) ? readFileSync(join(out, 'stage/before/Signal.js')) : null;
+    o.stA = existsSync(join(out, 'stage/after/Signal.js')) ? readFileSync(join(out, 'stage/after/Signal.js')) : null;
+    return { A, B, blobA, blobB, short, o };
+}
+function ckFullSha(x) {
+    const { o } = x;
+    assert.ok(o.stB !== null && o.stA !== null, `no stage: ${o.out}`);
+    assert.deepEqual(o.stB, x.blobA, 'stage/before/Signal.js is not A\'s blob (a ref named like an abbreviation won)');
+    assert.deepEqual(o.stA, x.blobB, 'stage/after/Signal.js is not B\'s blob');
+    assert.equal(o.rc, 1, o.out); assert.deepEqual(o.verdicts, ['VERDICT DIFF'], o.out);
+    assert.match(o.out, new RegExp(`^before  HEAD~1 @ ${x.A.slice(0, 12)}  Signal\\.js sha256/8 [0-9a-f]{8}$`, 'm'), 'head line: before @ <sha 12>');
+    assert.match(o.out, new RegExp(`^after   HEAD @ ${x.B.slice(0, 12)}  Signal\\.js sha256/8 [0-9a-f]{8}$`, 'm'), 'head line: after @ <sha 12>');
+}
+const FS_SHORT = 'sha=$(git -C "$REPO" rev-parse --verify --quiet "$ref^{commit}") ||';
+const fsVariants = {
+    'restore rev-parse --short': () => variant('fs-short', FS_SHORT, rep('rev-parse --verify', 'rev-parse --short --verify')),
+    'mutB: re-abbreviate to 12 before git show': () => variant('fs-mutb', 'git -C "$REPO" show "$sha:Signal.js" >"$dir/Signal.js"', rep('git -C "$REPO" show "$sha:Signal.js"', 'sha=${sha:0:12}; git -C "$REPO" show "$sha:Signal.js"')),
+};
+row('FULLSHA tags named like EVERY prefix (4..40) of A\'s sha -> B: stage/before is A\'s blob, DIFF exit 1, head @ <sha 12>', (b) => withCase((c) => fullShaRun(b, c, 'all')), ckFullSha, fsVariants);
+row('FULLSHA only the tag git prints as --short of A -> B: stage/before is A\'s blob, DIFF exit 1, head @ <sha 12>', (b) => withCase((c) => fullShaRun(b, c, 'short')), ckFullSha,
+    { 'restore rev-parse --short': fsVariants['restore rev-parse --short'] });   // mutB survives this row by design (its 12-hex form is not this tag): the all-prefix row above holds it
+row('FULLSHA control, no tags: DIFF exit 1, both stages right, head @ <sha 12>', (b) => withCase((c) => fullShaRun(b, c, 'none')), ckFullSha);
+const fsHave = skip ? 'skip' : (capSync('git', ['cat-file', '-e', `${FS_OLD}^{commit}`], { cwd: HERE, env: ENV, encoding: 'utf8' }, 30000, 'git cat-file ibd FULLSHA').status === 0
+    ? true : `commit ${FS_OLD} not available (shallow clone?)`);
+const FS_OLDSKIP = skip || (fsHave === true || FS_STRICT ? false : fsHave);
+function fsOldBuild() {
+    const r = capSync('git', ['show', `${FS_OLD}:inlining-budget-diff.sh`], { cwd: HERE, env: ENV, encoding: 'latin1', maxBuffer: 1 << 26 }, 30000, 'git show ibd FULLSHA old');
+    assert.equal(r.status, 0, `git show ${FS_OLD}:inlining-budget-diff.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    return putBuild('old-ef9cf7f', r.stdout);
+}
+test(`FULLSHA old twin: git show ${FS_OLD}:inlining-budget-diff.sh with the --short tag stages B, reads SAME exit 0 (red on old); without tags DIFF exit 1`, { skip: FS_OLDSKIP }, () => {
+    const ob = fsOldBuild();
+    withCase((c) => {
+        const x = fullShaRun(ob, c, 'short');
+        assert.deepEqual(x.o.stB, x.blobB, `old twin: stage/before should be B's blob: ${x.o.out}`);
+        assert.equal(x.o.rc, 0, x.o.out); assert.deepEqual(x.o.verdicts, ['VERDICT SAME'], x.o.out);
+        assert.match(x.o.out, new RegExp(`^before  HEAD~1 @ ${x.short}  Signal\\.js `, 'm'), x.o.out);
+        red(ckFullSha, x, 'the old twin passes the FULLSHA check');
+    });
+    withCase((c) => {
+        const x = fullShaRun(ob, c, 'none');
+        assert.equal(x.o.rc, 1, x.o.out); assert.deepEqual(x.o.verdicts, ['VERDICT DIFF'], x.o.out); assert.deepEqual(x.o.stB, x.blobA);
+    });
+});
+
 // ---- node lookup: PATH-resolved and NODE-exported fakes (npm exports NODE; the root defaults --node to it) ----
 test('node lookup: a PATH-resolved fake `node` (NODE unset) and a NODE-exported fake both reach the run (regression pin)', { skip }, () => {
     withCase((c) => {

@@ -35,8 +35,9 @@ jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    # 120: npm test alone took 57.7 min on macOS node 22 at 2016586 (run 41987982156); 60 cancelled two legs
-    timeout-minutes: 120
+    # 180 (Q-B73-CITIME): the macOS legs ran 108-118 min wall at ef9cf7f (run 43049200147, npm test 6897 s on node 22)
+    # against the old 120; 120 itself came from 57.7 min on macOS node 22 at 2016586 (run 41987982156)
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

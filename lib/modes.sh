@@ -54,12 +54,12 @@ if [[ -n "$BEFORE_REF$AFTER_REF" ]]; then
   [[ -n "$REPO" ]] || die "ref mode: not inside a git repo (use --repo)"
   for side in before after; do
     if [[ $side == before ]]; then ref="$BEFORE_REF"; else ref="$AFTER_REF"; fi
-    sha=$(git -C "$REPO" rev-parse --short --verify --quiet "$ref^{commit}") || die "unknown git ref '$ref' in $REPO (git fetch origin $ref?)"
+    sha=$(git -C "$REPO" rev-parse --verify --quiet "$ref^{commit}") || die "unknown git ref '$ref' in $REPO (git fetch origin $ref?)"   # the FULL sha: a tag / branch named like an abbreviation wins over it in git show (IBD-opus-b-1)
     dir="$OUT/stage/$side"; mkdir -p "$dir"
     git -C "$REPO" show "$sha:Signal.js" >"$dir/Signal.js" 2>/dev/null || die "$ref has no Signal.js"
     if git -C "$REPO" cat-file -e "$sha:Watch.js" 2>/dev/null; then git -C "$REPO" show "$sha:Watch.js" >"$dir/Watch.js"; fi
     write_driver "$dir"
-    d="$ref @ $sha  Signal.js sha256/8 $(sha8 "$dir/Signal.js")"
+    d="$ref @ ${sha:0:12}  Signal.js sha256/8 $(sha8 "$dir/Signal.js")"
     if [[ $side == before ]]; then DESC_B="$d"; else DESC_A="$d"; fi
   done
   DRV_B="$OUT/stage/before/driver.mjs"; DRV_A="$OUT/stage/after/driver.mjs"

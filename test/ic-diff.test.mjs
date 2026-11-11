@@ -965,3 +965,90 @@ for (const [label, fn, teeth] of A4) {
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
+
+// ---- b73 F-A NOCASE (ic-fable-1): an inherited BASHOPTS=nocasematch must not fold letter case in the verdict ----
+// ORACLE: audit/2026-11-11-final/opus/cross/CROSSCHECK.md "ic-fable-1" (keys `value` vs `Value` are a real DIFF) and fable
+// REVIEW.md ic-fable-1 GATE. Two canned --log-ic logs that differ ONLY in the letter case of one IC key (x vs X): DIFF,
+// exit 1, under bash >= 4.1 with BASHOPTS=nocasematch in the child env (bash 3.2 does not read BASHOPTS: no teeth there).
+// bash >= 4.1: $LITEUTILS_BASH5, else the first of /opt/homebrew/Cellar/bash/*/bin/bash, /usr/local/Cellar/bash/*/bin/bash,
+// /bin/bash, /usr/bin/bash with BASH_VERSINFO >= 4.1; none: a counted SKIP locally, FAIL under CI_STRICT on linux (the
+// PSUB rule of test/audit-sig.test.mjs). OLD twin = `git show ef9cf7f:ic-diff.sh` (the parent of this fix): SAME, exit 0
+// under the same env (red on old); unreachable: SKIP locally, FAIL under CI_STRICT. Control: BASHOPTS unset -> DIFF on both.
+const NC_PKG = dirname(SCRIPT);
+const NC_STRICT = process.env.CI === 'true';
+const NC_OLD = 'ef9cf7f';
+function ncFindBash41() {
+    const cands = [];
+    if (process.env.LITEUTILS_BASH5) cands.push(process.env.LITEUTILS_BASH5);
+    for (const cel of ['/opt/homebrew/Cellar/bash', '/usr/local/Cellar/bash']) {
+        if (existsSync(cel)) for (const v of readdirSync(cel).sort()) cands.push(join(cel, v, 'bin', 'bash'));
+    }
+    cands.push('/bin/bash', '/usr/bin/bash');
+    for (const b of cands) {
+        if (!existsSync(b)) continue;
+        const r = capSync(b, ['-c', 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'], { encoding: 'utf8', env: ENV }, 30000, `${b} BASH_VERSINFO`);
+        const [ma, mi] = r.stdout.trim().split(' ').map(Number);
+        if (r.status === 0 && (ma > 4 || (ma === 4 && mi >= 1))) return b;
+        if (process.env.LITEUTILS_BASH5 === b) return null;   // an explicit choice that is not bash >= 4.1: no silent fallback
+    }
+    return null;
+}
+const NC_BASH = skip ? null : ncFindBash41();
+const NC_SKIP = skip || (NC_BASH !== null ? false : (NC_STRICT && process.platform === 'linux') ? false
+    : `no bash >= 4.1 found (LITEUTILS_BASH5=${process.env.LITEUTILS_BASH5 ?? 'unset'}, Cellar, /bin/bash, /usr/bin/bash)`);
+const ncHave = skip ? 'skip' : (capSync('git', ['cat-file', '-e', `${NC_OLD}^{commit}`], { cwd: NC_PKG, env: ENV, encoding: 'utf8' }, 30000, 'git cat-file ic NOCASE').status === 0
+    ? true : `commit ${NC_OLD} not available (shallow clone?)`);
+const NC_OLDSKIP = NC_SKIP || (ncHave === true || NC_STRICT ? false : ncHave);
+const L01_CASE = L01.replace(',x,,', ',X,,');
+assert.notEqual(L01_CASE, L01, 'NOCASE fixture: the key edit changed nothing');
+function ncRig() {
+    const g = rig();
+    const dv = (name, log) => { mkdirSync(join(g.d, 'dr', name)); writeFileSync(join(g.d, 'dr', name, 'driver.js'), ''); writeFileSync(join(g.d, 'dr', name, 'ic.log'), log); return join(g.d, 'dr', name, 'driver.js'); };
+    g.lo = dv('nc-lower', MONO); g.up = dv('nc-upper', [V8V, CC_GET, L01_CASE, ''].join('\n'));
+    return g;
+}
+// one run of SCRIPT under NC_BASH, keys x (before) vs X (after); bashopts === null: BASHOPTS / SHELLOPTS absent from the env
+function ncRun(g, script, bashopts) {
+    const env = { ...ENV, TMPDIR: g.tmp };
+    for (const k of ['BASHOPTS', 'SHELLOPTS', 'BASH_ENV', 'ENV', 'POSIXLY_CORRECT']) delete env[k];
+    if (bashopts !== null) env.BASHOPTS = bashopts;
+    const r = capSync(NC_BASH, [script, '--node', join(g.fk, 'node'), '--fn', 'get', g.lo, g.up], { encoding: 'utf8', cwd: join(g.d, 'cwd'), env }, 120000, `ic-diff NOCASE ${basename(script)} BASHOPTS=${bashopts}`);
+    return { status: r.status, out: r.stdout + r.stderr };
+}
+let NC_OLD_PATH = null;
+function ncOldRoot(dir) {
+    const r = capSync('git', ['show', `${NC_OLD}:ic-diff.sh`], { cwd: NC_PKG, env: ENV, encoding: 'buffer', maxBuffer: 1 << 26 }, 30000, 'git show ic NOCASE old');
+    assert.equal(r.status, 0, `git show ${NC_OLD}:ic-diff.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    NC_OLD_PATH = join(dir, 'ic-diff.old.sh'); writeFileSync(NC_OLD_PATH, r.stdout); chmodSync(NC_OLD_PATH, 0o755);
+    return NC_OLD_PATH;
+}
+const ncDiff = (r) => { assert.equal(r.status, 1, r.out); assert.deepEqual(verdicts(r.out), ['VERDICT DIFF'], r.out); assert.match(r.out, /^  get: DIFF -- /m, r.out);
+    const L = r.out.split('\n'); assert.ok(L.includes('  before=1 after=0  get' + TB + 'LoadIC' + TB + 'x' + TB + '1'), r.out); assert.ok(L.includes('  before=0 after=1  get' + TB + 'LoadIC' + TB + 'X' + TB + '1'), r.out); };
+test(`ic-diff NOCASE bash >= 4.1 is available (${NC_BASH ?? 'none'}): CI_STRICT on linux fails without one`, { skip: NC_SKIP }, () => {
+    assert.ok(NC_BASH !== null, 'no bash >= 4.1: the NOCASE rows cannot run');
+});
+test('ic-diff NOCASE (ic-fable-1): BASHOPTS=nocasematch, IC keys x vs X -> exit 1, VERDICT DIFF (bash >= 4.1)', { skip: NC_SKIP }, () => {
+    const g = ncRig();
+    try { ncDiff(ncRun(g, SCRIPT, 'nocasematch')); } finally { g.done(); }
+});
+test('ic-diff NOCASE revert check: the live root minus `shopt -u nocasematch` reads SAME, exit 0 (the row has teeth)', { skip: NC_SKIP }, () => {
+    const g = ncRig();
+    try {
+        const p = variant(g.d, 'nc-noshopt', [[/\nshopt -u nocasematch [^\n]*\n/.exec(readFileSync(SCRIPT, 'utf8'))?.[0] ?? 'NO-SHOPT-LINE', '\n']]);
+        const r = ncRun(g, p, 'nocasematch');
+        assert.equal(r.status, 0, r.out); assert.deepEqual(verdicts(r.out), ['VERDICT SAME'], r.out);
+        assert.throws(() => ncDiff(r), assert.AssertionError);
+    } finally { g.done(); }
+});
+test(`ic-diff NOCASE old twin: git show ${NC_OLD}:ic-diff.sh under BASHOPTS=nocasematch reads SAME, exit 0 (red on old)`, { skip: NC_OLDSKIP }, () => {
+    const g = ncRig();
+    try {
+        const r = ncRun(g, ncOldRoot(g.d), 'nocasematch');
+        assert.equal(r.status, 0, r.out); assert.deepEqual(verdicts(r.out), ['VERDICT SAME'], r.out);
+        assert.throws(() => ncDiff(r), assert.AssertionError);
+    } finally { g.done(); }
+});
+test(`ic-diff NOCASE control: BASHOPTS unset -> exit 1, VERDICT DIFF on the live root and on ${NC_OLD}`, { skip: NC_OLDSKIP }, () => {
+    const g = ncRig();
+    try { ncDiff(ncRun(g, SCRIPT, null)); ncDiff(ncRun(g, ncOldRoot(g.d), null)); } finally { g.done(); }
+});
