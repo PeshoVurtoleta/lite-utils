@@ -657,7 +657,8 @@ test('A6 no-limit twin: the same fakes without ulimit -> exit 0 REPORTED (rows 1
 });
 test('MUT A6 drop-append (BOTH 64 KiB appends removed) -> the probe-row setup reads exit 0 REPORTED (the full TMPDIR goes unseen), never baseline text', { skip }, () => {
     const m1 = mutant('noapp-probe', `{ printf '%65536s' '' >>"$tmp"; } 2>/dev/null || ar=$?`, ':');
-    const m = mutant('noapp-base', `{ printf '%65536s' '' >>"$base"; } 2>/dev/null || ar=$?`, ':', m1);
+    // b70 G-SIG-1: base_list appends to the global BB_TMP (its EXIT trap removes it on any exit), no longer a local $base
+    const m = mutant('noapp-base', `{ printf '%65536s' '' >>"$BB_TMP"; } 2>/dev/null || ar=$?`, ':', m1);
     const x = a6probe(m, 8);
     assert.equal(x.r.status, 0, msg(x.r));
     assert.ok(hasLine(x.r.stdout, 'VERDICT REPORTED'), msg(x.r));

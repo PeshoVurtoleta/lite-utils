@@ -48,6 +48,13 @@
 #                      uses one temp file, ${TMPDIR:-/tmp}/deopt-diff.XXXXXX, removed right after (and by the EXIT
 #                      trap on any other exit: a refusal, an error, SIGINT, SIGTERM or SIGHUP); SIGKILL, or a signal
 #                      inside $(mktemp) before the script has the file's name, can leave one deopt-diff.XXXXXX behind.
+#                      SIGINT / SIGTERM / SIGHUP during a driver run SIGKILLs that run at once (its output is never
+#                      read), then "deopt-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as the
+#                      last two lines of DIR/report.txt once it has its head), exit 2; a signal after FINAL is set
+#                      (the step right after the verdict line) changes nothing; one that lands while the verdict line
+#                      is still being written ends exit 2 with a second VERDICT NO-VERDICT line. A signal during the
+#                      --version / --v8-options probes or ref / file staging takes effect when that step ends. A driver
+#                      run reads the caller's stdin.
 #                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
 #   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
 #                      sha; never starting with -). Goes with --after-ref.
@@ -1247,7 +1254,7 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --fn|--runs|--node|--v8-flags|--out|--fixtures|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
@@ -1410,7 +1417,10 @@ run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driv
   # failure is never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL,
   # which would drop a `[bailout` glued after it); DEOPT_AWK then reads the glue as X "trace text not at line start"
   RUN_TMP=$(mktemp "${TMPDIR:-/tmp}/deopt-diff.XXXXXX") || { RUN_RC="mktemp $?"; RUN_TX=""; RUN_TMP=""; return 0; }
-  ( cd -- "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" ) >"$RUN_TMP" 2>&1 || nrc=$?
+  # the run is a background job the main shell waits for (drv_wait, lib/prologue.sh), so a SIGINT / SIGTERM / SIGHUP
+  # kills it at once (exec: $! is node itself); `<&0` keeps the caller's stdin (a job without job control would get /dev/null)
+  ( cd -- "$1" && exec env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" ) >"$RUN_TMP" 2>&1 <&0 &
+  drv_wait; nrc=$DRV_RC
   tx=$(<"$RUN_TMP" tee "${3:-/dev/null}" | tr '\000' '?' | awk "$KEEP_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
   # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
   # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not

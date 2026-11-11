@@ -274,14 +274,14 @@ test('A2 R10 control: driver mode with GIT_DIR set still prints a verdict (SAME,
     code(r, 0, 'driver mode under GIT_DIR'); assert.equal(verdict(r), 'SAME', msg(r));
 });
 const lsCount = (repo) => gitIn(repo, ['ls-files']).stdout.split('\n').filter((l) => l !== '').length;
-test('A2 R10: --self-test under GIT_DIR=<index-only repo>/.git -> exit 0, 89 ok, no FAIL, that repo\'s ls-files count unchanged', { skip }, () => {
+test('A2 R10: --self-test under GIT_DIR=<index-only repo>/.git -> exit 0, 92 ok, no FAIL, that repo\'s ls-files count unchanged', { skip }, () => {
     const c = mkCase(), g = mkGit(c);
     const before = lsCount(g.repo);
     assert.equal(before, 1, 'fixture: 1 tracked file');
     const r = run(TOOL, c, ['--self-test'], { cwd: c.dir, env: { GIT_DIR: join(g.repo, '.git') } });
     code(r, 0, 'self-test under GIT_DIR');
     assert.equal(/^FAIL/m.test(r.stdout + r.stderr), false, msg(r));
-    assert.equal((r.stdout.match(/^ok /gm) || []).length, 89, `89 ok rows (b62 5a 64 + 5b TASK 4 + B2 probe self-test rows + B2b 7 tear rows + r1 fix e-acute row + b65 5c 4 Turbolev rows: the coder's count, re-pin if it moves)\n${msg(r)}`);
+    assert.equal((r.stdout.match(/^ok /gm) || []).length, 92, `92 ok rows (b62 5a 64 + 5b TASK 4 + B2 probe self-test rows + B2b 7 tear rows + r1 fix e-acute row + b65 5c 4 Turbolev rows + b70 3 null-control rows: the coder's count, re-pin if it moves)\n${msg(r)}`);
     assert.equal(lsCount(g.repo), before, 'the self-test wrote entries into the caller repo index');
 });
 test('A2 R10 old twin: GIT_DIR / WORK_TREE / INDEX_FILE / OBJECT_DIRECTORY / CEILING -> exit 0 SAME; COMMON_DIR -> "git-tracked"; self-test under GIT_DIR FAILs', { skip: OLDSKIP }, () => {

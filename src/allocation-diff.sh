@@ -798,7 +798,7 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --zero) [[ $EQ -eq 0 ]] || die "$a takes no value"; ZERO=1 ;;
     --runs|--node|--v8-flags|--out)

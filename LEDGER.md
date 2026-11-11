@@ -31,7 +31,7 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117, #118)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -307,7 +307,7 @@ driver exit; proved by A7 under `ulimit -f 32` with SIGXFSZ ignored (`append exi
 equal the fake's output; a driver rc 3 still reads `append exited N` (append before driver exit) and a tr exit 6 keeps `tr exited 6` (tr before append)) and three mutants (drop the append, drop the
 `!= *' '*` guard, append before the precedence line). (c) Q-B61-DD-TRAP: one chained EXIT trap removes the temp file on
 every exit path (residual: #95 b) and runs the script's fail-closed trap after it; proved by A3 (SIGTERM during the 3rd driver run:
-TMPDIR empty, stderr `unexpected error (exit 143)` on bash 3.2 (bash 5 prints `(exit 0)`, see #106), exactly one
+TMPDIR empty, stderr `unexpected error (exit 143)` on bash 3.2 (bash 5 prints `(exit 0)`, see #106; superseded b70, #117: `interrupted (SIGTERM)`), exactly one
 VERDICT NO-VERDICT), the a3-noold mutant (drop `$old`),
 the no-rm mutant (leaves exactly 1 file) and deopt-diff-stage-boundary row 12; SIGTERM / SIGINT / SIGHUP to the process
 group during run 3 MEASURED by reviewer r1 (macOS bash 3.2) on the r1 root 114324af and base 050e01e1 (TMPDIR empty, one VERDICT line; the r1 root reported (exit 143 / 130 / 129), base reported (exit 0)). (d) R7 / Q-B61-DD-GLUE / Q-B61-DD-TORN2: a torn `[bailout (kind: ` line is X "bailout: torn trace
@@ -510,6 +510,72 @@ DETERMINISTIC. Evidence: `.handoff/PLAN-b67-gx6.md`, `.handoff/RULINGS-b68.md`, 
 
 ---
 
+**#117 G-SIG-1 (b70): a signal while a tool waits for its driver (cross-script audit L1 / L5; Q-B66-SIG, Q-B67-STDIN;
+supersedes #106 (a)).** (a) Defect class and mechanism: the EXIT trap decided "a die already printed" with `rc -eq 2`,
+so any abort that exits 2 without a die was silent (L1), and a signal during the run died by the signal inside `$( )` or
+ran the trap with `$?` 0 / 143 (bash-dependent text, #106). Now `die` sets DIED first and the trap tests DIED
+(lib/prologue.sh); the driver run is a main-shell background job (`( cd DIR && exec env .. NODE .. ) >FILE 2>&1 <&0 &`
+then `drv_wait`, DRV_RC its exit); `_sig` (L5, armed by sig_arm for INT / TERM / HUP) ignores further signals, KILLs the
+recorded pid, reaps it and goes through die: `<tool>: interrupted (SIG<X>)`, one VERDICT NO-VERDICT, exit 2, same text
+on every bash, bash 5 UNPROVEN until the next ubuntu CI run of audit-sig. A die inside `$( )` exits only that subshell,
+so the 6 census sites (lib/common.sh refuse_live; bb RB / RA / RL probe lines; ibd b= / a= probe lines) each carry `|| {
+DIED=1; exit 2; }`. Measured (coder, bash 3.2): dd / ic / bb (base_list) / ibd (run_trace) exit 1-8 ms after SIGTERM /
+SIGINT / SIGHUP, driver pid dead, 1 VERDICT line; ad, bb's probe runs and ibd's bytecode probes wait for the in-flight
+driver (inside `$( )`, G-SIG-2). Q-B67-STDIN: `<&0` keeps the caller's stdin at every run site except bb's base_list,
+which stays `</dev/null` (its stdin today). (b) r1 doc-truth catch (REJECTED, 1 LITERAL): the -h claim "after the
+verdict line a signal changes nothing" was false: `say "VERDICT .."` runs one command before FINAL=1, so a signal there
+gives a second VERDICT NO-VERDICT, rc 2. Rule (law 6 spirit): a contract sentence about "after X" must name the exact
+flag or step (FINAL=1) and be derived from the code order, never from the intent. r2 APPROVED. (c) Sibling fallout (#114
+again): the first full npm test (private copy with .git, frozen fillers, quiet lock) was 3212 tests, 3195 pass, 3 fail,
+14 skip: audit-g1 MUT A6 (its anchor `>>"$base"` moved with the base_list rewrite), bytecode-budget-stage-boundary row 9
+(the bb --self-test temp dir is left behind on SIGINT; re-pinned to that), and spawn-cap S5 (the raw-cap census flagged
+the NEW audit-sig file). Rules: a NEW test file must pass the spawn-cap S5 raw-cap census (helpers use capSync / armCap
+only, no raw timeout key), and a lib change runs the FULL suite before review, not the targeted list. Final tree (run
+2): 3213 tests, 3199 pass, 0 fail, 14 skip, rc 0, 1470 s. The 2 skips above b69's 12 were the audit-g1 `A1 real
+BB-opus-1` pair, whose plain-node truth precondition (no tool involved) read "3," once (run 2: load1 2.36 ->
+3.43, load15 10.50 -> 15.39; the NULLCTL run skipped them again at load1 ~1.5, so the cause is
+unmeasured); re-run on the same tree: truth 5 / 5 `3,50`, the 2 rows 2 / 2 pass. (d) Equivalent-mutant
+catch: with DIED, the `exit 2 -> exit 0` mutant on the -h line (`usage; DIED=1; exit 2`) is equivalent (rc 0 runs the
+EXIT trap path: a silent 2), so it was replaced by the h-nodied mutant (drop `DIED=1`) in allocation-diff.test /
+ic-diff.test (audit-sig ROW H is the separate -h drop-DIED row: `unexpected error` printed). Gate:
+test/audit-sig.test.mjs, 90 tests, DETERMINISTIC, old twins `git show 465881b:<root>` (CI_STRICT). Golden vs 465881b:
+--self-test outputs and counts unchanged on all 5 (ad 83, bb 68, dd 107, ic 81, ibd 89; --fixtures bb 92, dd 124) except
+one ic self-test label; fake-node SAME / DIFF / NO-VERDICT runs byte-identical; -h changed only by the new signal
+paragraphs (bb, dd, ic, ibd), -h stderr and rc byte-identical. Reviews: code r1 REJECTED (b), r2 APPROVED. (e) Residuals
+named by review (NITs, not fixed): a signal during die or the EXIT trap gives two NO-VERDICT lines and can skip the
+chained temp rm (microsecond window, rc 2); the census guard maps any non-zero status of that `$( )` to a silent 2 (only
+0 / 2 reachable today); `_sig`'s bare `wait` has no deterministic tooth on bb / dd / ic; on bash >= 5.1 `wait` may also
+wait for a `< <( )` producer (UNVERIFIED, no bash 5 here); a signal between `&` and `SIG_PID=$!` waits the run out
+(accepted by the spec); the bb --self-test temp dir is still left behind on SIGINT. (f) Evidence:
+`.handoff/PLAN-b67-gsig.md`, `.handoff/evidence/b70-gsig/`, `.handoff/evidence/b70-npm/` (local, untracked).
+
+---
+
+**#118 NULLCTL (b70): a gate with no teeth on the tool's own null control (maintainer report; Q-B70-NULLCTL-WHEN,
+Q-B70-NULLCTL-SCOPE; section B, next to #116 (c), the gate-teeth lesson).** (a) Defect: turning off a tool's
+null-control comparison (the check that run k of the same build equals run 1) was caught by nothing for
+inlining-budget-diff: at 465881b lib/nullctl.sh `if [[ -z "$v" ]] && ! cmp -s` -> `if false && ! cmp -s` gave
+--self-test 89 / 89, rc 0, and no test file named ibd's null control. A tool without that check can call SAME or DIFF
+on a noisy driver (fail-open). (b) Census method (TASK 0, read-only, untimed, bash 3.2, node v26.8.2): per mutant a full
+private copy of the tree, one count-checked single-match replacement of the comparison, the self-test (and --fixtures
+for bb / dd) run on each. Result, full disable: ad, bb, dd and ic CAUGHT (ad 2 rows, bb 4, dd 6, ic 3), ibd SURVIVED
+(89 / 89). Partial disables: run-2-only SURVIVED on bb, ic and ibd and was caught on ad and dd; one side off SURVIVED
+on ibd (before-side and after-side each). Sites: ad, dd, ic one `nk != first` loop each; bb one `line != first` loop;
+ibd the shared macro in lib/nullctl.sh. (c) r1 catch (REJECTED, 3 LITERAL, gate teeth): the first census and fix
+covered the full disable and run-2-only but not every partial disable; r1 found survivors ibd last-run-only, ibd
+maglev-tier-off, ibd --only-fn-off, bb last-run-only and ic before-side-off. Rule (law 6): "turned off" includes every
+partial disable, meaning one side, one tier, one mode, a subset of the runs (first, last, all but one); a census must
+try each, and an equivalent mutant is NAMED, not counted ("compare run k to run k-1" gives the same verdict for every
+input, so it is no gap). Now: self-tests ad 83, bb 69 (--fixtures 93), dd 107 (124), ic 83, ibd 92; node:test MUTANTS
+ibd nullctl-off, -before-side-off, -after-side-off, -run2-only, -last-only, -maglev-off, -only-fn-off; bb
+null-control-run2-only, -last-only; ic M-nc-k3 (row 82) and M-nc-bef (row 83); each red on exactly its rows and every
+new row red on the pre-NULLCTL roots. r2 APPROVED. Count pins moved in audit-g5, audit-xs, bytecode-budget-stage and
+bytecode-budget-stage-boundary (bb 59 -> 60 without git; #114 again). The ibd rows use a POSIX-sh fake node (law 7).
+Tier DETERMINISTIC. (d) Evidence: `.handoff/RULINGS-b70.md`, `.handoff/PLAN-b70-nullctl.md`,
+`.handoff/evidence/b70-nullctl/CENSUS.md` (local, untracked).
+
+---
+
 ## C. CI / platform lessons
 
 **#38 History pins reachable only via the local reflog (burst 35).** Review of `ci.yml` found 4 of 5 history-test
@@ -594,7 +660,7 @@ green): audit-g2 A3 expects `unexpected error (exit 143)`. Cause READ from the C
 fail-closed EXIT trap (lib/prologue.sh:9) with $? = 0 when SIGTERM ends it while it waits for the driver, then
 re-raises SIGTERM (rc null, sig SIGTERM); stderr has `unexpected error (exit 0)`, exactly one VERDICT NO-VERDICT,
 TMPDIR empty. bash 3.2 prints (exit 143) and also ends by SIGTERM (MEASURED locally, b65), so the signal check does not separate the bashes.
-Q-B65-SIGTERM ("Test oracle per bash"): A3 keeps (exit 143) on bash 3.2; on bash >= 4 it asserts an `unexpected
+Q-B65-SIGTERM ("Test oracle per bash"; superseded b70 by #117, text now `interrupted (SIG<X>)`): A3 keeps (exit 143) on bash 3.2; on bash >= 4 it asserts an `unexpected
 error (exit N)` line, one VERDICT NO-VERDICT, TMPDIR empty, SIGTERM end; the widened mutant row (no `unexpected error
 (exit N)` line, any bash) is red on the live tool (MEASURED). The bash 5 branch is UNPROVEN locally (no bash 5 /
 Linux); open limit #106. Rule: oracles that name a shell- or userland-specific text probe the host or accept every
@@ -778,7 +844,7 @@ fail-closed trap needs its own must-fail row (A3's stderr / single-VERDICT asser
 `npm test` caught final-trap's deopt-diff raw `exit 0` census (18 -> 19): any new `exit 0` text in a root moves it;
 that run (pre-review, private copy with .git, root 114324af, host PRELIMINARY, load1 6.44 -> 5.91): 2664 tests, 2655
 pass, 1 fail, 8 skip, the one fail that census. (g) A SIGTERM during a run now ends `unexpected error (exit 143)`
-(bash 3.2; bash 5 prints `(exit 0)`, see #106) where the before build printed `(exit 0)`; on bash 3.2 the trap's
+(bash 3.2; bash 5 prints `(exit 0)`, see #106; superseded b70, #117: `interrupted (SIGTERM)`) where the before build printed `(exit 0)`; on bash 3.2 the trap's
 `(exit $st_rc)` subshell also prints a cosmetic
 `Terminated: 15 ( exit $st_rc )` (or `Hangup: 1`) line to stderr (reviewer r1: exit code and the single VERDICT line
 are right). (h) Leads checked, no change: `grep -c ... || true` at the count sites feeds printed counts only; the
@@ -952,7 +1018,7 @@ verdict a fix however rare. Cost: +1 git spawn on every untracked `--before` (3 
 `--before`'s directory and below, so a tracked hard link elsewhere in the repository stays undetected; -h says that,
 not "everywhere". (b) The b57 cross-check found that the first-pass fixes of seven audit findings (five fix forms)
 would have regressed; the shared lib took the cross-checked forms. (c) R2 (full stdout pipe drops V8 records) reaches
-deopt-diff too, not only bytecode-budget; it is ruled to G1, G2 and G5, not G0. (d) ic-diff's INT / TERM trap (`die
+deopt-diff too, not only bytecode-budget; it is ruled to G1, G2 and G5, not G0. (d) (superseded b70, #117: the trap is now `interrupted (SIG<X>)` in lib/prologue.sh) ic-diff's INT / TERM trap (`die
 "interrupted"`, src/ic-diff.sh:815 and :833) can now give `VERDICT X` and then `VERDICT NO-VERDICT` in the report,
 exit 2: accepted, the last line matches the exit status. Evidence: `.handoff/RULINGS-b58-g0.md`,
 `.handoff/RULINGS-b57-audit.md`, `.handoff/PLAN-b58-g0.md`, `.handoff/evidence/REVIEW-b58-g0-r1.md` (local,
@@ -1175,7 +1241,7 @@ description at offset 0 and can overwrite earlier output: READ, not run (-h). (d
 functions at startup only: an internal compiled after the driver imports something (e.g. node:fs) is missed (by
 reading; -h). The list on node 26.8.2 has 24 names; of about 40 common names only `get` and `set` collide (MEASURED,
 reviewer r1). (e) A killed run can leave one `bytecode-budget.XXXXXX` (no EXIT trap inside the `$( )` subshell; by
-reading; -h). (f) With the default SIGXFSZ a file-size limit kills the shell: base_list's append ends the run with rc
+reading; -h). b70 (#117, G-SIG-1): base_list's temp is now removed on a signal; the probe `$( )` runs stay a G-SIG-2 residual. (f) With the default SIGXFSZ a file-size limit kills the shell: base_list's append ends the run with rc
 153 and one temp file left, exit outside -h's 0 / 1 / 2 (MEASURED; fails closed, hostile setup). (g) Open FILLERS from
 the r1b NITs (the PWD case MEASURED by reviewer r1b; the two wording items READ, not measured): a deleted cwd with no
 PWD in the environment gives "PWD: unbound variable", generic `unexpected error`, exit 2 (fix `"${PWD-}"`); src line
@@ -1267,13 +1333,16 @@ run), mechanism ARGUED: a SIGTERM while a tool waits for the driver prints `unex
 0, then SIGTERM re-raised); the verdict stays NO-VERDICT (fail closed). allocation-diff, bytecode-budget and
 inlining-budget-diff carry the same lib/prologue.sh:9 trap and no INT/TERM trap, so ARGUED to print it too; ic-diff
 traps INT TERM (`die "interrupted"`, src/ic-diff.sh:851, :869) and prints `ic-diff: interrupted` instead (READ). A
-prologue signal-trap fix is for the cross-script reviewer (Phase 7), Q-B65-SIGTERM. (b) CLOSED b67 (G-XS, X8): bb's
+prologue signal-trap fix is for the cross-script reviewer (Phase 7), Q-B65-SIGTERM. SUPERSEDED b70 (#117, G-SIG-1): a
+SIGTERM now prints `<tool>: interrupted (SIG<X>)`, rc 2, one VERDICT NO-VERDICT, on every bash, bash 5 UNPROVEN until the next
+ubuntu CI run of audit-sig (bb, dd, ic, ibd measured on bash 3.2; ad after its in-flight driver run, G-SIG-2); the SIGTERM
+`(exit 0)` text is gone. (b) CLOSED b67 (G-XS, X8): bb's
 refusal text "(as `node --version` prints it)" was false for prerelease nodes (v27.0.0-alpha.0.0.0 is refused); the text
 now names a release version and -h says "Release versions only" (Q-B65-NODEPRE). (c) PROVEN on ubuntu (b67, CI run
 42865876509 of 5fcffb5, node 22 and 24, GNU bash 5.3.9; node 26 legs success): the bash >= 4 branch of audit-g2 A3 and
 its mutant GREEN, and the 45 fillers / pad rows (the pad fix of #105 (a)) GREEN; the only reds were audit-g4 A1 / A2
 real (the oracle defect IC24 addresses in dc4a10c; its CI proof is open, #111). bash 4.x and the macOS legs were not
-read.
+read. SUPERSEDED b70 (#117, G-SIG-1): audit-g2 A3's bash >= 4 branch is removed (one oracle on every bash).
 
 **#109 G5c open limits.** Measured, read or argued is stated per item. (a) ARGUED: a V8 that drops --turbolev from
 --v8-options (or lists it under a name this build does not read) while `--concurrent` is on gives units with no tag, so

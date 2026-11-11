@@ -48,6 +48,13 @@
 #                      uses one temp file, ${TMPDIR:-/tmp}/deopt-diff.XXXXXX, removed right after (and by the EXIT
 #                      trap on any other exit: a refusal, an error, SIGINT, SIGTERM or SIGHUP); SIGKILL, or a signal
 #                      inside $(mktemp) before the script has the file's name, can leave one deopt-diff.XXXXXX behind.
+#                      SIGINT / SIGTERM / SIGHUP during a driver run SIGKILLs that run at once (its output is never
+#                      read), then "deopt-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as the
+#                      last two lines of DIR/report.txt once it has its head), exit 2; a signal after FINAL is set
+#                      (the step right after the verdict line) changes nothing; one that lands while the verdict line
+#                      is still being written ends exit 2 with a second VERDICT NO-VERDICT line. A signal during the
+#                      --version / --v8-options probes or ref / file staging takes effect when that step ends. A driver
+#                      run reads the caller's stdin.
 #                      Ref / file mode (required): also DIR/stage, absent or an empty directory (see Ref / file mode).
 #   --before-ref REF   ref mode: the before side is --module as committed at REF (a commit-ish, resolved to its full
 #                      sha; never starting with -). Goes with --after-ref.
@@ -276,9 +283,30 @@ unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" joi
 set -euo pipefail
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
-# set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
+# set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e
+# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: such a site
+# adds || { DIED=1; exit 2; }). The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
 FINAL=""
-trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "deopt-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+DIED=""; SIG_PID=""
+trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "deopt-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+# _sig NAME: a trapped SIGINT / SIGTERM / SIGHUP. After FINAL=1 it does nothing (the planned exit stands). Else it
+# ignores further signals, kills the recorded driver (SIGKILL: a bounded exit; an interrupted run's output is never
+# read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
+# "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
+# no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
+# that is running when the signal lands (the --version / --v8-options probes, a driver run inside $( )) ends first
+_sig() {
+  [[ -z $FINAL ]] || return 0
+  trap '' INT TERM HUP
+  if [[ -n $SIG_PID ]]; then kill -KILL "$SIG_PID" 2>/dev/null || true; fi
+  wait 2>/dev/null || true
+  if declare -F die >/dev/null; then die "interrupted (SIG$1)"; fi
+  DIED=1; printf 'deopt-diff: interrupted (SIG%s)\nVERDICT NO-VERDICT\n' "$1" >&2; exit 2
+}
+sig_arm() { trap '_sig INT' INT; trap '_sig TERM' TERM; trap '_sig HUP' HUP; }
+drv_wait() { SIG_PID=$!; DRV_RC=0; wait "$SIG_PID" || DRV_RC=$?; SIG_PID=""; }   # the job just started with &
+DRV_RC=0
+sig_arm
 REPORT=""   # die reads it: an inherited $REPORT is never a report file
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes
@@ -461,7 +489,9 @@ END {
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes);
+  # DIED first: the EXIT trap stays silent (lib/prologue.sh)
+  DIED=1
   printf 'deopt-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
   if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf 'deopt-diff: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
   exit 2
@@ -528,7 +558,7 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
   local f="$1" what="$2" p me top t LIVE_TOPS=""
-  p=$(resolve_links "$f")
+  p=$(resolve_links "$f") || { DIED=1; exit 2; }   # its die ran in the $( ) (DIED unset here)
   for t in "$f" "$p"; do
     if is_tracked "$t"; then die "$what is a git-tracked working-tree file ($t): use a FROZEN copy (untracked) or --before-ref"; fi
   done
@@ -1594,7 +1624,7 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --fn|--runs|--node|--v8-flags|--out|--fixtures|--before-ref|--after-ref|--before|--after|--module|--driver|--repo)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
@@ -1757,7 +1787,10 @@ run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driv
   # failure is never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL,
   # which would drop a `[bailout` glued after it); DEOPT_AWK then reads the glue as X "trace text not at line start"
   RUN_TMP=$(mktemp "${TMPDIR:-/tmp}/deopt-diff.XXXXXX") || { RUN_RC="mktemp $?"; RUN_TX=""; RUN_TMP=""; return 0; }
-  ( cd -- "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" ) >"$RUN_TMP" 2>&1 || nrc=$?
+  # the run is a background job the main shell waits for (drv_wait, lib/prologue.sh), so a SIGINT / SIGTERM / SIGHUP
+  # kills it at once (exec: $! is node itself); `<&0` keeps the caller's stdin (a job without job control would get /dev/null)
+  ( cd -- "$1" && exec env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "./$2" ) >"$RUN_TMP" 2>&1 <&0 &
+  drv_wait; nrc=$DRV_RC
   tx=$(<"$RUN_TMP" tee "${3:-/dev/null}" | tr '\000' '?' | awk "$KEEP_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
   # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
   # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not

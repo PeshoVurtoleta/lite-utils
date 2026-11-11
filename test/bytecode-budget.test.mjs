@@ -20,7 +20,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
 const FIX = join(HERE, 'fixtures', 'bytecode-budget', 'node-26.8.2');
 const DRIVER = join(FIX, 'driver.mjs');
-const C = 68;         // self-test ok lines without --fixtures (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); G-TRACKED b45: + 2 GT1 / GT2 rows (need git); G-FIFO b46: + 1 MD-FIFO row (no git needed); G-BBAWK b52: + 4 R-a..R-d rows (no git needed); with --fixtures C + 24 = 92)
+const C = 69;         // self-test ok lines without --fixtures (b70 NULLCTL: 68 -> 69, the run-3 null-control row) (F1: B2 686de5bf's 42 + the after null-control dj check; F1-r2: + the COUNT_AWK 1..9-digit cap check + the before null-control dj check; P2G2B B2: + 4 ref / file rows (needs git); ext-audit B-four bb: + 5 MD-36 / MD-37 / MD-39/40 / MD-42 / MD-44 rows (no git needed); MD-46 G3: + 3 --v8-flags allowlist rows (5 refusals, the 3 listed flags, TMPDIR / cwd); G-STAGE b44: + 2 D7 rows (D1, D6) + 1 Q-DD6a (i) row (need git); G-ENV b45: + 1 Q-ENV e2e row (no git needed); G-TRACKED b45: + 2 GT1 / GT2 rows (need git); G-FIFO b46: + 1 MD-FIFO row (no git needed); G-BBAWK b52: + 4 R-a..R-d rows (no git needed); with --fixtures C + 24 = 92)
 const F = 24;         // fixtures-only checks (plan TASK 4: 13 + 9 + 1 + 1)
 // G-ENV (PLAN-b42-genv TASK 1): the top line that unsets the 4 env vars a node reads at start, and its self-test row
 const TOPLINE = 'unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV: no node spawn sees one\n';
@@ -175,6 +175,12 @@ const MUTANTS = [
     ['b4a-reset-off', '/^  --/ { k = "" }\n', '', "another flag's header ends a limit header", true],
     ['glued-hdr-off', 'want = 0; hdr = 1; next', 'want = 0; next', 'a header glued after column 1'],
     ['header-hdr-off', 'n += want; hdr = 1; next', 'n += want; next', 'count: one header -> count 1'],
+    // b70 NULLCTL (PLAN-b70-nullctl TASK 2): the null control compares run 2 only (survived the self-test before the run-3 row)
+    ['null-control-run2-only', 'if [[ "$line" != "$first" ]]; then JWHY="null control', 'if [[ $k -le 2 && "$line" != "$first" ]]; then JWHY="null control',
+        'null control: run 3 with a changed length', true],
+    // r1 review: the null control compares the last run only (survived the 3-run row; the row now has 4 runs)
+    ['null-control-last-only', 'if [[ "$line" != "$first" ]]; then JWHY="null control', 'if [[ $k -eq $# && "$line" != "$first" ]]; then JWHY="null control',
+        'null control: run 3 with a changed length', true],
 ];
 for (const [name, from, to, failing, exact] of MUTANTS) {
     test(`bytecode-budget --self-test MUST FAIL on mutant ${name}`, { skip }, () => {

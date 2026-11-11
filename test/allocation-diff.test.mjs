@@ -475,7 +475,7 @@ const B2 = [
         [["node runs per side, 2..20 (default 5)",
           "node runs per side, 2..20 (default 3)"]]],
     ["H2", [59], "-h exits 0",
-        [["-h|--help) [[ $EQ -eq 0 ]] || die \"$a takes no value\"; usage; exit 2 ;;",
+        [["-h|--help) [[ $EQ -eq 0 ]] || die \"$a takes no value\"; usage; DIED=1; exit 2 ;;",   // b70 G-SIG-1: DIED=1 (silent trap)
           "-h|--help) [[ $EQ -eq 0 ]] || die \"$a takes no value\"; usage; FINAL=1; exit 0 ;;"]]],
     ["F1", [60], "--zero takes 2 DRIVERs",
         [["[[ ${#POS[@]} -eq 1 ]] || die \"--zero takes",
@@ -839,9 +839,12 @@ function assertHelp(script) {
         assert.deepEqual(g.ents(), b0);
     });
 }
+// b70 G-SIG-1 (A3): 'usage; DIED=1; exit 0' is EQUIVALENT (DIED keeps the trap silent and it exits 2), so the h-exit0
+// mutant is replaced by h-nodied: DIED=1 dropped -> the trap prints "unexpected error (exit 2)" on stderr (the row's
+// empty-stderr check goes red)
 const HELP_TEETH = [
-    ['h-exit0', [['usage; exit 2 ;;', 'usage; exit 0 ;;']]],
-    ['h-stderr', [['usage; exit 2 ;;', 'usage >&2; exit 2 ;;']]],
+    ['h-nodied', [['usage; DIED=1; exit 2 ;;', 'usage; exit 2 ;;']]],
+    ['h-stderr', [['usage; DIED=1; exit 2 ;;', 'usage >&2; DIED=1; exit 2 ;;']]],
     ['h-from-line-3', [["sed -n '2,/^$/{s/^# \\{0,1\\}//;p;}'", "sed -n '3,/^$/{s/^# \\{0,1\\}//;p;}'"]]],
 ];
 test('allocation-diff -h / --help: exit 2, the header usage on stdout (stderr empty), key claim lines, 0 spawns, 0 mktemp', { skip }, () => {

@@ -610,9 +610,9 @@ const emuCheck = (r) => {
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.deepEqual(fails, [EMU_FAIL]);
     assert.match(r.stdout, /^ {5}got: {2}git exited 128: fatal: no tag message\?$/m);
-    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 59);   // 68 - the 9 staged rows (repo setup failed)
+    assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok   ')).length, 60);   // 69 - the 9 staged rows (repo setup failed)
 };
-test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 59 ok', { skip }, () => {
+test('stage boundary: 8 KNOWN GAP EMULATED git < 2.32 + ~/.gitconfig tag.gpgSign=true -> --self-test exit 1, ONE FAIL (repo setup: "no tag message?"), 60 ok', { skip }, () => {
     emuCheck(stRun(SCRIPT, emuEnv()));
 });
 test('stage boundary teeth: [8 KNOWN GAP EMULATED] the 9173830d build has no staged rows (exit 0) -> the row is red', { skip: baseSkip }, () => {
@@ -628,8 +628,14 @@ test('stage boundary MUTANT M-tag-gpgsign-off (tg gains -c tag.gpgSign=false): t
 });
 
 // =====================================================================================================
-// 9. PRE-EXISTING (not group 2b; addendum A4 deferred nit): --self-test has no INT/TERM trap, so a Ctrl-C (SIGINT to
-// the process group) leaves its mktemp -d dir behind. macOS mktemp ignores TMPDIR, so a PATH shim logs the dir.
+// 9. Ctrl-C (SIGINT to the process group) during --self-test. Until 465881b it was PRE-EXISTING (not group 2b; addendum
+// A4 deferred nit): no INT/TERM trap, the run ended by SIGINT and left its mktemp -d dir behind (sigCheckOld; the
+// 9173830d row keeps that pin). b70 G-SIG-1 moved oracle (ruling Q-B66-SIG, PLAN-b67-gsig.md): the shared INT / TERM /
+// HUP trap (lib/prologue.sh) is armed before self_test runs, so the run ends exit 2, no signal end, stderr exactly
+// "bytecode-budget: interrupted (SIGINT)" + VERDICT NO-VERDICT; self_test has no cleanup trap of its own, so its
+// mktemp -d dir is STILL LEFT BEHIND (measured b70: 3 / 3 runs, bash 3.2; not fixed here). Old twin: the 465881b root
+// (`git show 465881b:bytecode-budget.sh`, sha256/8 f453ee0d) fails sigCheck. macOS mktemp ignores TMPDIR, so a PATH shim
+// logs the dir.
 // The SIGINT must land while the self-test is PROVABLY running (b38: sending it on the first ok line raced the
 // self-test's exit on CI, code=0). An awk PATH shim passes every call through EXCEPT the self-test's own second
 // check: its "names" fixture is written only after the first ok line is echoed, so an awk call on <mktemp dir>/names
@@ -656,10 +662,10 @@ exec ${JSON.stringify(realAwk)} "$@"
 `);
         chmodSync(join(d, 'bin', 'awk'), 0o755);
         const ch = spawn('bash', [script, '--self-test'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), PATH: `${join(d, 'bin')}:${process.env.PATH}` } });
-        let out = '', killed = false, exited = false, ok = false, wasReady = false, waitedOut = false, escalated = false;
+        let out = '', err = '', killed = false, exited = false, ok = false, wasReady = false, waitedOut = false, escalated = false;
         const group = (sig) => { try { process.kill(-ch.pid, sig); } catch { /* group gone */ } };
         ch.stdout.on('data', (b) => { out += b; ok = ok || /^ok {3}/m.test(out); });
-        ch.stderr.on('data', () => {});
+        ch.stderr.on('data', (b) => { err += b; });
         ch.on('exit', () => { exited = true; });
         let hard = null;
         (async () => {
@@ -678,31 +684,58 @@ exec ${JSON.stringify(realAwk)} "$@"
             for (const x of left) rmSync(x, { recursive: true, force: true });   // the test cleans what the script left
             // outside sigCheck: a teeth / mutant assert.throws can never swallow it
             if (escalated) { try { assert.fail('bytecode-budget.sh --self-test SIGINT run timed out after 30000 ms (killed by SIGKILL)'); } catch (e) { reject(e); return; } }
-            resolve({ code, signal, killed, wasReady, waitedOut, ok, dirs, left, hasAdd, out });
+            resolve({ code, signal, killed, wasReady, waitedOut, ok, dirs, left, hasAdd, out, err });
         });
     });
 }
 // sigintRun sends the SIGINT only once `ready` exists (killed implies wasReady), so the killed assert runs FIRST and names
 // the most specific of the three no-SIGINT paths; the wasReady assert after it only guards that runner invariant.
-const sigCheck = (s) => {
+function sigReady(s) {
     assert.ok(s.killed, s.waitedOut
         ? `the wait (3000 polls x 20 ms, ~60 s) ran out (ok line seen: ${s.ok}, awk shim blocked on "names" (ready file): ${s.wasReady}); the group was SIGKILLed, no SIGINT sent`
         : s.wasReady
             ? `the self-test exited (code=${s.code} sig=${s.signal}) AFTER its awk call on the "names" fixture blocked, and no SIGINT was sent (ok line seen: ${s.ok}): the blocking sleep or the bash ended early (an outside signal, or the sleep failed)`
             : `the self-test exited (code=${s.code} sig=${s.signal}) without the awk shim blocking on its "names" call (no ready file: the self-test ended before that call, or the shim guard did not match it; ok line seen: ${s.ok}); no SIGINT sent`);
     assert.ok(s.wasReady, 'runner invariant broken: the SIGINT was sent but the awk "names" ready file was never seen');
+}
+const sigCheckOld = (s) => {   // the 465881b-and-earlier pin: ended by SIGINT, the dir left behind
+    sigReady(s);
     assert.ok(s.signal === 'SIGINT' || s.code === 130, `not terminated by SIGINT: code=${s.code} sig=${s.signal}`);
     assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
     assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);
     assert.ok(s.hasAdd, 'the left dir is the self-test dir (holds its "add" fixture)');
     assert.doesNotMatch(s.out, /^self-test: (all checks passed|\d+ check\(s\) ok)$/m);   // the old line (9173830d) or the new one
 };
-test('stage boundary: 9 PRE-EXISTING --self-test SIGINT after the first ok line -> killed by SIGINT, its temp dir LEFT BEHIND (no INT/TERM trap)', { skip }, async () => {
+const SIG_ERR = 'bytecode-budget: interrupted (SIGINT)\nVERDICT NO-VERDICT\n';
+const sigCheck = (s) => {   // b70 G-SIG-1: exit 2 through the shared trap, the dir still left behind
+    sigReady(s);
+    const m = `code=${s.code} sig=${s.signal}\n--- stderr\n${s.err}`;
+    assert.equal(s.signal, null, `ended by a signal\n${m}`);
+    assert.equal(s.code, 2, m);
+    assert.equal(s.err, SIG_ERR, m);
+    assert.ok(s.dirs.length >= 1, 'mktemp -d not seen');
+    assert.equal(s.left.length, 1, `left behind: ${s.left.join(' ')}`);
+    assert.ok(s.hasAdd, 'the left dir is the self-test dir (holds its "add" fixture)');
+    assert.doesNotMatch(s.out, /^self-test: (all checks passed|\d+ check\(s\) ok)$/m);
+};
+// the 465881b root (old twin of the b70 pin): HEAD at G-SIG-1 time, an ancestor of every later commit
+const b66Src = spawnSync('git', ['-C', join(HERE, '..'), 'show', '465881b:bytecode-budget.sh'], { env: cleanEnv() });
+const haveB66 = b66Src.status === 0 ? (sha8(b66Src.stdout) === 'f453ee0d' ? true : '465881b:bytecode-budget.sh is not f453ee0d') : 'git show 465881b:bytecode-budget.sh failed (shallow clone or no git history)';
+const b66Skip = skip || histSkip(haveB66);
+test('stage boundary: 9 --self-test SIGINT after the first ok line -> exit 2 (no signal end), stderr exactly "interrupted (SIGINT)" + NO-VERDICT, its temp dir STILL LEFT BEHIND (b70 G-SIG-1)', { skip }, async () => {
     sigCheck(await sigintRun(SCRIPT));
 });
-test('stage boundary: 9 PRE-EXISTING same on the 9173830d build (not new in group 2b)', { skip: baseSkip }, async () => {
+test('stage boundary: 9 old twin: the 465881b root (no shared signal trap) ends by SIGINT and the b70 check is red', { skip: b66Skip }, async () => {
+    histGate(haveB66);
+    const p = join(ROOT, 'b66-f453ee0d.sh');
+    writeFileSync(p, b66Src.stdout); chmodSync(p, 0o755);
+    const s = await sigintRun(p);
+    sigCheckOld(s);
+    assert.throws(() => sigCheck(s), assert.AssertionError);
+});
+test('stage boundary: 9 PRE-EXISTING on the 9173830d build (not new in group 2b): ended by SIGINT, its temp dir left behind', { skip: baseSkip }, async () => {
     histGate(haveBase);
-    sigCheck(await sigintRun(BASE));
+    sigCheckOld(await sigintRun(BASE));
 });
 test('stage boundary MUTANT M-int-trap (self_test gains an INT/TERM cleanup trap): the row goes red (dir removed)', { skip }, async () => {
     const p = variant('M-int-trap', [['local d; d=$(mktemp -d)', 'local d; d=$(mktemp -d); trap \'rm -rf "$d"; exit 130\' INT TERM']]);

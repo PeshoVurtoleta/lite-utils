@@ -484,12 +484,12 @@ const failLines = (o) => o.split('\n').filter((l) => l.startsWith('FAIL '));
 const stRun = (script, env = cleanEnv()) => capSync('bash', [script, '--self-test'], { encoding: 'utf8', env }, 240000, 'bytecode-budget.sh --self-test');
 const countOf = (o, name) => okLines(o).filter((l) => l.startsWith('ok   ' + name)).length;
 
-test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 9 staged checks present exactly once, 68 ok', { skip }, () => {
+test('bytecode-budget stage A5 (a): --self-test exits 0, no FAIL, each of the 9 staged checks present exactly once, 69 ok', { skip }, () => {
     const r = stRun(SCRIPT);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, `check "${n}"`);
-    assert.equal(okLines(r.stdout).length, 68);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist) + 3 (G-STAGE D7 D1 / D6 / Q-DD6a i) + 1 (G-ENV Q-ENV e2e) + 2 (G-TRACKED GT1 / GT2) + 1 (G-FIFO MD-FIFO) + 4 (G-BBAWK R-a..R-d); also pinned by bytecode-budget.test.mjs C
+    assert.equal(okLines(r.stdout).length, 69);   // 45 + N (N = 4) + 5 (ext-audit B-four bb MD-36..MD-44) + 3 (MD-46 G3 allowlist) + 3 (G-STAGE D7 D1 / D6 / Q-DD6a i) + 1 (G-ENV Q-ENV e2e) + 2 (G-TRACKED GT1 / GT2) + 1 (G-FIFO MD-FIFO) + 4 (G-BBAWK R-a..R-d); also pinned by bytecode-budget.test.mjs C
 });
 test('bytecode-budget stage A5 teeth (a): the 9173830d build has none of the 9 staged checks (and 45 ok)', { skip: baseSkip }, () => {
     histGate(haveBase);
@@ -525,17 +525,17 @@ test('bytecode-budget stage A5 (d): a PATH without git -> exit 1, exactly one FA
     t.diagnostic(`no-git: rc=${r.status} FAIL lines=${JSON.stringify(f)} ok=${okLines(r.stdout).length}`);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(f.length, 1, f.join('\n'));
-    assert.equal(okLines(r.stdout).length, 59);   // 68 - the 9 staged rows (they need git); the 5 B-four bb rows, the 3 MD-46 G3 rows, the Q-ENV row and the MD-FIFO row (mkfifo, on the shim) need none
+    assert.equal(okLines(r.stdout).length, 60);   // 69 - the 9 staged rows (they need git); the 5 B-four bb rows, the 3 MD-46 G3 rows, the Q-ENV row and the MD-FIFO row (mkfifo, on the shim) need none
     assert.ok(f[0].startsWith('FAIL ' + NOGIT_NAME), f[0]);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 0, n);   // the staged rows do not run without git
 });
-test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 68 ok, exit 0 (hook safety)', { skip }, () => {
+test('bytecode-budget stage A5 (e): all six GIT_* vars set (missing paths) -> --self-test still 69 ok, exit 0 (hook safety)', { skip }, () => {
     const env = { ...cleanEnv() };
     for (const k of GITVARS) env[k] = join(ROOT, 'no-such-' + k);
     const r = stRun(SCRIPT, env);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(failLines(r.stdout), []);
-    assert.equal(okLines(r.stdout).length, 68);
+    assert.equal(okLines(r.stdout).length, 69);
     for (const n of ST_NAMES) assert.equal(countOf(r.stdout, n), 1, n);
 });
 

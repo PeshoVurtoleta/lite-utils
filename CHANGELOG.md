@@ -180,7 +180,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   precedence awk > tr > tee > append > driver exit. Q-B61-DD-TRAP: one EXIT trap in the main shell removes the temp
   file on every exit path (residual: LEDGER #95 b) and chains the script's fail-closed EXIT trap, so an unexpected
   error still prints its VERDICT line; on SIGTERM the report now says `unexpected error (exit 143)` (bash 3.2; bash 5
-  prints `(exit 0)`, see LEDGER #106) where the before build said `(exit 0)`. R7 (Q-B57-C1): a line starting `[bailout (kind: ` that names no function and is not a whole
+  prints `(exit 0)`, see LEDGER #106; superseded b70: `interrupted (SIGTERM)`, LEDGER #117) where the before build said `(exit 0)`. R7 (Q-B57-C1): a line starting `[bailout (kind: ` that names no function and is not a whole
   bailout line, or holds a second `[bailout (kind: ` after its own, is X "bailout: torn trace line" for every fn
   (another thread wrote into the line). Q-B61-DD-GLUE + Q-B61-DD-TORN2: the same refusal for a torn `[bailout (kind: `
   glued after other text on a line (a `[bailout end. ..` prefix included), and for a second head after it; a glued
@@ -1096,6 +1096,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b70 G-SIG-1: a SIGINT / SIGTERM / SIGHUP while a tool waits for its driver now ends at once (cross-script audit L1 /
+  L5; Q-B66-SIG, Q-B67-STDIN; LEDGER #117). Before, bytecode-budget (bb), deopt-diff (dd) and inlining-budget-diff (ibd)
+  died by the signal inside `$( )` or printed `unexpected error (exit 143)` (bash 3.2; `(exit 0)` on bash 5, LEDGER
+  #106) and ic-diff printed `interrupted` without the signal; the driver could outlive the tool. Now bb (base_list), dd,
+  ic-diff and ibd (run_trace) exit 2 at once (gated bound 10 s, audit-sig A1) with `<tool>: interrupted (SIG<X>)` and
+  exactly one `VERDICT NO-VERDICT` line (stderr, and the last two lines of `--out DIR/report.txt`), the driver run is
+  killed (SIGKILL on its recorded pid), and the temp files are removed. allocation-diff, bb's per-fn probe runs and
+  ibd's bytecode probes run the driver inside `$( )`, so a signal there waits for the in-flight run first and then
+  prints the same lines (G-SIG-2 keeps that residual). ic-diff's message gains the signal name (`ic-diff: interrupted
+  (SIGTERM)`, was `ic-diff: interrupted`). L1: an abort that exits 2 without a `die` (for example `sh -c "exit 2"` after
+  the prologue) used to stay silent because the EXIT trap tested `rc -eq 2`; it now prints `<tool>: unexpected error
+  (exit 2)` and `VERDICT NO-VERDICT`, because `die` sets a DIED flag and the trap tests that flag instead (6 die-in-`$(
+  )` sites in the census: common.sh refuse_live; bb RB / RA / RL probe lines; ibd b= / a= probe lines, each `|| {
+  DIED=1; exit 2; }`). A signal after FINAL=1 changes nothing. Unchanged by design: bb's base_list keeps `</dev/null`,
+  and every other driver run keeps the caller's stdin (`<&0`, Q-B67-STDIN). -h: bb, dd, ic-diff and ibd gain a signal
+  paragraph; -h stderr and rc are byte-identical. The paragraph says a signal before the verdict line gives
+  `interrupted`; the first draft said "after the verdict line a signal changes nothing", which was false (the `say
+  "VERDICT .."` line runs one command before FINAL=1: a signal there gives a second `VERDICT NO-VERDICT`, rc 2), so the
+  claim names the FINAL=1 step. Residuals (NITs, not fixed): see LEDGER #117 (e). REPORTED, not gated (coder probes, one
+  run per tool x signal x mode): dd / ic / bb / ibd exit 1-8 ms after the signal on bash 3.2, driver pid dead, 1 VERDICT
+  line. Golden vs 465881b: --self-test outputs and counts unchanged (ad 83, bb 68, dd 107, ic 81, ibd 89; --fixtures bb
+  92, dd 124) except one ic self-test label; fake-node SAME / DIFF / NO-VERDICT runs byte-identical. Tier:
+  DETERMINISTIC. Gated in test/audit-sig.test.mjs (90 tests, old twins `git show 465881b:<root>`, CI_STRICT). Sibling
+  rows moved: audit-g1 MUT A6 anchor `>>"$base"`, bytecode-budget-stage-boundary row 9 (the bb --self-test temp dir is
+  still left behind on SIGINT; the row is pinned to that), and the ic / dd / bb / ibd signal text in the existing rows.
+  npm test (private copy with .git, quiet lock): run 1 3212 tests, 3195 pass, 3 fail, 14 skip (the three sibling reds:
+  audit-g1 MUT A6 anchor `>>"$base"`, bytecode-budget-stage-boundary row 9, and the spawn-cap S5 raw-cap census on
+  test/audit-sig.test.mjs; also moved: the h-exit0 -> h-nodied mutant in allocation-diff.test and ic-diff.test, and the
+  final-trap G-SIG A4 / A5 rows); run 2 on the final tree 3213 tests, 3199 pass, 0 fail, 14 skip, rc 0, 1470 s.
+- b70 NULLCTL: every tool's own null-control comparison now has a self-test row and a node:test mutant that go red
+  when it is turned off, in whole or in part (maintainer report; Q-B70-NULLCTL-WHEN, Q-B70-NULLCTL-SCOPE; LEDGER
+  #118). Before, forcing inlining-budget-diff's (ibd) comparison in lib/nullctl.sh false (`if [[ -z "$v" ]] && ! cmp
+  -s` -> `if false && ! cmp -s`) left its --self-test at 89 / 89 on 465881b and no test named it, so a build that
+  never compared its null runs would still pass. A census of all five tools (disable-mutant on the comparison) found
+  the full disable caught for allocation-diff (ad), bytecode-budget (bb), deopt-diff (dd) and ic-diff and SURVIVING
+  for ibd, and partial disables surviving: run-2-only on bb, ic and ibd, one side off on ibd; review r1 added more
+  survivors (ibd last-run-only, maglev-tier-off, --only-fn-off; bb last-run-only; ic before-side-off), all closed in
+  r2. No tool behaviour changes: only --self-test rows are added, so a null-control gap is now a failing self-test.
+  --self-test counts now ad 83, bb 69 (--fixtures 93), dd 107 (124), ic 83, ibd 92 (were bb 68 / 92, ic 81, ibd 89).
+  node:test MUTANTS: ibd nullctl-off, -before-side-off, -after-side-off, -run2-only, -last-only, -maglev-off,
+  -only-fn-off; bb null-control-run2-only and null-control-last-only; ic M-nc-k3 (self-test row 82 NC3) and M-nc-bef
+  (row 83 NC4); each red on exactly its rows, and every new row fails on the pre-NULLCTL roots. The mutant "compare
+  run k to run k-1" is EQUIVALENT (same verdict for every input), named and not counted as a gap. Golden: only the bb
+  / ic / ibd self-test outputs changed; -h byte-identical. Count pins moved in audit-g5, audit-xs,
+  bytecode-budget-stage and bytecode-budget-stage-boundary (bb 59 -> 60 without git). The ibd rows use a POSIX-sh fake
+  node only. Tier: DETERMINISTIC. npm test (final G-SIG-1 + NULLCTL tree, private copy with .git, quiet lock): 3226
+  tests, 3212 pass, 0 fail, 14 skip, rc 0, 1795 s; the 2 skips above b69's 12 are again the audit-g1 BB-opus-1 pair
+  (its memoized plain-node truth precondition, no tool involved, read short once; this run was host QUIET, load1 1.57
+  -> 1.54, so the cause is not load alone and is unmeasured; LEDGER #117 (c)).
 - b69 G-X6: all five roots refuse a newline or a CR in any path the report prints (cross-script audit X6 / L2; Q-B66-X6
   "Fix all five", Q-B68-IBDCR, Q-B68-STAGECWD; LEDGER #116). A path holding an LF or a CR was printed into the report,
   so a directory named `q<LF>VERDICT SAME<LF>z` forged a column-1 `VERDICT SAME` line. Now bytecode-budget (bb),
@@ -1161,7 +1210,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   process.version as --node-version skip on a prerelease node (v27.0.0-alpha.0.0.0); a new A4 row pins bb's exit-2
   refusal (audit-g1 64 -> 65). (c) Q-B65-SIGTERM: audit-g2 A3 keeps `(exit 143)` on bash 3.2 and asserts an
   `unexpected error (exit N)` line, one VERDICT and an empty TMPDIR on bash >= 4 (bash 5 prints `(exit 0)`, open limit
-  #106; audit-g2 37 tests, 36 pass, 1 skip, unchanged). The bash 5 and uutils branches are UNPROVEN until the next
+  #106, superseded b70 by LEDGER #117; audit-g2 37 tests, 36 pass, 1 skip, unchanged). The bash 5 and uutils branches are UNPROVEN until the next
   ubuntu CI run.
 - CI-CAP (burst 68, test-only; LEDGER #115): every cap on one whole `--self-test` spawn is now >= 3x the slowest CI
   spawn (run 42885917245 killed an ibd mutant row at 60187 ms vs 60000): ibd 60000 -> 210000, bb / audit-g5 / audit-xs

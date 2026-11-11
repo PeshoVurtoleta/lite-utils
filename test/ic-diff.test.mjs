@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 81;   // self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
+const C = 83;   // b70 NULLCTL: 81 -> 83 (rows 82 NC3, 83 NC4, appended last). Was 81: self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE /
@@ -33,7 +33,7 @@ for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE
 // the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
 ENV.NODE_V8_COVERAGE = undefined;
 
-// The 81 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 83 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -116,6 +116,8 @@ const ROW = [null,
     /* 79 */ 'R14 ',
     /* 80 */ 'R26 ',
     /* 81 */ 'R6 ',
+    /* 82 */ 'NC3 ',
+    /* 83 */ 'NC4 ',
 ];
 
 function selfTest(path) {
@@ -348,8 +350,8 @@ const B2 = [
         [["exec \"${PROBE_ENV[@]}\" \"$NODE_RES\" ${V8_EXTRA",
           "exec \"${PROBE_ENV[@]}\" \"$NODE_BIN\" ${V8_EXTRA"]]],
     ["M-sigflag", [54], "a signal noted during mktemp never re-raised",
-        [["  [[ $IC_SIG == 0 ]] || die \"interrupted\"\n",
-          ""]]],
+        [["  sig_arm; [[ -z $IC_SIG ]] || _sig \"$IC_SIG\"\n",   // b70 G-SIG-1: the noted signal re-raised through the shared trap
+          "  sig_arm\n"]]],
     ["M-r-repeat", [55], "repeated fn accepted",
         [["[[ \"$SEEN\" != *\"|$t|\"* ]] || die",
           "true || die"]]],
@@ -480,6 +482,12 @@ const NEW = [
         [["    *stress-concurrent-inlining*)\n      die \"--v8-flags must not set $f: --stress-concurrent-inlining implies --concurrent-recompilation in V8, which overrides the script's --no-concurrent-recompilation (a background compile makes the IC log a race; every spelling of the flag is refused)\" ;;\n", '']]],
     ['M-sci-exact', [81], 'the refusal arm matches only the exact --stress-concurrent-inlining',
         [['    *stress-concurrent-inlining*)\n', '    --stress-concurrent-inlining)\n']]],
+    // b70 NULLCTL (PLAN-b70-nullctl TASK 3): the null control compares run 2 only (survived the self-test before row 82)
+    ['M-nc-k3', [82], 'null control compares run 2 only',
+        [['for ((i = 1; i < n; i++)); do\n    nk=$(s_ms', 'for ((i = 1; i < 2 && i < n; i++)); do\n    nk=$(s_ms']]],
+    // r1 review: the before side judged on run 1 only (its null control never runs; survived NC3)
+    ['M-nc-bef', [83], 'before side judged on run 1 only (before null control off)',
+        [['JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge', 'JRC=("${RCB[0]}"); JLOG=("${LGB[0]}"); JREC=("${REB[0]}"); judge']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -568,7 +576,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 80 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 82 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -598,7 +606,10 @@ const HELP_LINES = [
     '  flag`, `ic-diff: cannot hash the <node> --v8-options output`.',
     '  --v8-flags allowlist: it exits 2 after the --version and the first --v8-options spawn, still before any disk write.',
     '  With --out: no mktemp; DIR holds report.txt and raw/<side>/run.<k>.{log,out} (4 x runs + 1 files; 13 for runs 3).',
-    '  `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit; an INT / TERM ->',
+    // b70 G-SIG-1: the signal sentence moved to its own Signals: paragraph (lib/prologue.sh shared trap)
+    '  `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit.',
+    'Signals: SIGINT / SIGTERM / SIGHUP during a trace run SIGKILLs that run at once (its output is never read), then',
+    '  "ic-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as the last two lines of DIR/report.txt',
     '  S fn<TAB>kind<TAB>base:line:col<TAB>key<TAB>final<TAB>mod<TAB>slow',
     'Verdict, over every fn (NO-VERDICT > DIFF > SAME): exit 0 SAME, 1 DIFF, 2 NO-VERDICT.',
     'Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.',
@@ -646,9 +657,12 @@ test('ic-diff -h / --help: exit 2, the usage on stdout (stderr empty), key lines
 test('ic-diff -h: revert checks (usage exiting 0, usage on stderr) fail the row', { skip }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'icd-h-'));
     try {
-        for (const [n, to] of [['h-exit0', 'usage; exit 0 ;;'], ['h-stderr', 'usage >&2; exit 2 ;;']]) {
-            const p = variant(dir, n, [['usage; exit 2 ;;', to]]);   // outside throws: a bad anchor is a row error, never a kill
+        // b70 G-SIG-1 (A3): 'usage; DIED=1; exit 0' is EQUIVALENT (DIED keeps the trap silent and it exits 2), so the
+        // b56 h-exit0 mutant is replaced by h-nodied: DIED=1 dropped -> the trap prints "unexpected error (exit 2)"
+        for (const [n, to] of [['h-nodied', 'usage; exit 2 ;;'], ['h-stderr', 'usage >&2; DIED=1; exit 2 ;;']]) {
+            const p = variant(dir, n, [['usage; DIED=1; exit 2 ;;', to]]);   // outside throws: a bad anchor is a row error, never a kill
             const hr = helpRuns(p);
+            if (n === 'h-nodied') for (const r of hr) assert.equal(r.stderr, 'ic-diff: unexpected error (exit 2)\nVERDICT NO-VERDICT\n', `${n}: ${r.stderr}`);
             assert.throws(() => assertHelp(hr), (e) => { t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
         }
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -829,7 +843,7 @@ function a4Retention(script) {
         }
         const r = g.run(script, ['--fn', 'get', g.D.term, g.D.mono]);
         assert.equal(r.status, 2, r.out);
-        assert.ok(r.out.split('\n').includes('ic-diff: interrupted'), r.out);
+        assert.ok(r.out.split('\n').includes('ic-diff: interrupted (SIGTERM)'), r.out);   // b70 G-SIG-1: the signal is named
         assert.equal(r.mk.length, 1);
         assert.equal(r.argv.length, 4, r.argv.join('\n'));
         assert.deepEqual(g.ents(), b0, 'after the SIGTERM');
@@ -916,8 +930,10 @@ const A4 = [
     ['A4 retention: 3 x (SAME / DIFF / NO-VERDICT) + 1 SIGTERM mid-run -> 1 mktemp each, 0 new entries in TMPDIR, cwd, driver dirs', a4Retention,
         // teeth (plan A4): red when the trap's rm is removed
         [['M-trap-rm', [['if [[ -n \\$IC_TMP ]]; then rm -rf \\"\\$IC_TMP\\"; fi; ', '']]],
-         ['no-int-term-trap', [["trap 'die \"interrupted\"' INT TERM\nif [[ -n \"$OUT\" ]]; then", "if [[ -n \"$OUT\" ]]; then"],
-            ["  trap 'die \"interrupted\"' INT TERM\n  [[ $IC_SIG == 0 ]]", "  trap - INT TERM\n  [[ $IC_SIG == 0 ]]"]]]]],
+         // b70 G-SIG-1: ic's own INT / TERM trap is folded into the shared one (lib/prologue.sh): no signal trap at all =
+         // the prologue sig_arm call dropped + the post-mktemp re-arm replaced by a reset to the default
+         ['no-int-term-trap', [['\nsig_arm\nREPORT=""', '\nREPORT=""'],
+            ['  sig_arm; [[ -z $IC_SIG ]]', '  trap - INT TERM HUP; [[ -z $IC_SIG ]]']]]]],
     ['shipped ./$3: drivers named -x.js / -y.js run as files (every trace argv ends ./<name>), SAME', argvDash,
         [['M-dash', [['"--logfile=$rd/run.log" "./$3" )', '"--logfile=$rd/run.log" "$3" )']]]]],
     ['verdict fold: get DIFF + nosuch NO-VERDICT (both --fn orders) -> exit 2, VERDICT NO-VERDICT, one line per fn', foldNV,

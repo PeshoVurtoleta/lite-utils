@@ -7,6 +7,10 @@
 // Teeth: every A1 / A2 / stderr-closed row has a must-fail twin = the same mutant of a copy of the live root with the
 // literal pre-G-FINAL trap line put back (exact-once, count-checked); the twin must turn the row's check red. The A3
 // scanner has exact-once mutants that must add exactly the violation they name.
+// b70 G-SIG-1 (PLAN-b67-gsig.md TASK 5, ASSERTIONS A4 / A5): the trap now stays silent only when $DIED is set (die, the
+// -h exit), not on any rc 2: NEW_TRAP is that line; the A4 row injects a non-die rc-2 abort (must print), the A5 row a
+// signal after FINAL=1 (the planned rc 1 stands). Their twin = the live copy with the 465881b trap line put back and the
+// shared signal trap unarmed (the sig_arm call dropped): the 465881b behaviour at the anchor (B66_TRAP).
 // TIER: DETERMINISTIC (no V8 spawn: a logging fake node first on PATH must stay unused; no timed assertion).
 // Every copy lives in one private mkdtemp dir, removed in after(). Every spawn is capSync, never inside assert.throws.
 import { test, beforeEach, after } from 'node:test';
@@ -41,16 +45,22 @@ const TOOLS = {
     'ic-diff': [2, 11, { comment: 2, quoted: 7, heredoc: 0, code: 2 }],
     'inlining-budget-diff': [2, 5, { comment: 1, quoted: 2, heredoc: 0, code: 2 }],
 };
-// the G-FINAL trap line and the literal pre-G-FINAL one (each root carries its own name for @SCRIPT@)
-const NEW_TRAP = (t) => String.raw`trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "` + t +
+// the G-SIG-1 trap line (b70), the 465881b one (G-FINAL, silent on any rc 2) and the literal pre-G-FINAL one (each root
+// carries its own name for @SCRIPT@)
+const NEW_TRAP = (t) => String.raw`trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "` + t +
+    String.raw`: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
+const B66_TRAP = (t) => String.raw`trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "` + t +
     String.raw`: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
 const OLD_TRAP = (t) => String.raw`trap 'rc=$?; if [[ -z $FINAL && $rc -ne 0 && $rc -ne 2 ]]; then printf "` + t +
     String.raw`: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT` + '\n';
+const SIGARM = '\nsig_arm\nREPORT=""';   // the shared signal trap's arming call (lib/prologue.sh), once per root
 const ANCHOR = 'export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes\n';
 const INJ = {   // the injected line, right after ANCHOR
     exit0: 'exit 0\n',                                        // A1: a planned-looking exit 0 with no FINAL
     unset: 'fu() { [[ -n $G_FINAL_UNSET ]]; }; fu\n',         // A2: a set -u abort (bash 3.2 exits 0 here)
     fail: 'false\n',                                          // stderr-closed row: a set -e failure (rc 1)
+    rc2: 'sh -c "exit 2"\n',                                  // A4 (b70): a set -e abort with rc 2 that is not a die
+    fsig: 'FINAL=1; kill -TERM $$; exit 1\n',                 // A5 (b70): a signal after the planned verdict
 };
 
 const DIR = realpathSync(mkdtempSync(join(tmpdir(), 'ft-root-')));
@@ -67,13 +77,15 @@ function once(src, from, to, what) {   // an exact-once, count-checked edit
     return src.replace(from, () => to);
 }
 const live = (t) => readFileSync(join(PKG, `${t}.sh`), 'utf8');
-// a copy of root t: inj injected after ANCHOR; old = the literal pre-G-FINAL trap line put back (the twin)
+// a copy of root t: inj injected after ANCHOR; old = true: the literal pre-G-FINAL trap line put back (the twin);
+// old = 'b66': the 465881b trap line put back and the sig_arm call dropped (the A4 / A5 twin)
 const made = new Map();
 function mutant(t, inj, old) {
-    const key = `${t}.${inj}.${old ? 'old' : 'new'}`;
+    const key = `${t}.${inj}.${old === 'b66' ? 'b66' : old ? 'old' : 'new'}`;
     if (made.has(key)) return made.get(key);
     let src = once(live(t), ANCHOR, ANCHOR + INJ[inj], `${t} ${inj}`);
-    if (old) src = once(src, NEW_TRAP(t), OLD_TRAP(t), `${t} old trap`);
+    if (old === 'b66') src = once(once(src, NEW_TRAP(t), B66_TRAP(t), `${t} b66 trap`), SIGARM, '\nREPORT=""', `${t} sig_arm`);
+    else if (old) src = once(src, NEW_TRAP(t), OLD_TRAP(t), `${t} old trap`);
     const p = join(DIR, 'm', `${key}.sh`);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, src); chmodSync(p, 0o755);
@@ -118,6 +130,20 @@ function checkHost(t, c, r) {   // any bash: rc 2 and the trap's message (exit <
     assert.match(r.stderr, new RegExp(`^${t}: unexpected error \\(exit \\d+\\)\\nVERDICT NO-VERDICT\\n$`, 'm'), msg(r));
     assert.equal(c.spawns(), 0, 'a node spawn');
 }
+function checkA4(t, c, r) {   // b70 A4: a non-die rc-2 abort is an unexpected error, never a silent 2
+    assert.equal(r.status, 2, msg(r));
+    assert.equal(r.stdout, '', msg(r));
+    assert.equal(r.stderr, UNEXP(t, 2), msg(r));
+    assert.equal(c.spawns(), 0, 'a node spawn');
+}
+function checkA5(c, r) {   // b70 A5: a signal after FINAL=1 changes nothing: the planned rc 1, no interrupted line
+    assert.equal(r.signal, null, msg(r));
+    assert.equal(r.status, 1, msg(r));
+    assert.equal(r.stdout, '', msg(r));
+    assert.doesNotMatch(r.stderr, /interrupted/, msg(r));
+    assert.doesNotMatch(r.stderr, /VERDICT/, msg(r));
+    assert.equal(c.spawns(), 0, 'a node spawn');
+}
 function checkClosed(c, r) {   // stderr closed: nothing can be printed; the exit code alone says NO-VERDICT
     assert.equal(r.status, 2, msg(r));
     assert.equal(r.stdout, '', msg(r));
@@ -127,8 +153,10 @@ function checkClosed(c, r) {   // stderr closed: nothing can be printed; the exi
 for (const t of Object.keys(TOOLS)) {
     test(`A0 ${t}: the root carries the G-FINAL trap line exactly once (the twins' anchor) and not the pre-G-FINAL one`, { skip }, () => {
         const src = live(t);
-        assert.equal(src.split(NEW_TRAP(t)).length - 1, 1, 'G-FINAL trap line');
+        assert.equal(src.split(NEW_TRAP(t)).length - 1, 1, 'G-SIG-1 trap line');
+        assert.equal(src.split(B66_TRAP(t)).length - 1, 0, '465881b trap line');
         assert.equal(src.split(OLD_TRAP(t)).length - 1, 0, 'pre-G-FINAL trap line');
+        assert.equal(src.split(SIGARM).length - 1, 1, 'sig_arm call (the A4 / A5 twin anchor)');
         assert.equal(src.split(ANCHOR).length - 1, 1, 'LC_ALL anchor');
     });
 
@@ -142,6 +170,29 @@ for (const t of Object.keys(TOOLS)) {
         const r = run(c, 'bash', mutant(t, 'exit0', true).p);
         assert.equal(r.status, 0, msg(r));
         assert.throws(() => checkA1(t, c, r), assert.AssertionError);
+    });
+
+    // ---- A4 / A5 (b70 G-SIG-1, every host) ----
+    test(`G-SIG A4 ${t}: an injected rc-2 abort that is not a die (sh -c "exit 2") -> rc 2, empty stdout, stderr exactly "${t}: unexpected error (exit 2)" + NO-VERDICT, 0 spawns`, { skip }, () => {
+        const c = mkCase();
+        checkA4(t, c, run(c, 'bash', mutant(t, 'rc2').p));
+    });
+    test(`G-SIG A4 twin ${t}: the 465881b trap (silent on any rc 2) -> rc 2 with empty stderr and the A4 check is red`, { skip }, () => {
+        const c = mkCase();
+        const r = run(c, 'bash', mutant(t, 'rc2', 'b66').p);
+        assert.equal(r.status, 2, msg(r));
+        assert.equal(r.stderr, '', msg(r));
+        assert.throws(() => checkA4(t, c, r), assert.AssertionError);
+    });
+    test(`G-SIG A5 ${t}: FINAL=1; kill -TERM $$; exit 1 -> rc 1 (not a signal end), no "interrupted", no VERDICT line, 0 spawns`, { skip }, () => {
+        const c = mkCase();
+        checkA5(c, run(c, 'bash', mutant(t, 'fsig').p));
+    });
+    test(`G-SIG A5 twin ${t}: no shared signal trap (465881b) -> the run ends by SIGTERM and the A5 check is red`, { skip }, () => {
+        const c = mkCase();
+        const r = run(c, 'bash', mutant(t, 'fsig', 'b66').p);
+        assert.equal(r.signal, 'SIGTERM', msg(r));
+        assert.throws(() => checkA5(c, r), assert.AssertionError);
     });
 
     // ---- A2 (bash 3.2 lane + an always-run host-bash row) ----

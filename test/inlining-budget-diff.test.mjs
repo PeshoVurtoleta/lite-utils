@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 beforeEach(() => new Promise((r) => setImmediate(r)));
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'inlining-budget-diff.sh');
-const CHECKS = 89;   // every `check` call in self_test(); a new check moves this literal (b62 G5a: 54 -> 64, G5b: 64 -> 72 -> 77 -> 81 -> 84 -> 85, b65 G5c: 85 -> 89)
+const CHECKS = 92;   // every `check` call in self_test(); a new check moves this literal (b62 G5a: 54 -> 64, G5b: 64 -> 72 -> 77 -> 81 -> 84 -> 85, b65 G5c: 85 -> 89, b70 NULLCTL: 89 -> 92)
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
 // The child env (deopt-diff-stage.test.mjs form): none of the 6 GIT_* location vars ref / file mode refuses, no editor vars,
@@ -91,7 +91,8 @@ const MUTANTS = [
     // (A0 / A1 / A2 / A1 stderr-closed / A5: 10 rows red on a copy of the root with the trap deleted).
     ['no-watch-refusal', 'if [[ -f "$(dirname "$BEFORE_FILE")/Watch.js" ]]; then refuse_live', 'if false; then refuse_live',
         'a symlinked Watch.js beside --before is refused'],
-    ['trap-ignores-final', '[[ -z $FINAL ]]', 'true',
+    // b70 G-SIG-1: `[[ -z $FINAL ]]` is in the EXIT trap and in _sig (lib/prologue.sh): anchored on the trap's text
+    ['trap-ignores-final', "trap 'rc=$?; if [[ -z $FINAL ]]; then", "trap 'rc=$?; if true; then",
         'a real DIFF exits 1'],
     ['no-final-before-verdict', 'FINAL=1\ncase "$VERDICT"', 'case "$VERDICT"',
         'a real DIFF exits 1'],
@@ -135,7 +136,8 @@ const MUTANTS = [
         'options: a value on a boolean flag is refused'],
     ['no-nobytecode-novalue', '--no-bytecode) [[ $EQ -eq 0 ]] || die "$a takes no value"; BYTECODE=0 ;;', '--no-bytecode) BYTECODE=0 ;;',
         'options: a value on a boolean flag is refused'],
-    ['no-help-novalue', '-h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;', '-h|--help) usage; exit 2 ;;',
+    // b70 G-SIG-1: the -h exit is `usage; DIED=1; exit 2` (the EXIT trap stays silent)
+    ['no-help-novalue', '-h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;', '-h|--help) usage; DIED=1; exit 2 ;;',
         'options: a value on a boolean flag is refused'],
     ['no-git-ceiling-term', '${GIT_COMMON_DIR+x}${GIT_CEILING_DIRECTORIES+x}"', '${GIT_COMMON_DIR+x}"',
         'file mode: a set GIT_DIR / GIT_CEILING_DIRECTORIES is refused by name'],
@@ -255,6 +257,17 @@ const MUTANTS = [
         'Turbolev (fake node): maglev decision lines in TurboFan-tier units'],
     ['budget-capital-g-only', 'else if (l ~ /^[Gg]enerated [0-9]+ nodes', 'else if (l ~ /^Generated [0-9]+ nodes',
         "maglev: V8 14.6's lowercase '> generated N nodes. regular_budget' line"],
+    // b70 NULLCTL (PLAN-b70-nullctl TASK 1): the null control (lib/nullctl.sh) turned off whole, per side, and past run 2
+    ['nullctl-off', 'if [[ -z "$v" ]] && ! cmp -s', 'if false && ! cmp -s', 'null control (fake node): maglev, before run 2'],
+    ['nullctl-before-side-off', '  for side in before after; do\n    for k in $(seq 2 "$RUNS"); do', '  for side in after; do\n    for k in $(seq 2 "$RUNS"); do',
+        'null control (fake node): maglev, before run 2'],
+    ['nullctl-after-side-off', '  for side in before after; do\n    for k in $(seq 2 "$RUNS"); do', '  for side in before; do\n    for k in $(seq 2 "$RUNS"); do',
+        'null control (fake node): --only-fn, after run 2'],
+    ['nullctl-run2-only', 'for k in $(seq 2 "$RUNS"); do', 'for k in 2; do', 'null control (fake node): --runs 4'],
+    // r1 review: last run only, the maglev tier off, the --only-fn scope off (each survived the r1 rows)
+    ['nullctl-last-only', 'for k in $(seq 2 "$RUNS"); do', 'for k in $RUNS; do', 'null control (fake node): --runs 4'],
+    ['nullctl-maglev-off', 'if [[ -z "$v" ]] && ! cmp -s', 'if [[ -z "$v" && $tier == turbo ]] && ! cmp -s', 'null control (fake node): maglev, before run 2'],
+    ['nullctl-only-fn-off', 'if [[ -z "$v" ]] && ! cmp -s', 'if [[ -z "$v" && -z $fn ]] && ! cmp -s', 'null control (fake node): --only-fn, after run 2'],
 ];
 
 // ---- Q-IBD-ENV (U3 B3): the top-of-file unset, seen from every node spawn ----

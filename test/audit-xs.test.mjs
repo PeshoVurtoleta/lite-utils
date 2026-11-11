@@ -11,7 +11,7 @@
 //          2 spawns (LEDGER #76), `--out: cannot create`, no "unexpected error" (old: `unexpected error (exit 1)`).
 //   A4 X8  bb: `--node-version v27.0.0-alpha.0.0.0` -> exit 2, 0 spawns, text `a release version: a prerelease or nightly node`.
 //   A5 X4  control: a copy with `check() { :; }` injected right after check()'s definition: bb / ibd --self-test exit 1 and no
-//          `check(s) ok` line; the old copy exits 0 "all checks passed". Live last line pins: ibd 89, bb BB_SELFTEST_N.
+//          `check(s) ok` line; the old copy exits 0 "all checks passed". Live last line pins: ibd IBD_SELFTEST_N, bb BB_SELFTEST_N.
 //   A6     spawn budget 0 on A1, A2, A4 and the A3 blanks row; TMPDIR (private) holds nothing afterwards (no inl-diff-* left).
 // Where the PLAN gives no exact text (the did-you-mean beyond the quoted parenthesis, "unknown option") the row asserts the
 // quoted substring only.
@@ -35,8 +35,8 @@ const BB = join(PKG, 'bytecode-budget.sh');
 const V8OPT = join(PKG, 'test', 'fixtures', 'v8flags', 'v8-options.v26.8.2.txt');
 const OLD_SHA = 'dc4a10c';
 const OLD_SHA8 = { 'inlining-budget-diff.sh': 'e297d240', 'bytecode-budget.sh': 'f1070535' };
-const IBD_SELFTEST_N = 89;   // PLAN ASSERTION 5: the live ibd self-test last line count
-const BB_SELFTEST_N = 68;    // BB_SELFTEST_N: filled from the frozen bb --self-test `^ok ` row count (PLAN: counts unchanged)
+const IBD_SELFTEST_N = 92;   // PLAN ASSERTION 5: the live ibd self-test last line count (b70 NULLCTL: 89 -> 92)
+const BB_SELFTEST_N = 69;    // BB_SELFTEST_N: filled from the frozen bb --self-test `^ok ` row count (PLAN: counts unchanged; b70 NULLCTL: 68 -> 69)
 const CI_STRICT = process.env.CI === 'true';
 const histSkip = (have) => (have === true || CI_STRICT ? false : have);
 

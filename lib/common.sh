@@ -2,7 +2,8 @@
 #: refuse_live worst nl_refuse nl_dir. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
 #: for a symlink, around the dir of its chain's end; refuse_live: its name joins the cand list) and REPO
 #: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage).
-#: Sets TOP_OF (top_of; a local of live_tops) and LIVE_TOPS (live_tops; a local of refuse_live). top_of and
+#: Sets DIED (die, first: lib/prologue.sh's EXIT trap stays silent), TOP_OF (top_of; a local of live_tops) and
+#: LIVE_TOPS (live_tops; a local of refuse_live). top_of and
 #: live_tops die on a git error: call them in the CURRENT shell, never in $( ), <( ) or a pipe (a die there exits
 #: only the subshell, and the run goes on with no toplevels). live_tops resolves a symlinked --after in $( ) but
 #: checks that subshell's status and dies in the current shell ("--after: cannot resolve its symlink chain").
@@ -13,7 +14,9 @@
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes);
+  # DIED first: the EXIT trap stays silent (lib/prologue.sh)
+  DIED=1
   printf '@SCRIPT@: %s\nVERDICT NO-VERDICT\n' "$*" >&2
   if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf '@SCRIPT@: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
   exit 2
@@ -80,7 +83,7 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
   local f="$1" what="$2" p me top t LIVE_TOPS=""
-  p=$(resolve_links "$f")
+  p=$(resolve_links "$f") || { DIED=1; exit 2; }   # its die ran in the $( ) (DIED unset here)
   for t in "$f" "$p"; do
     if is_tracked "$t"; then die "$what is a git-tracked working-tree file ($t): use a FROZEN copy (untracked) or --before-ref"; fi
   done

@@ -123,7 +123,13 @@
 # more than 2 digits (even 003); a failed <node> -p probe; a value on -h, --help, --self-test, --only-fn, --concurrent or
 # --no-bytecode ("<flag> takes no value"); an empty --tiers; a backslash in --out, or in the current directory for a relative
 # --out; an = in the resolved node path; a DRIVER_BEFORE / DRIVER_AFTER whose directory does not resolve to the file named (a
-# symlink before '..'). Bytecode probe temp file: a signal mid-probe can leave one inlining-budget-diff.XXXXXX in
+# symlink before '..'). Signals: SIGINT / SIGTERM / SIGHUP during a trace run SIGKILLs it at once (its output is never
+# read), then "inlining-budget-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr and as the last two lines of
+# OUT/report.txt (OUT, the default inl-diff-<timestamp> included, is kept, as after any refusal), exit 2; one during the
+# -p / --v8-options probes or a bytecode probe takes effect when that step ends; a signal after FINAL is set (the step
+# right after the verdict line) changes nothing; one that lands while the verdict line is still being written ends
+# exit 2 with a second VERDICT NO-VERDICT line.
+# Bytecode probe temp file: a signal mid-probe can leave one inlining-budget-diff.XXXXXX in
 # TMPDIR; a TMPDIR that was full during the probe and freed before the 64 KiB append still passes that check, so a cut
 # stream can read as a shorter length. Bytecode probe tear: driver output (a Worker's writes, say) interleaved with the
 # --print-bytecode text prints ? for that side on a glued or broken header, a length line that is not exactly
@@ -136,9 +142,30 @@ unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" joi
 set -euo pipefail
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
-# set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
+# set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e
+# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: such a site
+# adds || { DIED=1; exit 2; }). The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
 FINAL=""
-trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "inlining-budget-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+DIED=""; SIG_PID=""
+trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "inlining-budget-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+# _sig NAME: a trapped SIGINT / SIGTERM / SIGHUP. After FINAL=1 it does nothing (the planned exit stands). Else it
+# ignores further signals, kills the recorded driver (SIGKILL: a bounded exit; an interrupted run's output is never
+# read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
+# "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
+# no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
+# that is running when the signal lands (the --version / --v8-options probes, a driver run inside $( )) ends first
+_sig() {
+  [[ -z $FINAL ]] || return 0
+  trap '' INT TERM HUP
+  if [[ -n $SIG_PID ]]; then kill -KILL "$SIG_PID" 2>/dev/null || true; fi
+  wait 2>/dev/null || true
+  if declare -F die >/dev/null; then die "interrupted (SIG$1)"; fi
+  DIED=1; printf 'inlining-budget-diff: interrupted (SIG%s)\nVERDICT NO-VERDICT\n' "$1" >&2; exit 2
+}
+sig_arm() { trap '_sig INT' INT; trap '_sig TERM' TERM; trap '_sig HUP' HUP; }
+drv_wait() { SIG_PID=$!; DRV_RC=0; wait "$SIG_PID" || DRV_RC=$?; SIG_PID=""; }   # the job just started with &
+DRV_RC=0
+sig_arm
 REPORT=""   # die reads it: an inherited $REPORT is never a report file
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes
@@ -431,7 +458,9 @@ END {
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes);
+  # DIED first: the EXIT trap stays silent (lib/prologue.sh)
+  DIED=1
   printf 'inlining-budget-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
   if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf 'inlining-budget-diff: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
   exit 2
@@ -498,7 +527,7 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
   local f="$1" what="$2" p me top t LIVE_TOPS=""
-  p=$(resolve_links "$f")
+  p=$(resolve_links "$f") || { DIED=1; exit 2; }   # its die ran in the $( ) (DIED unset here)
   for t in "$f" "$p"; do
     if is_tracked "$t"; then die "$what is a git-tracked working-tree file ($t): use a FROZEN copy (untracked) or --before-ref"; fi
   done
@@ -873,6 +902,25 @@ EOF
   check "driver mode (fake node): m0 inlining h0x1 vs h0x2 is a DIFF (turbo), not an erased name" "$(fkr r9t turbo m0 h1.trace h2.trace)" "1|VERDICT DIFF|  guard ok: m0"
   check "driver mode (fake node): --fn h0x1 finds its own decision line (no h0x1 compile): SAME" "$(fkr r9s turbo h0x1 h1.trace h1.trace)" "0|VERDICT SAME|  guard ok: h0x1"
   check "driver mode (fake node): Maglev == Inlining h0x1 vs h0x2 is a DIFF" "$(fkr r9m maglev m0 g1.trace g2.trace)" "1|VERDICT DIFF|  guard ok: m0"
+  # null control (b70 NULLCTL): ncnode = the fake node + a per-driver spawn counter; spawn n of driver X cats X.k<n> when it exists
+  sed '$d' "$fk/node" >"$fk/ncnode"
+  printf '%s\n' 'n=$(cat "$last.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$last.n"' \
+    'if [ -e "$last.k$n" ]; then cat "$last.k$n"; else cat "$last"; fi' >>"$fk/ncnode"
+  chmod +x "$fk/ncnode"
+  ncr() { # tag runs tier before after [flag] -> "rc|VERDICT line|the judge line"
+    "$BASH" "$SELF" --node "$fk/ncnode" --tiers "$3" --no-bytecode --runs "$2" --fn m0 ${6:+"$6"} --out "$d/o-$1" "$fk/$4" "$fk/$5" >"$d/ncr-$1.out" 2>&1 && rc2=0 || rc2=$?
+    printf '%s|%s|%s' "$rc2" "$(grep '^VERDICT ' "$d/ncr-$1.out" || true)" "$(grep -e '^  all decision lines: ' -e '^  m0 (--only-fn): ' "$d/ncr-$1.out" || true)"
+  }
+  local NCT='differ (tier-up noise on this host)  (lines before/after run 1: 1/1)'
+  for x in nh na n3; do cp "$fk/h1.trace" "$fk/$x.trace"; done
+  cp "$fk/g1.trace" "$fk/ng.trace"; cp "$fk/g1.trace" "$fk/nb.trace"; cp "$fk/g2.trace" "$fk/nb.trace.k2"
+  cp "$fk/h2.trace" "$fk/na.trace.k2"; cp "$fk/h2.trace" "$fk/n3.trace.k3"
+  check "null control (fake node): maglev, before run 2 inlines h0x2, run 1 h0x1 -> NO-VERDICT naming before (exit 2)" "$(ncr ncb 2 maglev nb.trace ng.trace)" \
+    "2|VERDICT NO-VERDICT|  all decision lines: NO-VERDICT -- null control: before run 1 vs before run 2 $NCT"
+  check "null control (fake node): --only-fn, after run 2 inlines h0x2, run 1 h0x1 -> NO-VERDICT naming after (exit 2)" "$(ncr nca 2 turbo nh.trace na.trace --only-fn)" \
+    "2|VERDICT NO-VERDICT|  m0 (--only-fn): NO-VERDICT -- null control: after run 1 vs after run 2 $NCT"
+  check "null control (fake node): --runs 4, after run 3 differs, runs 1 2 4 equal -> NO-VERDICT naming run 3 (exit 2)" "$(ncr nc3 4 turbo nh.trace n3.trace)" \
+    "2|VERDICT NO-VERDICT|  all decision lines: NO-VERDICT -- null control: after run 1 vs after run 3 $NCT"
   # Q-B62-ADDR: a 0x after a non-ASCII byte (U+00E9 as UTF-8 \303\251) is part of the name, never an address
   printf '%s\n%b\n%s\n' "$TC" 'Inlining 0x3 {0x4 <SharedFunctionInfo \0303\02510x1>} into 0x1 {0x2 <SharedFunctionInfo m0>}' "$TE" >"$fk/n1.trace"
   printf '%s\n%b\n%s\n' "$TC" 'Inlining 0x3 {0x4 <SharedFunctionInfo \0303\02510x2>} into 0x1 {0x2 <SharedFunctionInfo m0>}' "$TE" >"$fk/n2.trace"
@@ -1063,7 +1111,7 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --only-fn) [[ $EQ -eq 0 ]] || die "$a takes no value"; ONLY=1 ;;
     --concurrent) [[ $EQ -eq 0 ]] || die "$a takes no value"; CONCURRENT=1 ;;
@@ -1316,7 +1364,11 @@ run_trace() { # tier side k driver
   [[ $CONCURRENT == 1 ]] || cmd+=(--no-concurrent-recompilation)
   b=$(basename "$4"); [[ $b != -* ]] || b="./$b"
   cmd+=("$b")
-  if ! (cd "$(dirname "$4")" && env -u NODE_OPTIONS "${cmd[@]}") >"$raw" 2>&1; then
+  # a background job the main shell waits for (drv_wait, lib/prologue.sh): a SIGINT / SIGTERM / SIGHUP kills it at once
+  # (exec: $! is node itself); `<&0` keeps the caller's stdin (a job without job control would get /dev/null)
+  (cd "$(dirname "$4")" && exec env -u NODE_OPTIONS "${cmd[@]}") >"$raw" 2>&1 <&0 &
+  drv_wait
+  if [[ $DRV_RC != 0 ]]; then
     tail -n 20 "$raw" >&2
     die "driver exited non-zero: ${cmd[*]} (in $(dirname "$4"); trace in $raw)"
   fi
@@ -1506,8 +1558,9 @@ if [[ $BYTECODE == 1 ]]; then
     esac
   }
   for fn in "${TARGETS[@]}"; do
-    b=$(probe "$DRV_B" "$fn"); bc_side "$fn" "$b"; b=$BC_SIDE
-    a=$(probe "$DRV_A" "$fn"); bc_side "$fn" "$a"; a=$BC_SIDE
+    # probe runs in $( ): its die sets DIED only there, so a failed $( ) sets it here before the exit (the trap stays silent)
+    b=$(probe "$DRV_B" "$fn") || { DIED=1; exit 2; }; bc_side "$fn" "$b"; b=$BC_SIDE
+    a=$(probe "$DRV_A" "$fn") || { DIED=1; exit 2; }; bc_side "$fn" "$a"; a=$BC_SIDE
     if [[ "$b" =~ ^[0-9]+$ && "$a" =~ ^[0-9]+$ ]]; then
       say "  $fn: $b -> $a bytes ($( [[ $a -ge $b ]] && echo + )$((a - b)))"
       {

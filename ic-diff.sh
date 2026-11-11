@@ -71,8 +71,14 @@
 #   NODE_REDIRECT_WARNINGS, so no spawn inherits a preload, a coverage dir, a compile cache or a warning file.
 # Log files: V8 writes isolate-0x<addr>-<pid>-run.log in the run dir (DIR/raw/<side>, else <private dir>/<side>);
 #   exactly one such file per run is renamed run.<k>.log. Without --out: ONE
-#   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit; an INT / TERM ->
-#   "ic-diff: interrupted", exit 2 (one that lands while mktemp runs is held until the dir is named, then removes it).
+#   `mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX"` after the three probes, removed on every exit.
+# Signals: SIGINT / SIGTERM / SIGHUP during a trace run SIGKILLs that run at once (its output is never read), then
+#   "ic-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as the last two lines of DIR/report.txt
+#   once it has its head), exit 2; one that lands while mktemp runs is held until the dir is named, then removes it;
+#   one during the three probes takes effect when that probe ends; a signal after FINAL is set (the step right after
+#   the verdict line) changes nothing; one that lands while the verdict line is still being written ends exit 2 with a
+#   second VERDICT NO-VERDICT line.
+#   A trace run reads the caller's stdin.
 #   With --out: no mktemp; DIR holds report.txt and raw/<side>/run.<k>.{log,out} (4 x runs + 1 files; 13 for runs 3).
 #   Known gap: when a run leaves != 1 isolate file, those files stay in its run dir and later runs of that side count
 #   them too (still NO-VERDICT; the first such run is named).
@@ -146,9 +152,30 @@ unset CDPATH   # before the prologue: SELF, every cd and every "cd X && pwd" joi
 set -euo pipefail
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
-# set -u abort exits 0); a die / usage 2 stays silent; set +e keeps 2 with stderr closed. Subshells do not inherit this trap.
+# set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e
+# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: such a site
+# adds || { DIED=1; exit 2; }). The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
 FINAL=""
-trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ $rc -eq 2 ]] || printf "ic-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+DIED=""; SIG_PID=""
+trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "ic-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
+# _sig NAME: a trapped SIGINT / SIGTERM / SIGHUP. After FINAL=1 it does nothing (the planned exit stands). Else it
+# ignores further signals, kills the recorded driver (SIGKILL: a bounded exit; an interrupted run's output is never
+# read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
+# "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
+# no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
+# that is running when the signal lands (the --version / --v8-options probes, a driver run inside $( )) ends first
+_sig() {
+  [[ -z $FINAL ]] || return 0
+  trap '' INT TERM HUP
+  if [[ -n $SIG_PID ]]; then kill -KILL "$SIG_PID" 2>/dev/null || true; fi
+  wait 2>/dev/null || true
+  if declare -F die >/dev/null; then die "interrupted (SIG$1)"; fi
+  DIED=1; printf 'ic-diff: interrupted (SIG%s)\nVERDICT NO-VERDICT\n' "$1" >&2; exit 2
+}
+sig_arm() { trap '_sig INT' INT; trap '_sig TERM' TERM; trap '_sig HUP' HUP; }
+drv_wait() { SIG_PID=$!; DRV_RC=0; wait "$SIG_PID" || DRV_RC=$?; SIG_PID=""; }   # the job just started with &
+DRV_RC=0
+sig_arm
 REPORT=""   # die reads it: an inherited $REPORT is never a report file
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export LC_ALL=C   # byte-wise sort / awk: stable multisets, emoji stripped as bytes
@@ -251,7 +278,9 @@ END {
 # ---------------------------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------------------------
-die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes)
+die() { # the report gets the line only from the main shell and only once it has its head (a 0-byte report stays 0 bytes);
+  # DIED first: the EXIT trap stays silent (lib/prologue.sh)
+  DIED=1
   printf 'ic-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
   if [[ $BASH_SUBSHELL -eq 0 && -s "${REPORT:-/dev/null}" ]]; then { printf 'ic-diff: %s\nVERDICT NO-VERDICT\n' "$*" >>"$REPORT"; } 2>/dev/null || true; fi
   exit 2
@@ -318,7 +347,7 @@ is_tracked() { # path: 0 iff git tracks it in the work tree around it
 }
 refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not an alias of a tracked file)
   local f="$1" what="$2" p me top t LIVE_TOPS=""
-  p=$(resolve_links "$f")
+  p=$(resolve_links "$f") || { DIED=1; exit 2; }   # its die ran in the $( ) (DIED unset here)
   for t in "$f" "$p"; do
     if is_tracked "$t"; then die "$what is a git-tracked working-tree file ($t): use a FROZEN copy (untracked) or --before-ref"; fi
   done
@@ -833,13 +862,13 @@ EOF
   for x in 1 2 3; do
     got="$got#$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/mono/driver.js")/$(spawn -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")/$(spawn -- "$NO" --fn get "$dr/rc3/driver.js" "$dr/mono/driver.js")"
   done
-  got="$got#$(spawn -- "$NO" --fn get "$dr/term/driver.js" "$dr/mono/driver.js")|$(has 'ic-diff: interrupted')"
+  got="$got#$(spawn -- "$NO" --fn get "$dr/term/driver.js" "$dr/mono/driver.js")|$(has 'ic-diff: interrupted (SIGTERM)')"
   b1=$(ents)
   check "A4 retention: 3 x (SAME / DIFF / NO-VERDICT) + 1 SIGTERM mid-run (before run 1) -> 1 mktemp each, 0 new entries in TMPDIR, cwd and the driver dirs" \
     "$got|$b0->$b1" \
     "$(printf '#0|VERDICT SAME|9|1/1|VERDICT DIFF|9|1/2|VERDICT NO-VERDICT|9|1%.0s' 1 2 3)#2|VERDICT NO-VERDICT|4|1|1|$b0->$b0"
-  check "A9 signal window: a SIGTERM that lands while mktemp -d runs -> exit 2 'interrupted', 3 spawns, the new dir removed (0 entries in TMPDIR)" \
-    "$(spawn ST_MKTERM=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has 'ic-diff: interrupted')|$(find "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
+  check "A9 signal window: a SIGTERM that lands while mktemp -d runs -> exit 2 'interrupted (SIGTERM)', 3 spawns, the new dir removed (0 entries in TMPDIR)" \
+    "$(spawn ST_MKTERM=1 -- "$NO" --fn get "$dr/mono/driver.js" "$dr/poly/driver.js")|$(has 'ic-diff: interrupted (SIGTERM)')|$(find "$d/tmp" -mindepth 1 | wc -l | tr -d ' ')" \
     "2|VERDICT NO-VERDICT|3|1|1|0"
   rf() { # LABEL FRAGMENT args...: refused with exit 2, 0 spawns, 0 mktemp, a die line holding FRAGMENT
     local l="$1" f="$2"; shift 2
@@ -944,6 +973,12 @@ EOF
   done
   check "R6 --v8-flags --stress-concurrent-inlining / --stress_concurrent_inlining_attach_code / --no-stress-concurrent-inlining (every spelling) -> exit 2, 0 spawns, 0 mktemp, the die line once" \
     "$o" "$(printf '#2|VERDICT NO-VERDICT|0|0|1%.0s' 1 2 3)"
+  JRC=(0 0 0); JLOG=("" "" ""); JREC=("$R_M" "$R_M" "$R_P"); judge get
+  check "NC3 judge: run 3 != run 1, runs 1 2 equal -> null control naming run 3" "$JV|$JWHY" \
+    "NO-VERDICT|null control: run 3 differs from run 1 (2 record(s) differ, first: run 1 x1 | run 3 x0  LoadIC${TB}drv-mono.js:3:12${TB}x${TB}1${TB}${TB})"
+  check "NC4 e2e: run 2 of before differs (mono, then poly) -> 'before: null control: run 2 differs from run 1', after passes" \
+    "$(spawn -- "$NO" --fn get "$dr/nc/driver.js" "$dr/mono/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- before: null control: run 2 differs from run 1 (' "$d/sp.out" || true)|$(grep -c -e ' -- after: ' "$d/sp.out" || true)" \
+    "2|VERDICT NO-VERDICT|9|1|1|0"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -966,7 +1001,7 @@ while [[ $# -gt 0 ]]; do
   a="$1"; v=""; EQ=0
   case "$a" in --*=*) v="${a#*=}"; a="${a%%=*}"; EQ=1 ;; esac
   case "$a" in
-    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; exit 2 ;;
+    -h|--help) [[ $EQ -eq 0 ]] || die "$a takes no value"; usage; DIED=1; exit 2 ;;
     --self-test) [[ $EQ -eq 0 ]] || die "$a takes no value"; SELFTEST=1 ;;
     --fn|--runs|--node|--v8-flags|--out)
       [[ "$GOTOPT" != *" $a "* ]] || die "$a given twice (give one comma list)"
@@ -1077,7 +1112,6 @@ V8O_SHA=$(printf '%s\n' "$V8O" | grep -E '^[0-9a-f]{8}$' || true)
 [[ "$V8O_N" =~ ^[0-9]+$ && "$V8O_N" != 0 ]] || die "$NODE_RES --v8-options printed nothing"
 [[ "$V8O_SHA" =~ ^[0-9a-f]{8}$ ]] || die "cannot hash the $NODE_RES --v8-options output"
 
-trap 'die "interrupted"' INT TERM
 if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
   # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one
@@ -1091,13 +1125,12 @@ else
   eval "set -- $(trap -p EXIT)"; IC_OLD=${3:-}
   # shellcheck disable=SC2064
   trap "ic_rc=\$?; if [[ -n \$IC_TMP ]]; then rm -rf \"\$IC_TMP\"; fi; set +e; (exit \$ic_rc); $IC_OLD" EXIT
-  # an INT / TERM while mktemp runs is only NOTED, so the new dir is always named before a die can run (bash 3.2 runs
-  # a pending trap after the assignment anyway; a shell that ran it before would leak the dir); then a noted signal dies
-  # here and the EXIT trap removes the dir
-  IC_SIG=0; trap 'IC_SIG=1' INT TERM
+  # an INT / TERM / HUP while mktemp runs is only NOTED, so the new dir is always named before a die can run (bash 3.2
+  # runs a pending trap after the assignment anyway; a shell that ran it before would leak the dir); then the shared
+  # trap (lib/prologue.sh) is armed again and a noted signal dies here through it; the EXIT trap removes the dir
+  IC_SIG=""; trap 'IC_SIG=INT' INT; trap 'IC_SIG=TERM' TERM; trap 'IC_SIG=HUP' HUP
   IC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ic-diff.XXXXXX") || IC_TMP=""
-  trap 'die "interrupted"' INT TERM
-  [[ $IC_SIG == 0 ]] || die "interrupted"
+  sig_arm; [[ -z $IC_SIG ]] || _sig "$IC_SIG"
   [[ -n "$IC_TMP" && -d "$IC_TMP" ]] || die "cannot create a private log dir (mktemp -d)"
   IC_ABS=$(cd -- "$IC_TMP" && pwd) || die "cannot resolve the private log dir $IC_TMP"; IC_TMP=$IC_ABS
   mkdir "$IC_TMP/before" "$IC_TMP/after" || die "cannot create the private log dirs in $IC_TMP"
@@ -1119,8 +1152,11 @@ run_side() { # side dir base k: one node run; sets RUN_RC (driver exit) RUN_LOG 
   local rd="$RUNROOT/$1" out=/dev/null lf n rc=0 ar=0
   local -a LF
   if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi
+  # a background job the main shell waits for (drv_wait, lib/prologue.sh): a SIGINT / SIGTERM / SIGHUP kills it at once
+  # (exec: $! is node itself); `<&0` keeps the caller's stdin (a job without job control would get /dev/null)
   ( cd "$2" && rd=${rd//%/%%} && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd/run.log" "./$3" ) \
-    >"$out" 2>&1 || rc=$?
+    >"$out" 2>&1 <&0 &
+  drv_wait; rc=$DRV_RC
   RUN_RC=$rc; RUN_LOG=""; RUN_REC=""
   shopt -s nullglob; LF=("$rd"/isolate-0x*-*-run.log); shopt -u nullglob
   if [[ ${#LF[@]} -eq 0 ]]; then RUN_LOG="no IC log (no isolate-0x*-*-run.log written)"; return 0; fi
