@@ -83,7 +83,7 @@ function baseEnv(extra = {}) {
     return { ...e, ...extra };
 }
 function run(script, args, { cwd, env }) {
-    const r = capSync(BASH, [script, ...args], { encoding: 'utf8', cwd, env }, 300000, `ext-audit ${basename(script)} run`);
+    const r = capSync(BASH, [script, ...args], { encoding: 'utf8', cwd, env, group: true }, 300000, `ext-audit ${basename(script)} run`);
     const out = (r.stdout || '') + (r.stderr || '');
     return { status: r.status, out, lines: out.split('\n'), stdout: r.stdout };
 }

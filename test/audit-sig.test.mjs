@@ -49,12 +49,20 @@
 //   ROW H    `-h` and `--help` give rc 2 with EMPTY stderr on all 5 (pin: the 465881b root gives the same); a mutant that drops
 //            `DIED=1` from the `usage; DIED=1; exit 2` line prints `unexpected error` (teeth)
 //   ROW RET  the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged
+//   ROW T    (b72 CI-HANG, .handoff/PLAN-b72-cihang.md ASSERTION 5) a text gate, no spawn: 0 operand-less `wait` commands in
+//            lib/prologue.sh + the 5 roots (whole comment lines skipped); the aed6684 twin (b72's parent) has exactly 6 (red
+//            there); synthetic must-match 6 / must-not 0 lists pin the matcher.
+//   ROW W    (b72 CI-HANG, ASSERTION 4) a signal between the driver's `&` and drv_wait: per root a copy with `kill -TERM $$; `
+//            prefixed (after a wait for the held driver's pid file) to the drv_wait line of its first held run; armGroup cap
+//            20000. Live: rc 2, signal null, interrupted once, 1 VERDICT, exit < 10 s, the held driver dead, the group gone, TMPDIR
+//            0 (ibd: its 1 inl-diff-*). Twin aed6684: a named timeout whose ps dump names the held `sleep 30` (red). Also ROW PSUB
+//            (bash >= 5), described at its rows.
 // Per-child caps are explicit (capSync / armCap, 60 s, 45 s for the G-SIG-2 signal rows; no raw timeout key: spawn-cap.test.mjs S5).
 // Private dirs under one mkdtemp top.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnAsync } from 'node:child_process';
-import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
+import { capSync, armCap, armGroup, noTimeout } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync, chmodSync, realpathSync, openSync, closeSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -595,5 +603,224 @@ for (const t of NAMES) {
         const m = mutant(t, 'live', 'no DIED on -h', [['usage; DIED=1; exit 2', 'usage; exit 2']]);
         const r = run(m, '-h');
         assert.equal(r.stderr, `${t}: unexpected error (exit 2)\nVERDICT NO-VERDICT\n`, msg(r));
+    });
+}
+
+// ---- ROW T (b72 CI-HANG, ASSERTION 5): no operand-less `wait` command (a text gate; no spawn) ----
+// An operand-less wait waits for every child of the shell, a killed one or not; _sig reaps by pid (lib/prologue.sh). A `wait`
+// counts when it stands in command position (line start, after ; & | { ( ! or then / do / else / elif / if / while / until) and
+// is followed by the end of the line, a ; & | ) } or a redirection: no operand. Whole comment lines are skipped (a trailing comment
+// is scanned: a false hit is loud). The twin is `git show aed6684:<f>` (b72's parent: `wait 2>/dev/null || true` in _sig, once
+// in lib/prologue.sh and once per root).
+const PRE_SHA = 'aed6684';
+const PRESKIP = skipFor(haveSha(PRE_SHA));
+const T_FILES = ['lib/prologue.sh', ...NAMES.map((t) => `${t}.sh`)];
+const T_RE = /(?:^|[;&|{(!]|\b(?:then|do|else|elif|if|while|until)\b)\s*wait(?=\s*(?:$|[;&|)}]|\d*[<>]))/g;
+function bareWaits(src) {   // -> [{ n, line }] one per operand-less wait command
+    const hits = [];
+    src.split('\n').forEach((line, i) => {
+        if (/^\s*#/.test(line)) return;
+        for (const m of line.matchAll(T_RE)) hits.push({ n: i + 1, line, at: m.index });
+    });
+    return hits;
+}
+const T_MATCH = ['wait', 'wait;', 'x && wait', '{ wait; }', 'wait 2>/dev/null || true', 'wait >/dev/null'];
+const T_NOMATCH = ['wait "$p"', 'wait $SIG_PID', '# wait', 'drv_wait', 'await x', 'wait_for'];
+test('T synthetic: the 6 must-match lines give exactly 1 hit each (6), the 6 must-not lines give 0', () => {
+    const per = T_MATCH.map((l) => bareWaits(l).length);
+    assert.deepEqual(per, [1, 1, 1, 1, 1, 1], `must-match per line: ${JSON.stringify(T_MATCH)}`);
+    assert.equal(bareWaits(T_MATCH.join('\n')).length, 6, 'must-match total');
+    const not = T_NOMATCH.map((l) => bareWaits(l).length);
+    assert.deepEqual(not, [0, 0, 0, 0, 0, 0], `must-not per line: ${JSON.stringify(T_NOMATCH)}`);
+    assert.equal(bareWaits(T_NOMATCH.join('\n')).length, 0, 'must-not total');
+});
+test('T live: 0 operand-less wait commands in lib/prologue.sh and the 5 roots', () => {
+    const hits = T_FILES.flatMap((f) => bareWaits(rd(join(PKG, f))).map((h) => `${f}:${h.n}: ${h.line}`));
+    assert.equal(hits.length, 0, `operand-less wait:\n${hits.join('\n')}`);
+});
+test(`T twin ${PRE_SHA}: exactly 6 operand-less wait commands (1 in lib/prologue.sh, 1 per root; the live gate is red there)`, { skip: PRESKIP }, () => {
+    const per = T_FILES.map((f) => {
+        const g = spawn('git', ['show', `${PRE_SHA}:${f}`], { cwd: PKG }, `git show ${PRE_SHA}:${f}`, 30000);
+        assert.equal(g.status, 0, `git show ${PRE_SHA}:${f} failed (CI_STRICT: an unreachable pin is a failure)`);
+        return bareWaits(g.stdout).length;
+    });
+    assert.deepEqual(per, [1, 1, 1, 1, 1, 1], `per file ${JSON.stringify(T_FILES)}`);
+    assert.equal(per.reduce((a, b) => a + b, 0), 6);
+});
+
+// ---- ROW PSUB (b72 CI-HANG; final-review finding lib-opus-c-1, reproduced at aed6684): the trap's reap never waits for a
+// process substitution. On bash >= 5 an operand-less `wait` also waits for a live `< <( )` writer that nobody drains (the
+// trap has INT / TERM / HUP ignored): the old _sig hangs until SIGKILL; bash 3.2 exits 2 either way, so the row is only
+// meaningful on bash >= 5 (bash 3.2 runs nothing here). Per root, a copy with ONE line injected right before its first
+// options line (after sig_arm and lib/common.sh): `echo $$ >"$PSUB_PIDF"; while IFS= read -r l; do kill -TERM $$; done < <(yes x |
+// head -c 2000000)` (the pid file names the group even when capSync throws).
+// No args reach anything else. capSync, killSignal SIGKILL (spawnSync blocks the loop; the trapped tool ignores SIGTERM), cap
+// 10000 ms, detached (own group). Want: rc 2, signal null, stderr exactly `<tool>: interrupted (SIGTERM)\nVERDICT NO-VERDICT\n`,
+// no timeout; the group is empty within 3000 ms (the writer dies of SIGPIPE once bash is gone), then a SIGKILL of the own group
+// (law 10). Twin: the same injection into `git show aed6684:<root>` is a named timeout (red). bash 5: $LITEUTILS_BASH5, else
+// the first of /opt/homebrew/Cellar/bash/*/bin/bash, /usr/local/Cellar/bash/*/bin/bash, /bin/bash, /usr/bin/bash with
+// BASH_VERSINFO[0] >= 5; none: SKIP locally, FAIL under CI_STRICT on linux (ubuntu's /bin/bash is 5.x).
+const PSUB_INJ = 'echo $$ >"$PSUB_PIDF"; while IFS= read -r l; do kill -TERM $$; done < <(yes x | head -c 2000000)\n';
+const PSUB_ANCHOR = {
+    'allocation-diff': 'ZERO=0; RUNS=5; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null; T=""\n',
+    'bytecode-budget': 'FNLIST=""; MAXLIST=""; WANT_VER=""; RUNS=2; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""\n',
+    'deopt-diff': 'FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; REPORT=/dev/null\n',
+    'ic-diff': 'FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null\n',
+    'inlining-budget-diff': 'FNS="${ME:-m0}"; RUNS=3; TIERS="turbo,maglev"; ONLY=0; CONCURRENT=0; DRIVER=""; REPO=""\n',
+};
+function findBash5() {
+    const cands = [];
+    if (process.env.LITEUTILS_BASH5) cands.push(process.env.LITEUTILS_BASH5);
+    for (const cel of ['/opt/homebrew/Cellar/bash', '/usr/local/Cellar/bash']) {
+        if (existsSync(cel)) for (const v of ls(cel)) cands.push(join(cel, v, 'bin', 'bash'));
+    }
+    cands.push('/bin/bash', '/usr/bin/bash');
+    for (const b of cands) {
+        if (!existsSync(b)) continue;
+        const r = spawn(b, ['-c', 'echo "${BASH_VERSINFO[0]}"'], {}, `${b} BASH_VERSINFO`, 30000);
+        if (r.status === 0 && Number(r.stdout.trim()) >= 5) return b;
+        if (process.env.LITEUTILS_BASH5 === b) return null;   // an explicit choice that is not bash >= 5: no silent fallback
+    }
+    return null;
+}
+const BASH5 = skip ? null : findBash5();
+const B5SKIP = skip || (BASH5 !== null ? false : (CI_STRICT && process.platform === 'linux') ? false
+    : `no bash >= 5 found (LITEUTILS_BASH5=${process.env.LITEUTILS_BASH5 ?? 'unset'}, Cellar, /bin/bash, /usr/bin/bash)`);
+const PRE_TXT = {};
+function preText(f) {
+    if (PRE_TXT[f] !== undefined) return PRE_TXT[f];
+    const g = spawn('git', ['show', `${PRE_SHA}:${f}`], { cwd: PKG }, `git show ${PRE_SHA}:${f}`, 30000);
+    assert.equal(g.status, 0, `git show ${PRE_SHA}:${f} failed (CI_STRICT: an unreachable pin is a failure)`);
+    return (PRE_TXT[f] = g.stdout);
+}
+function psubRoot(t, src) {
+    const p = join(mk('psub'), `${t}.sh`);
+    writeFileSync(p, once(src, PSUB_ANCHOR[t], PSUB_INJ + PSUB_ANCHOR[t], `${t} PSUB injection`)); chmodSync(p, 0o755);
+    return p;
+}
+async function psubRun(t, root, what) {   // -> capSync result (rethrows its named timeout); the own group is gone either way
+    let pid = null;
+    const pidf = join(mk('psub-pid'), 'pid');
+    try {
+        let r = null, err = null;
+        try { r = capSync(BASH5, [root], { encoding: 'utf8', env: cleanEnv({ TMPDIR: mk('psub-tmp'), PSUB_PIDF: pidf }), cwd: mk('psub-cwd'), stdio: ['ignore', 'pipe', 'pipe'], detached: true, killSignal: 'SIGKILL' }, 10000, what); }
+        catch (e) { err = e; }
+        if (existsSync(pidf)) pid = Number(rd(pidf).trim());
+        assert.ok(Number.isInteger(pid) && pid > 0, `${what}: the injected line never wrote its pid (${err ? err.message : msg(r)})`);
+        if (r !== null) assert.equal(r.pid, pid, `${what}: the pid file names another process`);
+        const t0 = Date.now();
+        let gone = false;
+        while (!gone && Date.now() - t0 < 3000) {   // macOS: EPERM while the group holds only a zombie not yet reaped by launchd
+            try { process.kill(-pid, 0); } catch (e) { gone = e.code === 'ESRCH'; if (!gone && e.code !== 'EPERM') throw e; }
+            if (!gone) await sleep(20);
+        }
+        assert.ok(gone, `${what}: process group ${pid} still has members 3000 ms after the tool exited (the writer outlived bash)`);
+        if (err) throw err;
+        return r;
+    } finally {
+        if (pid !== null) { try { process.kill(-pid, 'SIGKILL'); } catch { /* group gone */ } }
+    }
+}
+test(`PSUB bash >= 5 is available (${BASH5 ?? 'none'}): CI_STRICT on linux fails without one`, { skip: B5SKIP }, () => {
+    assert.ok(BASH5 !== null, 'no bash >= 5: the PSUB rows cannot run');
+});
+for (const t of NAMES) {
+    test(`PSUB ${SHORT[t]} (bash >= 5 only; 3.2 exits 2 on old and new): SIGTERM while a < <( ) writer is undrained -> rc 2, interrupted once, no hang`, { skip: B5SKIP }, async () => {
+        const r = await psubRun(t, psubRoot(t, rd(LIVE(t))), `PSUB ${SHORT[t]} ${BASH5}`);
+        assert.equal(r.timedOut, false, msg(r));
+        assert.equal(r.status, 2, msg(r));
+        assert.equal(r.signal, null, msg(r));
+        assert.equal(r.stderr, `${t}: interrupted (SIGTERM)\nVERDICT NO-VERDICT\n`, msg(r));
+    });
+    test(`PSUB twin ${PRE_SHA} ${SHORT[t]} (bash >= 5): the old _sig's operand-less wait hangs on the writer -> named timeout`, { skip: B5SKIP || PRESKIP }, async () => {
+        const what = `PSUB twin ${SHORT[t]} ${BASH5}`;
+        await assert.rejects(psubRun(t, psubRoot(t, preText(`${t}.sh`)), what),
+            (e) => { assert.match(String(e && e.message), new RegExp(`^${what.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} timed out after 10000 ms \\(killed by SIGKILL\\)`)); return true; });
+    });
+}
+
+// ---- ROW W (b72 CI-HANG, ASSERTION 4): a signal that lands between the driver's `&` and drv_wait's `SIG_PID=$!` ----
+// The copy prefixes `until [ -e "$W_PIDF" ]; do sleep 0.05; done; kill -TERM $$; ` to the drv_wait line right after the first held
+// driver run (bb: the probe site, held via holdprobe; its base_list run comes first and is not held): the signal lands while
+// the fake driver holds (its pid file is written), so the dead-driver check has a pid. SIG_PID is still empty there: the new _sig finds the run in
+// $(jobs -pr) and kills it; the old one (aed6684) skipped its kill and its operand-less wait sat out the 30 s run. Spawned
+// detached under armGroup (cap 20000, SIGTERM, grace 5000), r built from 'close' with ps / pgid (law 1: a hang is a named
+// failure with a ps dump). The shell is $LITEUTILS_W_BASH when set (e.g. a bash 5), else the file's BASH.
+const W_BASH = process.env.LITEUTILS_W_BASH || BASH;
+const W_SITE = {
+    'bytecode-budget': ['\n  drv_wait; nrc=$DRV_RC\n', { holdProbe: 30 }],
+    'deopt-diff': ['\n  drv_wait; nrc=$DRV_RC\n', { hold: 30 }],
+    'ic-diff': ['\n  drv_wait; rc=$DRV_RC\n', { hold: 30 }],
+    'allocation-diff': ['\n  drv_wait; nrc=$DRV_RC\n', { hold: 30 }],
+    'inlining-budget-diff': ['\n  drv_wait\n', { hold: 30 }],
+};
+function wRoot(t, src) {
+    const [from] = W_SITE[t];
+    const p = join(mk('w'), `${t}.sh`);
+    writeFileSync(p, once(src, from, from.replace('\n  drv_wait', () => '\n  until [ -e "$W_PIDF" ]; do sleep 0.05; done; kill -TERM $$; drv_wait'), `${t} W injection`)); chmodSync(p, 0o755);
+    return p;
+}
+async function groupGone(pgid, ms) {   // macOS: EPERM while the group holds only a zombie not yet reaped
+    const t0 = Date.now();
+    for (;;) {
+        try { process.kill(-pgid, 0); } catch (e) { if (e.code === 'ESRCH') return true; if (e.code !== 'EPERM') throw e; }
+        if (Date.now() - t0 >= ms) return false;
+        await sleep(20);
+    }
+}
+async function runW(t, root, what) {
+    const c = mkCase(t, W_SITE[t][1]);
+    const so = openSync(c.so, 'w'), se = openSync(c.se, 'w');
+    let child;
+    try { child = spawnAsync(W_BASH, [root, ...c.args()], { cwd: c.cwd, env: cleanEnv({ TMPDIR: c.tmp, W_PIDF: c.pidf }), detached: true, stdio: ['ignore', so, se] }); }
+    finally { closeSync(so); closeSync(se); }
+    const t0 = Date.now();
+    let ex = null;
+    const closed = new Promise((res) => {
+        child.once('close', (status, signal) => { ex = { status, signal, t: Date.now() }; res(); });
+        child.once('error', (error) => { ex = { status: null, signal: null, error, t: Date.now() }; res(); });
+    });
+    const h = armGroup(child, 20000, 'SIGTERM');
+    let driverPid = null;
+    try {
+        await closed;
+        h.clear();
+        if (existsSync(c.pidf)) driverPid = Number(rd(c.pidf).trim());
+        const r = { status: ex.status, signal: ex.signal, stdout: rd(c.so), stderr: rd(c.se), timedOut: h.timedOut, cap: h.cap, ps: h.ps, pgid: h.pgid, error: ex.error };
+        noTimeout(r, what);
+        const gone = await groupGone(child.pid, 3000);
+        return { ...r, driverPid, driverDead: driverPid === null ? null : isDead(driverPid), gone, ms: ex.t - t0, c };
+    } finally {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* group gone */ }
+        if (driverPid !== null && !isDead(driverPid)) { try { process.kill(driverPid, 'SIGKILL'); } catch { /* gone */ } }   // a pid this run started
+    }
+}
+for (const t of NAMES) {
+    test(`W ${SHORT[t]}: SIGTERM between the driver's & and drv_wait -> rc 2, interrupted once, 1 VERDICT, < 10 s, driver dead, group gone, TMPDIR clean`, { skip }, async () => {
+        const r = await runW(t, wRoot(t, rd(LIVE(t))), `W ${SHORT[t]} ${W_BASH}`);
+        const both = r.stdout + r.stderr;
+        const m = `${msg(r)}\nms=${r.ms} driverPid=${r.driverPid} TMPDIR=${JSON.stringify(ls(r.c.tmp))}`;
+        assert.equal(r.status, 2, m);
+        assert.equal(r.signal, null, m);
+        assert.equal(both.split(`${t}: interrupted (SIGTERM)`).length - 1, 1, m);
+        assert.equal((both.match(/^VERDICT \S+$/gm) || []).length, 1, m);
+        assert.ok(r.ms < 10000, `exit after ${r.ms} ms, limit 10000\n${m}`);
+        assert.ok(r.driverPid !== null && r.driverDead === true, `the held driver pid ${r.driverPid} is not dead (null: it never held)\n${m}`);
+        assert.ok(r.gone, `process group ${r.pgid} still has members 3000 ms after close\n${m}`);
+        const tmp = ls(r.c.tmp);
+        if (t === 'inlining-budget-diff') assert.ok(tmp.length === 1 && tmp[0].startsWith('inl-diff-'), m);
+        else assert.deepEqual(tmp, [], m);
+    });
+}
+let TWW = null;   // the 5 twins run at once (each waits out the 20 s cap)
+const twinsW = () => (TWW ??= Promise.all(NAMES.map((t) => runW(t, wRoot(t, preText(`${t}.sh`)), `W twin ${SHORT[t]} ${W_BASH}`).then((r) => ({ r }), (e) => ({ e })))));
+for (const [i, t] of NAMES.entries()) {
+    test(`W twin ${PRE_SHA} ${SHORT[t]}: the old _sig skips its kill (SIG_PID empty) and waits the held run out -> named timeout, ps names sleep 30`, { skip: PRESKIP }, async () => {
+        const out = (await twinsW())[i];
+        assert.ok(out.e, `the twin did not time out: ${out.r ? msg(out.r) : ''}`);
+        const em = String(out.e && out.e.message);
+        assert.match(em, new RegExp(`^W twin ${SHORT[t]} \\S+ timed out after 20000 ms`), em);
+        assert.match(em, /--- ps \(pgid \d+\)/, em);
+        assert.match(em, /sleep 30/, em);
     });
 }

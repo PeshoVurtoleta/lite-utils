@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { capSync } from './spawn-cap.mjs';
+import { capSync, psGroup } from './spawn-cap.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'bytecode-budget.sh');
@@ -662,7 +662,7 @@ exec ${JSON.stringify(realAwk)} "$@"
 `);
         chmodSync(join(d, 'bin', 'awk'), 0o755);
         const ch = spawn('bash', [script, '--self-test'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), PATH: `${join(d, 'bin')}:${process.env.PATH}` } });
-        let out = '', err = '', killed = false, exited = false, ok = false, wasReady = false, waitedOut = false, escalated = false;
+        let out = '', err = '', killed = false, exited = false, ok = false, wasReady = false, waitedOut = false, escalated = false, psDump = '';
         const group = (sig) => { try { process.kill(-ch.pid, sig); } catch { /* group gone */ } };
         ch.stdout.on('data', (b) => { out += b; ok = ok || /^ok {3}/m.test(out); });
         ch.stderr.on('data', (b) => { err += b; });
@@ -671,7 +671,8 @@ exec ${JSON.stringify(realAwk)} "$@"
         (async () => {
             for (let i = 0; i < 3000 && !exited && !(ok && existsSync(ready)); i++) await new Promise((r) => setTimeout(r, 20));
             wasReady = existsSync(ready);
-            if (!exited && ok && wasReady) { killed = true; group('SIGINT'); hard = setTimeout(() => { escalated = true; group('SIGKILL'); }, 30000); }
+            // b72 CI-HANG: the escalation dumps the group (ps) BEFORE its SIGKILL
+            if (!exited && ok && wasReady) { killed = true; group('SIGINT'); hard = setTimeout(() => { escalated = true; psDump = psGroup(ch.pid); group('SIGKILL'); }, 30000); }
             else { waitedOut = !exited; group('SIGKILL'); }   // never ready (or exited first): no SIGINT, no 300 s sleep left behind
         })();
         ch.on('close', (code, signal) => {
@@ -683,7 +684,7 @@ exec ${JSON.stringify(realAwk)} "$@"
             const hasAdd = left.some((x) => existsSync(join(x, 'add')));
             for (const x of left) rmSync(x, { recursive: true, force: true });   // the test cleans what the script left
             // outside sigCheck: a teeth / mutant assert.throws can never swallow it
-            if (escalated) { try { assert.fail('bytecode-budget.sh --self-test SIGINT run timed out after 30000 ms (killed by SIGKILL)'); } catch (e) { reject(e); return; } }
+            if (escalated) { try { assert.fail('bytecode-budget.sh --self-test SIGINT run timed out after 30000 ms (killed by SIGKILL)\n--- ps (pgid ' + ch.pid + '):\n' + psDump); } catch (e) { reject(e); return; } }
             resolve({ code, signal, killed, wasReady, waitedOut, ok, dirs, left, hasAdd, out, err });
         });
     });

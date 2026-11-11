@@ -269,17 +269,23 @@ FINAL=""
 DIED=""; SIG_PID=""
 trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "bytecode-budget: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
 # _sig NAME: a trapped SIGINT / SIGTERM / SIGHUP. After FINAL=1 it does nothing (the planned exit stands). Else it
-# ignores further signals, kills the recorded driver (SIGKILL: a bounded exit; an interrupted run's output is never
-# read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
-# "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
-# no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
-# that is running when the signal lands (the --version / -p / --v8-options probes and other short steps; every
-# driver run is a drv_wait job, never a $( )) ends first
+# ignores further signals and lists the recorded driver and every running job of this shell ($SIG_PID $(jobs -pr): a
+# signal between the `&` and drv_wait's assignment leaves SIG_PID empty, jobs -pr still lists that run). It SIGKILLs
+# each listed pid ONCE (a bounded exit; an interrupted run's output is never read; during drv_wait both name the same
+# pid, and bash's SIGCHLD handler reaps a killed job at once, so a second kill would hit a freed pid) before it reaps
+# any, then waits for each by pid. Residual: that handler may also reap a listed job between the listing and its kill.
+# No operand-less wait: on bash >= 5 it also waits for a live `< <( )` writer, which is not a job (never killed) and
+# which nobody drains inside the trap: a hang (lib-opus-c-1). Then it dies "interrupted (SIG<NAME>)" (stderr, and the
+# report once it has its head). Before lib/common.sh is loaded there is no die: the same two lines go to stderr. bash
+# runs the trap only between commands: a foreground command or a $( ) that is running when the signal lands (the
+# --version / -p / --v8-options probes and other short steps; every driver run is a drv_wait job, never a $( )) ends
+# first
 _sig() {
   [[ -z $FINAL ]] || return 0
   trap '' INT TERM HUP
-  if [[ -n $SIG_PID ]]; then kill -KILL "$SIG_PID" 2>/dev/null || true; fi
-  wait 2>/dev/null || true
+  local p k=" " l="$SIG_PID $(jobs -pr)"
+  for p in $l; do [[ $k == *" $p "* ]] || { k="$k$p "; kill -KILL "$p" 2>/dev/null || true; }; done
+  for p in $k; do wait "$p" 2>/dev/null || true; done
   if declare -F die >/dev/null; then die "interrupted (SIG$1)"; fi
   DIED=1; printf 'bytecode-budget: interrupted (SIG%s)\nVERDICT NO-VERDICT\n' "$1" >&2; exit 2
 }

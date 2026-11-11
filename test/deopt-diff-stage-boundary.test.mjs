@@ -21,7 +21,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
+import { capSync, armCap, noTimeout, psGroup } from './spawn-cap.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, '..');
@@ -749,17 +749,18 @@ describe('deopt-diff stage boundary rows', { concurrency: 4 }, () => {
             let out = '';
             ch.stdout.setEncoding('utf8'); ch.stdout.on('data', (d) => { out += d; }); ch.stderr.on('data', () => {});
             const done = new Promise((res) => ch.on('close', (code, signal) => res({ code, signal })));
-            let exitedEarly = false, escalated = false;
+            let exitedEarly = false, escalated = false, psDump = '';
             ch.on('exit', () => { exitedEarly = !existsSync(ready); });
             for (let i = 0; i < 1500 && !existsSync(ready) && ch.exitCode === null && ch.signalCode === null; i++) await new Promise((r) => setTimeout(r, 20));
             const wasReady = existsSync(ready);
             if (wasReady) process.kill(-ch.pid, 'SIGTERM');
-            const kill = setTimeout(() => { escalated = true; try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }, 30000);
+            // b72 CI-HANG: the group is dumped (ps) BEFORE the escalation SIGKILL, so a hang names the stuck process
+            const kill = setTimeout(() => { escalated = true; psDump = psGroup(ch.pid); try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }, 30000);
             const st = await done; clearTimeout(kill);
             const made = sh.made(), leaked = made.filter((p) => existsSync(p));
             for (const p of leaked) rmSync(p, { recursive: true, force: true });
             // outside sigCheck: a teeth / mutant assert.throws can never swallow it
-            if (escalated) assert.fail('deopt-diff.sh SIGTERM run timed out after 30000 ms (killed by SIGKILL)');
+            if (escalated) assert.fail(`deopt-diff.sh SIGTERM run timed out after 30000 ms (killed by SIGKILL)\n--- ps (pgid ${ch.pid}):\n${psDump}`);
             return { wasReady, exitedEarly, st, out, made, leaked, td: c.tmp, tmp: readdirSync(c.tmp), cwd: readdirSync(c.cwd), spawns: c.spawns() };
         } finally {
             if (ch) { try { process.kill(-ch.pid, 'SIGKILL'); } catch { /* gone */ } }

@@ -31,7 +31,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnAsync } from 'node:child_process';
-import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
+import { capSync, armGroup, noTimeout } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -271,11 +271,12 @@ test('A2 mutant (no run_side rm -f): the same cycle leaves 54 files in TMPDIR', 
 
 // ======================================================= A3 =======================================================
 // SIGTERM the tool's process group once the 3rd driver run has started; the EXIT trap must remove the live temp file.
-async function sigtermRun(root) {
+// b72 CI-HANG: the child is detached (its own group), so the cap is armGroup: a hung group is a named failure with a ps dump
+async function sigtermRun(root, cap = 60000) {
     const c = mkCase();
     const env = cleanEnv({ PATH: `${c.bin}:${process.env.PATH}`, TMPDIR: c.tmp, FAKE_SLEEP_AT: '3' });
     const child = spawnAsync(BASH, [root, ...base(c)], { cwd: c.cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const h = armCap(child, 60000);
+    const h = armGroup(child, cap, 'SIGTERM');
     let so = '', se = '';
     child.stdout.on('data', (d) => { so += d; }); child.stderr.on('data', (d) => { se += d; });
     const done = new Promise((res) => child.on('close', (status, signal) => res({ status, signal })));
@@ -287,7 +288,7 @@ async function sigtermRun(root) {
         try { process.kill(-child.pid, 'SIGTERM'); } catch { /* group gone */ }
         r = await done;
         h.clear();
-        noTimeout({ ...r, stdout: so, stderr: se, timedOut: h.timedOut, cap: h.cap }, 'deopt-diff.sh SIGTERM');
+        noTimeout({ ...r, stdout: so, stderr: se, timedOut: h.timedOut, cap: h.cap, ps: h.ps, pgid: h.pgid }, 'deopt-diff.sh SIGTERM');
     } finally {
         try { process.kill(-child.pid, 'SIGKILL'); } catch { /* group gone */ }
     }
@@ -330,6 +331,30 @@ test('A3 mutant (drop the sig_arm call): SIGTERM gives no "interrupted (SIGTERM)
     const m = `rc=${r.status} sig=${r.signal}\n--- stdout\n${r.stdout}--- stderr\n${r.stderr}`;
     assert.ok(!r.stderr.includes(INTR), m);
     assert.throws(() => checkA3(r), assert.AssertionError);
+});
+
+// b72 tooth (PLAN-b72-cihang.md ASSERTION 6): a variant whose _sig hangs after its trap (`trap '' INT TERM HUP; sleep 30`:
+// the sleep ignores TERM too) must END as a named failure -- "deopt-diff.sh SIGTERM timed out after 3000 ms" plus the ps
+// dump naming `sleep 30` -- inside cap + grace + slack (15000 ms), not after the 60000 ms cap / the 30 s sleep. Red on
+// the old runner (armCap(child, 60000), no ps): it waits the sleep out (hand-run revert control: see the b72 B3 report).
+// Retention (ASSERTION 7): the group is gone (ESRCH) and the private TMPDIR is empty afterwards.
+const A_TRAPLINE = "  trap '' INT TERM HUP\n";
+test('A3 tooth (b72): a _sig that hangs after its trap ends as a named timeout with a ps dump naming "sleep 30", within 15000 ms', { skip }, async () => {
+    const m = mutant('a3-hang', [[A_TRAPLINE, "  trap '' INT TERM HUP; sleep 30\n"]]);
+    const t0 = Date.now();
+    let err = null;
+    try { await sigtermRun(m, 3000); } catch (e) { err = e; }
+    const dt = Date.now() - t0;
+    assert.ok(err !== null, 'the hanging variant must make sigtermRun reject');
+    assert.match(String(err.message), /^deopt-diff\.sh SIGTERM timed out after 3000 ms/, String(err.message));
+    assert.match(String(err.message), /--- ps \(pgid \d+\):/, String(err.message));
+    assert.match(String(err.message), /sleep 30/, String(err.message));
+    assert.ok(dt < 15000, `took ${dt} ms`);
+    const pg = Number(/--- ps \(pgid (\d+)\):/.exec(String(err.message))[1]);
+    await new Promise((res) => setTimeout(res, 200));
+    let gone = false;
+    try { process.kill(-pg, 0); } catch (e) { gone = e.code === 'ESRCH'; }   // EPERM = a zombie still awaits reaping: not gone
+    assert.ok(gone, `group -${pg} still there`);
 });
 
 // ======================================================= A4 =======================================================

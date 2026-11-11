@@ -3,7 +3,8 @@
 # --self-test, and the --fixtures self-tests of bytecode-budget and deopt-diff. No quiet lock, no timed gate.
 # Matrix: node 22 / 24 / 26 x ubuntu-latest (bash 5, case-sensitive FS; uutils coreutils and a NUL-clean awk as
 # of 2026-11) and macos-latest (/bin/bash 3.2, case-insensitive APFS, BSD userland), plus one node 26.8.2 leg per
-# OS: 8 legs. No Windows: the tools are bash only. The provenance step prints the awk / tr / mktemp flavour.
+# OS: 8 legs. No Windows: the tools are bash only. The provenance step prints the awk / tr / mktemp / env flavour and
+# whether env EXECs the program (the driver runs' `$!`, b72 CI-HANG).
 # fetch-depth 0: the parity / teeth rows read `git show <commit>:<file>`. The pins live in the test files only:
 # GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of test/bytecode-budget*.test.mjs,
 # the deopt-diff-boundary A4 git row, the 221ff2ec base rows of test/deopt-diff-stage*.test.mjs, the spawn-cap S5 teeth
@@ -71,6 +72,9 @@ jobs:
           printf "a\\0b\\n" | awk "{ print \"awk NUL probe: record length \" length(\$0) \" (3 = NUL-clean, 1 = truncating)\" }" || true
           { tr --version 2>&1 || true; } | head -1 || true
           { mktemp --version 2>&1 || true; } | head -1 || true
+          { env --version 2>&1 || true; } | head -1 || true
+          # b72 CI-HANG lead: a driver run is `( cd DIR && exec env -u NODE_OPTIONS NODE .. ) &` and _sig kills $!; that is the program only if env EXECs it (want: comm sleep, no child)
+          ( cd . && exec env -u NODE_OPTIONS sleep 2 ) & e=$!; sleep 0.5; echo "env exec probe: \$! comm=$(ps -o comm= -p "$e" 2>/dev/null || echo gone) children=[$(pgrep -l -P "$e" 2>/dev/null | tr '\n' ' ' || true)]"; wait "$e" || true
       - name: macOS bash on PATH is /bin/bash
         if: runner.os == 'macOS'
         run: test "$(command -v bash)" = /bin/bash

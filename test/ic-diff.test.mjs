@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
+import { capSync, armGroup, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
 const C = 83;   // b70 NULLCTL: 81 -> 83 (rows 82 NC3, 83 NC4, appended last). Was 81: self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
@@ -121,7 +121,7 @@ const ROW = [null,
 ];
 
 function selfTest(path) {
-    return capSync('bash', [path, '--self-test'], { encoding: 'utf8', env: ENV }, 300000, `ic-diff --self-test (${basename(path)})`);
+    return capSync('bash', [path, '--self-test'], { encoding: 'utf8', env: ENV, group: true }, 300000, `ic-diff --self-test (${basename(path)})`);
 }
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
 function rowLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL ')); }
@@ -514,14 +514,14 @@ function gate() { return new Promise((res) => { const go = () => { active++; res
 function release() { active--; const w = waiting.shift(); if (w) w(); }
 function runOne(path) {
     return new Promise((res) => {
-        const c = spawn('bash', [path, '--self-test'], { env: ENV });
+        const c = spawn('bash', [path, '--self-test'], { env: ENV, detached: true });   // b72 CI-HANG: its own group, so armGroup can reap it
         let out = ''; let err = '';
         // SIGTERM, not SIGKILL: the self-test's EXIT trap then removes its own mktemp dir
-        const h = armCap(c, 300000, 'SIGTERM');
+        const h = armGroup(c, 300000, 'SIGTERM');
         c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
         c.on('close', (status, signal) => {
             h.clear();
-            res({ status, signal, stdout: out, stderr: err, timedOut: h.timedOut, cap: h.cap, what: `ic-diff --self-test (${basename(path)})` });
+            res({ status, signal, stdout: out, stderr: err, timedOut: h.timedOut, cap: h.cap, ps: h.ps, pgid: h.pgid, what: `ic-diff --self-test (${basename(path)})` });
         });
     });
 }
