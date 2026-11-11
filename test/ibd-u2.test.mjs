@@ -242,7 +242,7 @@ row('F5 report.txt a symlink to a file: refused, victim unchanged, 0 spawns', f5
 row('F5 report.txt a dangling symlink: refused, victim never created, 0 spawns', f5('dangling'), ckF5, { 'drop the -L die': noSym });
 row('F5 report.txt a self-loop symlink: refused, 0 spawns', f5('loop'), ckF5, { 'drop the -L die': noSym });
 row('F5 report.txt a hard link of another file: refused, victim unchanged, 0 spawns', f5('hard'), ckF5,
-    { 'drop the hard-link die': () => variant('f5-nohard', 'has another hard link', null) });
+    { 'drop the hard-link die': () => variant('f5-nohard', '$OUT/report.txt has another hard link', null) });
 
 // ---- F9: --runs 09 runs as 9; 062 and 51 are refused ----
 const runsRun = (v, o2) => (b) => withCase((c) => {

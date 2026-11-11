@@ -44,7 +44,9 @@
 #   --out DIR          keep DIR/report.txt and DIR/raw/before/run.<k>.txt, DIR/raw/after/run.<k>.txt (the raw
 #                      output of run k, addresses kept). DIR/raw must be absent or an empty, readable and writable
 #                      directory that is not a symlink; DIR/report.txt must not be a symlink or a file with another
-#                      hard link. Without --out no file is left on disk. With or without --out, each driver run
+#                      hard link, or an input file of this run (a DRIVER, --driver, --before or --after: exit 2
+#                      before any spawn or write, "is an input file of this run"). Without --out no file is left
+#                      on disk. With or without --out, each driver run
 #                      uses one temp file, ${TMPDIR:-/tmp}/deopt-diff.XXXXXX, removed right after (and by the EXIT
 #                      trap on any other exit: a refusal, an error, SIGINT, SIGTERM or SIGHUP); SIGKILL, or a signal
 #                      inside $(mktemp) before the script has the file's name, can leave one deopt-diff.XXXXXX behind.
@@ -582,6 +584,15 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
       fi
     done
   done < <(printf '%s\n' "$LIVE_TOPS")
+}
+rep_refuse() { # file...: die if a file this run writes in place in OUT (report.txt, and each name in OUT_NAMES) is one of
+  # this run's own input files (-ef: the same file under any name; an empty operand never matches). Cold path, before any spawn or write
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
 }
 worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
@@ -1621,7 +1632,7 @@ EOF
 # lib/v8flags.sh, runs after the --version spawn, at the marker line below)
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; REPORT=/dev/null
-BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; STAGE_SAME=0
+BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; STAGE_SAME=0; OUT_NAMES=""
 OPTS="--fn --runs --node --v8-flags --out --self-test --help --before-ref --after-ref --before --after --module --driver --repo"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 need() { # value from --opt=value (returns 0) or from the next argument (returns 1: caller shifts)
@@ -1712,6 +1723,7 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
   [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"

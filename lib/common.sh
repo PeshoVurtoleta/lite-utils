@@ -1,7 +1,8 @@
 #: lib/common.sh -- die say sha8 usage multiset devino top_of live_tops resolve_links is_tracked
-#: refuse_live worst nl_refuse nl_dir. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
+#: refuse_live rep_refuse worst nl_refuse nl_dir. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
 #: for a symlink, around the dir of its chain's end; refuse_live: its name joins the cand list) and REPO
-#: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage).
+#: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage), OUT and
+#: OUT_NAMES (rep_refuse; OUT_NAMES unset = report.txt only).
 #: Sets DIED (die, first: lib/prologue.sh's EXIT trap stays silent), TOP_OF (top_of; a local of live_tops) and
 #: LIVE_TOPS (live_tops; a local of refuse_live). top_of and
 #: live_tops die on a git error: call them in the CURRENT shell, never in $( ), <( ) or a pipe (a die there exits
@@ -98,6 +99,15 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
       fi
     done
   done < <(printf '%s\n' "$LIVE_TOPS")
+}
+rep_refuse() { # file...: die if a file this run writes in place in OUT (report.txt, and each name in OUT_NAMES) is one of
+  # this run's own input files (-ef: the same file under any name; an empty operand never matches). Cold path, before any spawn or write
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
 }
 worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT

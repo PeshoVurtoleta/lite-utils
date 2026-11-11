@@ -56,7 +56,9 @@
 #                          a space in fn becomes -). DIR/raw must be absent or an empty, readable and writable
 #                          directory that is not a symlink; DIR/report.txt must be absent (then DIR absent or
 #                          writable) or a writable regular file (never a FIFO, a device or a directory), and must not
-#                          be a symlink or a file with another hard link. Without --out no file is left on disk.
+#                          be a symlink or a file with another hard link, or an input file of this run (a DRIVER,
+#                          --driver, --before or --after: exit 2 before any spawn or write, "is an input file of this
+#                          run"). Without --out no file is left on disk.
 #                          With or without --out, the baseline and each probe use one temp file,
 #                          ${TMPDIR:-/tmp}/bytecode-budget.XXXXXX, removed right after (also by the EXIT trap on any
 #                          other exit, a signal included); a signal inside the mktemp that makes it, or a SIGKILL of
@@ -789,7 +791,7 @@ EOF
 # ---------------------------------------------------------------------------------------------
 FNLIST=""; MAXLIST=""; WANT_VER=""; RUNS=2; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""
 SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; DIFFMODE=0
-BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0
+BEFORE_REF=""; AFTER_REF=""; BEFORE_FILE=""; AFTER_FILE=""; MODULE=""; DRIVER=""; REPO=""; STAGED=0; OUT_NAMES=""
 OPTS="--fn --max --node-version --runs --node --v8-flags --out --self-test --fixtures --help --diff --before-ref --after-ref --before --after --module --driver --repo"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 # @include lib/args.sh
@@ -933,6 +935,7 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ ! -e "$OUT/raw" || -w "$OUT/raw" ]] || die "--out: $OUT/raw is not writable"
+  rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   # Q-FIFO (b46): a FIFO / device / directory report.txt passes the checks around this line, and the empty-report write
   # below would block on a FIFO with no reader: only a writable regular file, or none in a writable (or absent) DIR

@@ -121,7 +121,10 @@
 # observed on node v26.8.2 in front of a Maglev OSR compile; a glued TurboFan header is UNVERIFIED (never observed on a
 # real node). Also refused, exit 2: --turbolev or --turbolev-future in --v8-flags; a report.txt under --out that is a
 # symlink, not a regular writable file or hard-linked
-# elsewhere; an fn or tier given twice; a value option given twice; --self-test with any other argument; a --v8-flags of
+# elsewhere; an input file of this run (a DRIVER, --driver, --before or --after) that is OUT/report.txt or
+# OUT/budget.<tier>.tsv / OUT/<key>.<tier>.diff.txt ("is an input file of this run"), or a symlink / hard link there (key:
+# all and each --fn name, every listed tier; "is a symlink" / "has another hard link"); an fn or tier given twice;
+# a value option given twice; --self-test with any other argument; a --v8-flags of
 # only blanks; --before and --after the same file; an empty value on a value option; --runs of
 # more than 2 digits (even 003); a failed <node> -p probe; a value on -h, --help, --self-test, --only-fn, --concurrent or
 # --no-bytecode ("<flag> takes no value"); an empty --tiers; a backslash in --out, or in the current directory for a relative
@@ -939,6 +942,13 @@ for sub in raw dec bud ms stage; do
 done
 OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
 [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT ($OUT_UP is not a writable directory)"
+OUT_NAMES=""   # the other files written in place in OUT: budget.<tier>.tsv and <all | fn>.<tier>.diff.txt
+for x in "${TIER_LIST[@]}"; do OUT_NAMES+=" budget.$x.tsv all.$x.diff.txt"; for t in "${TARGETS[@]}"; do OUT_NAMES+=" $t.$x.diff.txt"; done; done
+for x in $OUT_NAMES; do
+  [[ ! -L "$OUT/$x" ]] || die "--out: $OUT/$x is a symlink (refused: the write would follow it)"
+  [[ ! -f "$OUT/$x" ]] || { RL=$(find "$OUT/$x" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/$x has another hard link (refused: the write would change that file too)"
+done
+rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
 [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
 [[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"

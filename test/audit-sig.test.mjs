@@ -665,7 +665,7 @@ const PSUB_ANCHOR = {
     'allocation-diff': 'ZERO=0; RUNS=5; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null; T=""\n',
     'bytecode-budget': 'FNLIST=""; MAXLIST=""; WANT_VER=""; RUNS=2; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""\n',
     'deopt-diff': 'FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; FIXTURES=""; POS=(); GOTOPT=" "; REPORT=/dev/null\n',
-    'ic-diff': 'FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null\n',
+    'ic-diff': 'FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null',   // no \n: the twin (aed6684) line ends here, the live one adds ; OUT_NAMES="" (b74 F-C)
     'inlining-budget-diff': 'FNS="${ME:-m0}"; RUNS=3; TIERS="turbo,maglev"; ONLY=0; CONCURRENT=0; DRIVER=""; REPO=""\n',
 };
 function findBash5() {

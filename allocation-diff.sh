@@ -333,6 +333,15 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
     done
   done < <(printf '%s\n' "$LIVE_TOPS")
 }
+rep_refuse() { # file...: die if a file this run writes in place in OUT (report.txt, and each name in OUT_NAMES) is one of
+  # this run's own input files (-ef: the same file under any name; an empty operand never matches). Cold path, before any spawn or write
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
+}
 worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF

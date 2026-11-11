@@ -41,7 +41,8 @@
 #   --out DIR          keep DIR/report.txt and DIR/raw/<side>/run.<k>.log (the IC log of run k) and
 #                      DIR/raw/<side>/run.<k>.out (the driver's stdout + stderr). DIR/raw must be absent, or an
 #                      empty, readable and writable directory that is not a symlink; DIR/report.txt must not be a
-#                      symlink or a file with another hard link. DIR/raw/before and DIR/raw/after must be creatable:
+#                      symlink or a file with another hard link, or a DRIVER of this run (exit 2 before any spawn or
+#                      write, "is an input file of this run"). DIR/raw/before and DIR/raw/after must be creatable:
 #                      the first existing path above them must be a writable, searchable directory, else exit 2 before
 #                      any spawn "--out: cannot create DIR/raw/before and DIR/raw/after (<first existing ancestor> is
 #                      not a writable directory)". Without --out the logs go to one private temp dir, removed on
@@ -371,6 +372,15 @@ refuse_live() { # file label: die unless file is a FROZEN copy (not tracked, not
       fi
     done
   done < <(printf '%s\n' "$LIVE_TOPS")
+}
+rep_refuse() { # file...: die if a file this run writes in place in OUT (report.txt, and each name in OUT_NAMES) is one of
+  # this run's own input files (-ef: the same file under any name; an empty operand never matches). Cold path, before any spawn or write
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
 }
 worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
@@ -997,7 +1007,7 @@ EOF
 # options (every check below runs before any node is spawned and before any disk write; the --v8-flags allowlist,
 # lib/v8flags.sh, and the hashed --v8-options probe run after the --version spawn, at the marker line below)
 # ---------------------------------------------------------------------------------------------
-FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null
+FNLIST=""; RUNS=3; NODE_BIN="${NODE:-node}"; V8FLAGS=""; OUT=""; SELFTEST=0; POS=(); GOTOPT=" "; REPORT=/dev/null; OUT_NAMES=""
 IC_TMP=""
 OPTS="--fn --runs --node --v8-flags --out --self-test --help"
 hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
@@ -1071,6 +1081,7 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
+  rep_refuse "${POS[@]}"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
   [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
