@@ -48,8 +48,11 @@
 #   * Guard: a run with no decision line naming <fn> and no completed compile of <fn> by that tier (a unit that
 #     reached `[completed compiling`; an aborted compile is no evidence) is NO-VERDICT, never "identical".
 #     --concurrent attributes no compile, so there only a decision line counts.
-#     The default scope is the whole trace, so the diff is printed once per tier for all <fn>;
-#     --only-fn gives one diff per <fn>.
+#     The default scope is every decision line of the compile units that involve a named <fn> (a unit that compiles
+#     <fn>, or has a decision line naming it), so the diff is printed once per tier for all <fn>; --only-fn gives one
+#     diff per <fn>. A unit that involves no named <fn> is never part of the verdict: node compiles its own functions
+#     (normalizeString, node:path) or not with the length of the driver's path, which differs between the two sides.
+#     --concurrent has one unit "*" (no attribution), so there a DIFF in which no differing line names a <fn> is NO-VERDICT.
 #   * Null control: all before runs must match each other, and all after runs, else NO-VERDICT.
 #   * A driver that exits non-zero, or a tier that prints no trace at all, is NO-VERDICT.
 #   * Driver output glued to a V8 compile line (no newline before it) is NO-VERDICT, exit 2; not checked under --concurrent.
@@ -283,13 +286,24 @@ END { exit !f }
 # append failure outranks node's: a TMPDIR that is full can be why node failed (Q-B60-TMPFULL)
 bc_rc() { if [[ $3 != 0 ]]; then BC_RC="awk:$3"; elif [[ $2 != 0 ]]; then BC_RC="tr:$2"; elif [[ $4 != 0 ]]; then BC_RC="append:$4"; else BC_RC=$1; fi; }
 
-# dec file -> lines in scope (all, or only lines naming fn / made while compiling fn)
+# dec file -> lines in scope. only=1: the lines naming fn / made while compiling fn. only=0 (the default scope; the dec
+# file is given twice, as `pass=1 FILE pass=2 FILE`): every line of each compile unit that involves a named fn (-v fns,
+# space separated): pass 1 marks the units with a line naming a fn, or compiling one; pass 2 prints their lines. A unit
+# that involves no named fn is never part of the verdict: node compiles its own functions (normalizeString, node:path)
+# or not with the LENGTH of the driver's path, which differs between the two sides. only=2 (--concurrent, one unit "*"):
+# the lines that name a fn (-v fns)
 # shellcheck disable=SC2016
 SCOPE_AWK='
-BEGIN { tok = "SharedFunctionInfo " fn ">" }
-only != 1 { print; next }
-{ u = $0; sub(/\t.*/, "", u); sub(/@.*/, "", u); l = $0; sub(/^[^\t]*\t/, "", l); split(l, f, " ") }
-index(l, tok) > 0 || u == fn || ((f[1] == "SKIP" || f[1] ~ /^INLINE/) && f[2] == fn) { print }
+function hit(g) { return index(l, "SharedFunctionInfo " g ">") > 0 || u == g || ((f[1] == "SKIP" || f[1] ~ /^INLINE/) && f[2] == g) }
+BEGIN { nt = split(fns, T, " ") }
+{ U = $0; sub(/\t.*/, "", U); u = U; sub(/@.*/, "", u); l = $0; sub(/^[^\t]*\t/, "", l); split(l, f, " ") }
+only == 1 { if (hit(fn)) print; next }
+pass == 1 { for (i = 1; i <= nt; i++) if (hit(T[i])) inv[U] = 1; next }
+only == 2 {
+  for (i = 1; i <= nt; i++) if (hit(T[i])) { print; next }
+  next
+}
+U in inv { print }
 '
 
 # raw trace (NUL read as ?) -> prints "concurrent" if a line starts `[compiling method ` and says ConcurrencyMode::kConcurrent (a
@@ -1000,8 +1014,9 @@ judge() {
   local tier=$1 key=$2 fn=$3 v="" why="" shown="" side k nb na n label
   for k in $(seq 1 "$RUNS"); do
     for side in before after; do
-      awk -v fn="$fn" -v only="$([[ -n $fn ]] && echo 1 || echo 0)" "$SCOPE_AWK" "$OUT/dec/$tier.$side.$k.tsv" \
-        | multiset >"$OUT/ms/$key.$tier.$side.$k.txt"
+      if [[ -n $fn ]]; then awk -v fn="$fn" -v only=1 "$SCOPE_AWK" "$OUT/dec/$tier.$side.$k.tsv"
+      else awk -v fns="${TARGETS[*]}" -v only=0 "$SCOPE_AWK" pass=1 "$OUT/dec/$tier.$side.$k.tsv" pass=2 "$OUT/dec/$tier.$side.$k.tsv"
+      fi | multiset >"$OUT/ms/$key.$tier.$side.$k.txt"
     done
   done
   nb=$(awk '{s += $1} END {print s + 0}' "$OUT/ms/$key.$tier.before.1.txt")
@@ -1011,6 +1026,13 @@ judge() {
     shown=$(awk "$MSDIFF_AWK" "$OUT/ms/$key.$tier.before.1.txt" "$OUT/ms/$key.$tier.after.1.txt" | sort -k3)
     if [[ -z "$shown" ]]; then v=SAME; why="identical multiset"
     else v=DIFF; why="$(printf '%s\n' "$shown" | wc -l | tr -d ' ') line(s) differ"; fi
+    # --concurrent merges every compile into one unit "*", so the default scope cannot leave node's own units out: a DIFF
+    # with no differing line that names a fn is NO-VERDICT (this check can only turn DIFF into NO-VERDICT)
+    if [[ $v == DIFF && -z $fn && $CONCURRENT == 1 ]] \
+      && cmp -s <(awk -v fns="${TARGETS[*]}" -v only=2 "$SCOPE_AWK" "$OUT/dec/$tier.before.1.tsv" | multiset) \
+                <(awk -v fns="${TARGETS[*]}" -v only=2 "$SCOPE_AWK" "$OUT/dec/$tier.after.1.tsv" | multiset); then
+      v=NO-VERDICT; why="--concurrent attributes no compile, and no line that differs names a fn (node's own functions compile or not with the driver's path length)"
+    fi
   fi
   if [[ -n $fn ]]; then label="$fn (--only-fn)"; else label="all decision lines"; fi
   say "  $label: $v -- $why  (lines before/after run 1: $nb/$na)"
@@ -1030,7 +1052,7 @@ say "after   $DESC_A"
 if [[ $STAGED == 1 ]] && cmp -s "$DRV_B" "$DRV_A" && cmp -s "$(dirname "$DRV_B")/Signal.js" "$(dirname "$DRV_A")/Signal.js"; then
   say "NOTE    before and after are byte-identical: this run is a null control (expect SAME)"
 fi
-say "fn ${TARGETS[*]}  runs $RUNS  tiers ${TIER_LIST[*]}  scope $([[ $ONLY == 1 ]] && echo "--only-fn (lines naming fn / compiled in fn)" || echo "all decision lines (guarded on fn)")"
+say "fn ${TARGETS[*]}  runs $RUNS  tiers ${TIER_LIST[*]}  scope $([[ $ONLY == 1 ]] && echo "--only-fn (lines naming fn / compiled in fn)" || echo "all decision lines of the compile units that involve fn (guarded on fn)")"
 say "v8 flags ${V8FLAGS:+$V8FLAGS }--trace-opt <trace flag>$([[ $CONCURRENT == 1 ]] || echo ' --no-concurrent-recompilation')"
 say "limits  TurboFan small<=$TF_SMALL (<=$TF_SMALL_HN if a HeapNumber may cross) single<=$TF_ONE cumulative $TF_CUM (reserve x$SCALE) | Maglev eager (greedy small)<$MG_EAGER small<=$MG_SMALL single<$MG_ONE cumulative $MG_CUM"
 if [[ -n "$ASSUMED" ]]; then
