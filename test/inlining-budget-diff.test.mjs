@@ -5,7 +5,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,8 @@ function variant(dir, name, from, to) {
     chmodSync(p, 0o755);
     return p;
 }
+// the ONE mutant self-test runner (the MUST FAIL rows and the Q-B71-TMPLEAK row): TMPDIR = the mutant's own dir
+const mutSelfTest = (dir, name, from, to) => selfTest(variant(dir, name, from, to), { TMPDIR: dir });
 
 test('inlining-budget-diff --self-test: every check passes', { skip }, () => {
     const r = selfTest(SCRIPT);
@@ -59,7 +61,7 @@ test('inlining-budget-diff --self-test: every check passes', { skip }, () => {
 test('inlining-budget-diff --self-test: an unmodified copy outside the repo passes (baseline for the mutants)', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'ibd-base-'));
     try {
-        const r = selfTest(variant(dir, 'baseline', '#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n'));
+        const r = selfTest(variant(dir, 'baseline', '#!/usr/bin/env bash\n', '#!/usr/bin/env bash\n'), { TMPDIR: dir });   // Q-B71-TMPLEAK: private TMPDIR
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.equal(okCount(r.stdout), CHECKS);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -213,11 +215,13 @@ const MUTANTS = [
     // ahead of the cd; rm last), the 64 KiB append, the step precedence awk > tr > append > node (each adjacent pair swapped;
     // append-first = append ahead of awk) and the caller's slot / die split. Equivalent, no row: moving the append statement
     // ahead of the read (the spaces carry no record; under ulimit the append still fails, so the slot is the same).
-    ['probe-no-rm', '    rm -f "$tmp" || true\n', '',
+    // b71 G-SIG-2: probe runs in the main shell (drv_wait job, IBD_TMP under the EXIT trap). probe-no-rm keeps the IBD_TMP
+    // reset, so the trap never sees the file: the probe leaves every temp file, as before (7 per self-test, Q-B71-TMPLEAK)
+    ['probe-no-rm', '    rm -f -- "$IBD_TMP" || true; IBD_TMP=""\n', '    IBD_TMP=""\n',
         'bytecode probe: a relative TMPDIR names the caller-cwd temp file'],
-    ['probe-redirect-in-cd', '"$b") >"$tmp" 2>&1 || nrc=$?', '"$b" >"$tmp" 2>&1) || nrc=$?',
+    ['probe-redirect-in-cd', '"$b") >"$IBD_TMP" 2>&1 <&0 &', '"$b" >"$IBD_TMP" 2>&1) <&0 &',
         'bytecode probe: a relative TMPDIR names the caller-cwd temp file'],
-    ['probe-drop-append', "    { printf '%65536s' '' >>\"$tmp\"; } 2>/dev/null || ar=$?\n", '',
+    ['probe-drop-append', "    { printf '%65536s' '' >>\"$IBD_TMP\"; } 2>/dev/null || ar=$?\n", '',
         'bytecode probe: ulimit -f 32 (XFSZ ignored) fails the 64 KiB append'],
     ['bcrc-append-first', 'bc_rc() { if [[ $3 != 0 ]]', 'bc_rc() { if [[ $4 != 0 ]]; then BC_RC="append:$4"; elif [[ $3 != 0 ]]',
         'bytecode probe: step precedence awk > tr > append > node'],
@@ -380,7 +384,7 @@ test('inlining-budget-diff -h control: a root copy with the paragraph removed ca
 test('inlining-budget-diff --self-test=x: exit 2, "--self-test takes no value" + NO-VERDICT, empty stdout; MUST FAIL with the guard dropped', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'ibd-stv-'));
     try {
-        const run = (p) => capSync('bash', [p, '--self-test=x'], { encoding: 'utf8', env: cleanEnv(), cwd: dir }, SELF_CAP, 'inlining-budget-diff.sh --self-test=x');
+        const run = (p) => capSync('bash', [p, '--self-test=x'], { encoding: 'utf8', env: cleanEnv({ TMPDIR: dir }), cwd: dir }, SELF_CAP, 'inlining-budget-diff.sh --self-test=x');   // Q-B71-TMPLEAK
         const r = run(SCRIPT);
         assert.equal(r.status, 2, r.stdout + r.stderr);
         assert.equal(r.stdout, '');
@@ -413,7 +417,7 @@ test('inlining-budget-diff --self-test under GIT_DIR=<index-only repo>: all chec
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.equal(okCount(r.stdout), CHECKS);
         assert.equal(lsFiles(repo), 1, 'the self-test wrote into the GIT_DIR repo');
-        const m = selfTest(variant(dir, 'nogit-noop', 'nogit() { (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES; "$@"); }', 'nogit() { ("$@"); }'), env);
+        const m = selfTest(variant(dir, 'nogit-noop', 'nogit() { (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CEILING_DIRECTORIES; "$@"); }', 'nogit() { ("$@"); }'), { ...env, TMPDIR: dir });   // Q-B71-TMPLEAK
         assert.equal(m.status, 1, m.stdout + m.stderr);
         assert.match(m.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -441,7 +445,9 @@ test('inlining-budget-diff -h: the bytecode probe temp file, its 64 KiB append, 
     assert.match(h, /node's stdout and stderr go to one temp file per side, \$\{TMPDIR:-\/tmp\}\/inlining-budget-diff\.XXXXXX, never to a pipe\n/);
     assert.match(h, /then 64 KiB\n {4}of spaces are appended to it and it is removed\. A failed mktemp or append prints "\(<step> exited N\)" for that side\n/);
     assert.match(h, /\(not measured; the verdict is unmoved\); a failed node, tr or awk is a named die, exit 2 NO-VERDICT\n {4}\("bytecode probe of <fn>: <step> exited <rc>"\)\./);
-    assert.match(h, /Bytecode probe temp file: a signal mid-probe can leave one inlining-budget-diff\.XXXXXX in\nTMPDIR; a TMPDIR that was full during the probe and freed before the 64 KiB append still passes that check/);
+    // b71 G-SIG-2: the probe temp file is under the EXIT trap; only a signal inside its mktemp, or SIGKILL, can leave one
+    assert.match(h, /Bytecode probe temp file: one inlining-budget-diff\.XXXXXX in TMPDIR per probe, removed right after \(also by the EXIT\ntrap on any other exit, a signal included\); a signal inside the mktemp that makes it, or a SIGKILL of the tool, can\nleave one behind\. A TMPDIR that was full during the probe and freed before the 64 KiB append still passes that check/);
+    assert.equal(countOf(h, 'a signal mid-probe can leave'), 0, 'the pre-G-SIG-2 signal mid-probe sentence is gone');
     assert.equal(countOf(knownLimitsParagraph(), 'Bytecode probe temp file:'), 1, 'the two probe limits sit in the Known limits paragraph');
 });
 
@@ -471,7 +477,9 @@ for (const [name, from, to, failing] of MUTANTS) {
                 assert.equal(m && m.length, 1, `mutant ${name}: regex anchor must match exactly once`);
                 anchor = m[0];
             }
-            const r = selfTest(variant(dir, name, anchor, to));
+            // Q-B71-TMPLEAK: TMPDIR = the mutant's own dir (rmSync'd below); a mutant that drops a temp rm (probe-no-rm) used
+            // to leave its files in the inherited, shared TMPDIR (7 per run)
+            const r = mutSelfTest(dir, name, anchor, to);
             // red = exit 1, or 2 when the mutant breaks the planned-exit path itself (trap-ignores-final)
             assert.ok(r.status === 1 || r.status === 2, `mutant ${name} survived: ${r.stdout}${r.stderr}`);
             assert.match(r.stdout, /^self-test: \d+ check\(s\) FAILED$/m);
@@ -480,3 +488,18 @@ for (const [name, from, to, failing] of MUTANTS) {
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 }
+
+// Q-B71-TMPLEAK row: the probe-no-rm mutant's self-test, run through mutSelfTest (the SAME runner as the MUST FAIL rows), leaves
+// its leaked probe files IN the mutant's own dir (>= 1 inlining-budget-diff.* there: the private TMPDIR is honored, so none
+// reaches the shared one; the variant file probe-no-rm.sh does not match that prefix). Tooth: mutSelfTest without
+// { TMPDIR: dir } leaves dir with no such file (the files go to the inherited TMPDIR) and this row goes red.
+test('inlining-budget-diff Q-B71-TMPLEAK: the probe-no-rm mutant self-test (mutSelfTest) leaves its probe temp files in the mutant dir, not elsewhere', { skip }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ibd-leak-'));
+    try {
+        const [, from, to] = MUTANTS.find((m) => m[0] === 'probe-no-rm');
+        const r = mutSelfTest(dir, 'probe-no-rm', from, to);
+        assert.equal(r.status, 1, r.stdout + r.stderr);
+        const left = readdirSync(dir).filter((f) => f.startsWith('inlining-budget-diff.'));
+        assert.ok(left.length >= 1, `dir holds ${left.length} inlining-budget-diff.* file(s), want >= 1: the mutant's leak went outside dir`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});

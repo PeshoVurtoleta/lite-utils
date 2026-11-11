@@ -153,8 +153,9 @@ set -euo pipefail
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e
-# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: such a site
-# adds || { DIED=1; exit 2; }). The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
+# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: the one such
+# site, refuse_live in lib/common.sh, sets DIED in the main shell when its $( ) fails; no driver run is in a $( )).
+# The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
 FINAL=""
 DIED=""; SIG_PID=""
 trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "ic-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
@@ -163,7 +164,8 @@ trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "ic-diff:
 # read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
 # "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
 # no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
-# that is running when the signal lands (the --version / --v8-options probes, a driver run inside $( )) ends first
+# that is running when the signal lands (the --version / -p / --v8-options probes and other short steps; every
+# driver run is a drv_wait job, never a $( )) ends first
 _sig() {
   [[ -z $FINAL ]] || return 0
   trap '' INT TERM HUP

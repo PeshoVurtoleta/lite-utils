@@ -220,8 +220,8 @@ test('bytecode-budget A1 parity: report / gate / refusals byte-identical to the 
 });
 for (const [mname, from, to, caseName] of [
     ['A1-control-matches', 'say "  $fn: $n match(es): $lens"', 'say "  $fn: $n matches: $lens"', 'report --fn read,dup'],
-    // b70 G-SIG-1 (A3 census site 4): the RL line ends `|| { DIED=1; exit 2; }; done` (a die in the probe's $( ) stays silent)
-    ['A1-gate-raw-name', '"${fn// /-}.$k.txt")") || { DIED=1; exit 2; }; done', '"${fn// /-}.k$k.txt")") || { DIED=1; exit 2; }; done', 'gate --out tree'],
+    // b71 G-SIG-2: the RL line is `probe ..; RL+=("$PROBE_OUT"); done` (probe runs in the main shell, no $( ) guard)
+    ['A1-gate-raw-name', '"${fn// /-}.$k.txt"; RL+=("$PROBE_OUT"); done', '"${fn// /-}.k$k.txt"; RL+=("$PROBE_OUT"); done', 'gate --out tree'],
 ]) {
     test(`bytecode-budget A1 parity MUTANT ${mname}: its parity case differs from the base`, { skip: baseSkip }, () => {
         histGate(haveBase);
@@ -272,8 +272,8 @@ diffRow('--runs 3: the probes alternate before / after per run (b a b a b a)', (
 test('bytecode-budget diff QA MUTANT M-two-loops (every BEFORE run, then every AFTER run): the order row goes red', { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbq-order-'));
     try {
-        // b70 G-SIG-1 (A3 census site 3): the RA line ends `|| { DIED=1; exit 2; }`; the mutant keeps that guard
-        const RA = '      RA+=("$(probe "$fn" "$k" "$DRV_A_DIR" "$DRV_A_BASE" "after/$r.$k.txt")") || { DIED=1; exit 2; }\n    done';
+        // b71 G-SIG-2: the RA line is `probe ..; RA+=("$PROBE_OUT")` (probe runs in the main shell, no $( ) guard)
+        const RA = '      probe "$fn" "$k" "$DRV_A_DIR" "$DRV_A_BASE" "after/$r.$k.txt"; RA+=("$PROBE_OUT")\n    done';
         const p = variant(dir, 'two-loops', RA, '    done\n    for k in $(seq 1 "$RUNS"); do\n' + RA);
         const { r, spawns } = diffRun({ b: { mid: [211] }, a: { mid: [212] } }, 'mid', p, ['--runs', '3']);
         assert.equal(r.status, 1, 'the mutant keeps the verdict: ' + r.stdout + r.stderr);

@@ -58,13 +58,14 @@
 #                          writable) or a writable regular file (never a FIFO, a device or a directory), and must not
 #                          be a symlink or a file with another hard link. Without --out no file is left on disk.
 #                          With or without --out, the baseline and each probe use one temp file,
-#                          ${TMPDIR:-/tmp}/bytecode-budget.XXXXXX, removed right after (the baseline's also by the
-#                          EXIT trap on any other exit); a probe killed mid-run can leave one bytecode-budget.XXXXXX
-#                          behind. SIGINT / SIGTERM / SIGHUP during the baseline run SIGKILLs it at once (its output
-#                          is never read), then "bytecode-budget: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on
-#                          stderr (and as the last two lines of DIR/report.txt once it has its head), exit 2; one
-#                          during the --version / --v8-options probes or a probe run takes effect when that step
-#                          ends; a signal after FINAL is set (the step right after the verdict line) changes nothing;
+#                          ${TMPDIR:-/tmp}/bytecode-budget.XXXXXX, removed right after (also by the EXIT trap on any
+#                          other exit, a signal included); a signal inside the mktemp that makes it, or a SIGKILL of
+#                          the tool, can leave one bytecode-budget.XXXXXX behind. SIGINT / SIGTERM / SIGHUP during
+#                          the baseline run or a probe run SIGKILLs that run at once (its output is never read), then
+#                          "bytecode-budget: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as the last
+#                          two lines of DIR/report.txt once it has its head), exit 2; one during the --version /
+#                          --v8-options probes takes effect when that step ends; a signal after FINAL is set (the
+#                          step right after the verdict line) changes nothing;
 #                          one that lands while the verdict line is still being written ends exit 2 with a second
 #                          VERDICT NO-VERDICT line.
 #                          Diff mode: DIR/report.txt, DIR/raw/before/<fn>.<k>.txt and DIR/raw/after/<fn>.<k>.txt.
@@ -261,8 +262,9 @@ set -euo pipefail
 [[ ! -o posix ]] || set +o posix   # inherited posix mode (POSIXLY_CORRECT, SHELLOPTS=posix, sh): no <( ) on bash 3.2, other -e rules; drops the var for children; only when set: an unconditional call turns bash 3.2's expand_aliases off
 # Fail closed: an exit without FINAL=1 (a planned verdict) becomes 2 NO-VERDICT, rc 0 included (a bash 3.2
 # set -u abort exits 0); only an exit with DIED set (die, the -h exit) stays silent, any other prints its rc; set +e
-# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: such a site
-# adds || { DIED=1; exit 2; }). The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
+# keeps 2 with stderr closed. Subshells do not inherit this trap (a die in $( ) sets DIED only there: the one such
+# site, refuse_live in lib/common.sh, sets DIED in the main shell when its $( ) fails; no driver run is in a $( )).
+# The INT / TERM / HUP trap is armed before REPORT, SELF and LC_ALL are set.
 FINAL=""
 DIED=""; SIG_PID=""
 trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "bytecode-budget: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
@@ -271,7 +273,8 @@ trap 'rc=$?; if [[ -z $FINAL ]]; then set +e; [[ -n $DIED ]] || printf "bytecode
 # read), reaps it (a signal between the `&` and drv_wait's assignment: the bare wait covers that run), then dies
 # "interrupted (SIG<NAME>)" (stderr, and the report once it has its head). Before lib/common.sh is loaded there is
 # no die: the same two lines go to stderr. bash runs the trap only between commands: a foreground command or a $( )
-# that is running when the signal lands (the --version / --v8-options probes, a driver run inside $( )) ends first
+# that is running when the signal lands (the --version / -p / --v8-options probes and other short steps; every
+# driver run is a drv_wait job, never a $( )) ends first
 _sig() {
   [[ -z $FINAL ]] || return 0
   trap '' INT TERM HUP
@@ -1425,24 +1428,28 @@ say ""
 # ---------------------------------------------------------------------------------------------
 # probe: fn x runs, each reduced to "<driver exit> <count> <bad> <lengths>"
 # ---------------------------------------------------------------------------------------------
-probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the raw output goes to $OUT/raw/<rawrel>
-  local rc line st n t r a tmp nrc=0 ar=0
+probe() { # fn k dir base rawrel: run the driver dir/base once (with --out the raw output goes to $OUT/raw/<rawrel>); sets PROBE_OUT
+  local rc line st n t r a nrc=0 ar=0
   # stdout is a regular file, never a pipe: once JS touches process.stdout, libuv makes a pipe non-blocking and V8's C++
-  # writes to a full pipe are dropped (EAGAIN), so a whole record vanishes while the run still ends cleanly. probe runs in $( ), where bash
-  # clears set -e outside posix mode: every step below carries its own guard. The redirect sits on the OUTER subshell,
-  # ahead of the cd, so a relative TMPDIR still names the same file
-  tmp=$(mktemp "${TMPDIR:-/tmp}/bytecode-budget.XXXXXX") || { printf 'mktemp:%s \n' "$?"; return 0; }
-  ( cd "$3" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --no-flush-bytecode --print-bytecode \
-      --print-bytecode-filter="$1" "./$4" ) >"$tmp" 2>&1 || nrc=$?
+  # writes to a full pipe are dropped (EAGAIN), so a whole record vanishes while the run still ends cleanly. probe runs in
+  # the main shell under set -e (a die here exits the tool): every step that may fail carries its own guard. The driver is
+  # a background job the main shell waits for (drv_wait, lib/prologue.sh): a SIGINT / SIGTERM / SIGHUP kills it at once
+  # (exec: $! is node itself) and the EXIT trap removes BB_TMP; `<&0` keeps the caller's stdin. The redirect sits on the
+  # OUTER subshell, ahead of the cd, so a relative TMPDIR still names the same file
+  BB_TMP=$(mktemp "${TMPDIR:-/tmp}/bytecode-budget.XXXXXX") || { PROBE_OUT="mktemp:$? "; BB_TMP=""; return 0; }
+  ( cd "$3" && exec env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} --no-flush-bytecode --print-bytecode \
+      --print-bytecode-filter="$1" "./$4" ) >"$BB_TMP" 2>&1 <&0 &
+  drv_wait; nrc=$DRV_RC
+  # the parse runs no driver; || true: set -e never cuts it short (its exits ride on the "@" line)
   if [[ -n "$OUT" ]]; then
-    line=$(tee "$OUT/raw/$5" <"$tmp" | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
+    line=$(tee "$OUT/raw/$5" <"$BB_TMP" | tr '\000' '?' | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}") || true
   else
-    line=$(tr '\000' '?' <"$tmp" | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}")
+    line=$(tr '\000' '?' <"$BB_TMP" | awk -v fn="$1" "$COUNT_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}") || true
   fi
   # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
   # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not
-  { printf '%65536s' '' >>"$tmp"; } 2>/dev/null || ar=$?
-  rm -f "$tmp" || true
+  { printf '%65536s' '' >>"$BB_TMP"; } 2>/dev/null || ar=$?
+  rm -f -- "$BB_TMP" || true; BB_TMP=""
   # the pipeline's exits ride on a last "@ node [tee] tr awk" line, so a tee / tr / awk failure is never reported as the driver's
   st=${line##*$'\n'}
   if [[ "$line" == *$'\n'* ]]; then line=${line%$'\n'*}; else line=""; fi
@@ -1450,8 +1457,12 @@ probe() { # fn k dir base rawrel: run the driver dir/base once; with --out the r
   n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]# }; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
   if [[ $a != 0 ]]; then rc="awk:$a"; elif [[ $r != 0 ]]; then rc="tr:$r"; elif [[ -n $t && $t != 0 ]]; then rc="tee:$t"; else rc=$n; fi
   if [[ $ar != 0 && $rc != *:* ]]; then rc="append:$ar"; fi
-  printf '%s %s\n' "$rc" "$line"
+  # the value the old $(probe ..) gave: "<rc> <line>" minus trailing newlines (a "mktemp:N " keeps its space)
+  PROBE_OUT="$rc $line"
+  while [[ "$PROBE_OUT" == *$'\n' ]]; do PROBE_OUT=${PROBE_OUT%$'\n'}; done
+  return 0
 }
+PROBE_OUT=""
 
 # ---------------------------------------------------------------------------------------------
 # baseline: the functions node compiles itself in a process that only prints (one spawn, main shell, past the limits)
@@ -1465,12 +1476,13 @@ index($0, "[generated bytecode for function: ") == 1 {
   if (s != "" && !seen[s]++) print s
 }
 '
-# base_list's temp file goes on every exit path (die, set -e, a signal): this trap removes it, then runs the script's own
-# EXIT trap (lib/prologue.sh) with $? restored (set +e so restoring a non-zero $? cannot cut the trap short)
+# the temp file of base_list and of each probe (BB_TMP) goes on every exit path (die, set -e, a signal): this trap saves $?,
+# turns set -e off FIRST (so neither a failing rm nor restoring a non-zero $? can cut the trap short), removes the file,
+# then runs the script's own EXIT trap (lib/prologue.sh) with $? restored
 BB_TMP=""
 eval "set -- $(trap -p EXIT)"; old=${3:-}
 # shellcheck disable=SC2064
-trap "bb_rc=\$?; [[ -z \$BB_TMP ]] || rm -f -- \"\$BB_TMP\"; set +e; (exit \$bb_rc); $old" EXIT
+trap "bb_rc=\$?; set +e; [[ -z \$BB_TMP ]] || rm -f -- \"\$BB_TMP\"; (exit \$bb_rc); $old" EXIT
 base_list() { # sets BASE_NAMES ($'\n'name$'\n'name$'\n') or BASE_BAD (the reason); never exits: judge() reports it
   local brc=0 ar=0 names st re='^@ ([0-9]+) ([0-9]+)$'
   BB_TMP=$(mktemp "${TMPDIR:-/tmp}/bytecode-budget.XXXXXX") || { BASE_BAD="mktemp exited $?"; BB_TMP=""; return 0; }
@@ -1503,9 +1515,8 @@ if [[ $DIFFMODE == 1 ]]; then
   for fn in "${TARGETS[@]}"; do
     r="${fn// /-}"; RB=(); RA=()
     for k in $(seq 1 "$RUNS"); do
-      # probe runs in $( ): its die sets DIED only there, so a failed $( ) sets it here before the exit (the trap stays silent)
-      RB+=("$(probe "$fn" "$k" "$DRV_B_DIR" "$DRV_B_BASE" "before/$r.$k.txt")") || { DIED=1; exit 2; }
-      RA+=("$(probe "$fn" "$k" "$DRV_A_DIR" "$DRV_A_BASE" "after/$r.$k.txt")") || { DIED=1; exit 2; }
+      probe "$fn" "$k" "$DRV_B_DIR" "$DRV_B_BASE" "before/$r.$k.txt"; RB+=("$PROBE_OUT")
+      probe "$fn" "$k" "$DRV_A_DIR" "$DRV_A_BASE" "after/$r.$k.txt"; RA+=("$PROBE_OUT")
     done
     diff_fn "$fn"
   done
@@ -1520,7 +1531,7 @@ for fn in "${TARGETS[@]}"; do
   max=""; [[ -z "$MAXLIST" ]] || max="${MAXES[$i]}"
   i=$((i + 1))
   RL=()
-  for k in $(seq 1 "$RUNS"); do RL+=("$(probe "$fn" "$k" "$DRV_DIR" "$DRV_BASE" "${fn// /-}.$k.txt")") || { DIED=1; exit 2; }; done
+  for k in $(seq 1 "$RUNS"); do probe "$fn" "$k" "$DRV_DIR" "$DRV_BASE" "${fn// /-}.$k.txt"; RL+=("$PROBE_OUT"); done
   judge "$fn" "$max" "${RL[@]}"
   if [[ "${RL[0]}" =~ $LINE_RE ]]; then
     read -r _ n _ lens <<<"${RL[0]}"

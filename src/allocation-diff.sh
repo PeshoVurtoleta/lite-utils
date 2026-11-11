@@ -45,8 +45,18 @@
 #                      DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;
 #                      DIR/report.txt must not be a DRIVER, a symlink or a file with another hard link, and must be
 #                      writable. With or without
-#                      --out, the guard preload and its counts live in a private temp dir under $TMPDIR (else
-#                      /tmp), removed on exit; without --out nothing else is written.
+#                      --out, the guard preload, its counts and each run's stdout (run.out, removed right after it
+#                      is read) live in a private temp dir under $TMPDIR (else /tmp), removed by the EXIT trap (also
+#                      on a refusal, an error, SIGINT, SIGTERM or SIGHUP); SIGKILL, or a signal inside $(mktemp -d)
+#                      before the script has the dir's name, can leave one allocation-diff.XXXXXX behind; without
+#                      --out nothing else is written.
+#                      SIGINT / SIGTERM / SIGHUP during a driver run SIGKILLs that run at once (its output is never
+#                      read), then "allocation-diff: interrupted (SIG<NAME>)" + VERDICT NO-VERDICT on stderr (and as
+#                      the last two lines of DIR/report.txt once it has its head), exit 2; a signal after FINAL is
+#                      set (the step right after the verdict line) changes nothing; one that lands while the verdict
+#                      line is still being written ends exit 2 with a second VERDICT NO-VERDICT line. A signal during
+#                      the --version / --v8-options probes takes effect when that step ends. A driver run reads the
+#                      caller's stdin.
 #   --self-test        canned checks (--trace-gc text through the record awk, the guard preload's sha256, then
 #                      this script end to end on a fake node that counts spawns and mktemp calls): one
 #                      "ok <label>" or "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok"
@@ -61,12 +71,14 @@
 #   --no-allocation-site-pretenuring --require <tmp>/gcn.cjs ./<driver file name> 3><tmp>/gcn.<side>.<k>` with cwd =
 #   its directory (`./` keeps a file name starting with `-` a path), NODE_OPTIONS, NODE_V8_COVERAGE,
 #   NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped (unset at start, for every spawn), stderr to its own file
-#   (never merged into stdout), stdout piped through tee (to the --out raw file, else /dev/null), tr (every NUL byte
-#   becomes `?`; the raw file keeps the NUL) and the record awk. Only records are held in memory, never trace text.
-#   Runs alternate before / after, k = 1..N.
+#   (never merged into stdout), stdout to a regular file in the temp dir (never a pipe), read after the run through
+#   tee (to the --out raw file, else /dev/null), tr (every NUL byte becomes `?`; the raw file keeps the NUL) and the
+#   record awk, then 64 KiB is appended to it (a TMPDIR still full when the run ends fails that append) and it is
+#   removed. Only records are held in memory, never trace text. Runs alternate before / after, k = 1..N.
 # Driver contract: write each marker with fs.writeSync(1, '@@LITE-MARK start\n') (and end); never use
-#   console.log or process.stdout in the driver, and never make stdout non-blocking. Observed on node v26.8.2
-#   (p4-probe, 5 of 5 runs): a console.log driver (pipe stdout touched) with a slow reader lost 268 of 666
+#   console.log or process.stdout in the driver, and never make stdout non-blocking. A pipe-era measurement (when
+#   stdout was still a pipe; not re-measured on the regular file, where that pipe-only drop does not apply): on node
+#   v26.8.2 (p4-probe, 5 of 5 runs) a console.log driver (pipe stdout touched) with a slow reader lost 268 of 666
 #   in-window trace lines, and no glued or partial line marked the loss. Write `end` before exit, never in an
 #   'exit' listener (-> NO-VERDICT). fd 3 is the guard's; writing to it or closing it reads no guard count.
 #   An allocation TurboFan scalar-replaces is not an allocation: a loop that builds `{a: i, b: i + 1}` in the window
@@ -102,8 +114,8 @@
 #                         not exactly that line (a trailing CR included)
 #   G <g> <p>             last: g = GC lines before gcn, p = those between end and gcn
 # NO-VERDICT reasons (per side, first that applies; each checked over runs k = 1..N before the next):
-#   cannot read driver output in run <k> (<tee|tr|awk> exited <rc>)   (in one run the first failure in the order
-#                                    awk > tr > tee > driver exit is named)
+#   cannot read driver output in run <k> (<tee|tr|awk|append> exited <rc>)   (in one run the first failure in the
+#                                    order awk > tr > tee > append > driver exit is named)
 #   driver exited <rc> in run <k>
 #   unparseable --trace-gc output in run <k>: <why>          (<why> = the run's first X record, or "no G record")
 #   no GC line between @@LITE-MARK end and the tool's exit fence in run <k>   (tracing not shown to be on)
@@ -263,7 +275,7 @@ counts() {
   printf 'young %s%s, old %s in the window; %s' "$y" "${u:+ [$u]}" "$o" "$gl"
 }
 
-# judge: one side. JRC[k-1] = the driver exit of run k (or "<tee|tr|awk> <rc>" when that tool failed), JREC[k-1] = the
+# judge: one side. JRC[k-1] = the driver exit of run k (or "<tee|tr|awk|append> <rc>" when that step failed), JREC[k-1] = the
 # GC_AWK records of run k, JCNT[k-1] = the guard count of run k ("" = none). Sets JV (OK NO-VERDICT) and JWHY. Order,
 # each over k = 1..N: driver output / exit, X record (and a readable G line), p = 0, the guard count vs g, an O record,
 # the null control (Y+O multiset of run k vs run 1).
@@ -932,21 +944,33 @@ say ""
 # ---------------------------------------------------------------------------------------------
 RUN_RC=0; RUN_TX=""; RUN_CNT=""
 run_side() { # dir base rawfile errfile cntfile: one node run of ./base in dir; sets RUN_RC (the driver exit, or
-  # "<tee|tr|awk> <rc>"), RUN_TX, RUN_CNT (the guard count, "" when the count file is missing, empty or malformed)
-  local tx st n t r a sz c
-  # the pipeline's four exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee / tr / awk failure is never
-  # reported as the driver's exit. Nothing reads stdout before tee (the fast reader); stderr goes to its own file, never
-  # into the pipe. tr turns each NUL into `?` before awk (BSD awk cuts a line at a NUL, which would hide a GC line glued
-  # after it); GC_AWK then reads the glue as X. $( ) holds GC_AWK's records only, never trace text. fd 3 (the guard
-  # count file, truncated per run) is opened for node only, never for tee / tr / awk.
-  tx=$( (cd "$1" && env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" \
-    --require "$T/gcn.cjs" "./$2" 2>"$4" 3>"$5") \
-    | tee "${3:-/dev/null}" | tr '\000' '?' | awk "$GC_AWK"; printf '@ %s\n' "${PIPESTATUS[*]}")
+  # "<tee|tr|awk|append> <rc>"), RUN_TX, RUN_CNT (the guard count, "" when the count file is missing, empty or malformed)
+  local tx st n t r a sz c nrc=0 ar=0
+  # stdout is a regular file, never a pipe (Q-B70-ADPIPE): $T/run.out (T is under its EXIT trap; no mktemp per run). The
+  # run is a background job the main shell waits for (drv_wait, lib/prologue.sh), so a SIGINT / SIGTERM / SIGHUP kills
+  # it at once (exec: $! is node itself); `<&0` keeps the caller's stdin (a job without job control would get /dev/null).
+  # stderr goes to its own file; fd 3 (the guard count file, truncated per run) is opened for node only, never for tee /
+  # tr / awk. run_side runs in the main shell (set -e live): every step that can fail carries its own guard
+  ( cd "$1" && exec env -u NODE_OPTIONS "$NODE_BIN" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" \
+    --require "$T/gcn.cjs" "./$2" 2>"$4" 3>"$5" ) >"$T/run.out" <&0 &
+  drv_wait; nrc=$DRV_RC
+  # the file is read through tee, tr and awk; the exits (node, tee, tr, awk) ride on a last "@ n t r a" line, so a tee /
+  # tr / awk failure is never reported as the driver's exit. tr turns each NUL into `?` before awk (BSD awk cuts a line
+  # at a NUL, which would hide a GC line glued after it); GC_AWK then reads the glue as X. $( ) holds GC_AWK's records
+  # only, never trace text. || true: set -e never cuts the parse short (its exits ride on the "@" line)
+  tx=$(<"$T/run.out" tee "${3:-/dev/null}" | tr '\000' '?' | awk "$GC_AWK"; printf '@ %s %s\n' "$nrc" "${PIPESTATUS[*]}") || true
+  # the file has been read (tee has already run, so raw/ never sees this): 64 KiB more fails if TMPDIR is still full now.
+  # The brace silences a redirect-open failure too; an inline 2>/dev/null comes after the >> and would not. rm, not a
+  # truncate: the next run's redirect makes a new file, so a run whose redirect fails reads no earlier run's output
+  { printf '%65536s' '' >>"$T/run.out"; } 2>/dev/null || ar=$?
+  rm -f -- "$T/run.out" || true
   st=${tx##*$'\n'}
   if [[ "$tx" == *$'\n'* ]]; then tx=${tx%$'\n'*}; else tx=""; fi
   [[ "$st" =~ $ST_RE ]] || die "cannot read the exit status of the run of $1/$2 (got '$st')"
   n=${BASH_REMATCH[1]}; t=${BASH_REMATCH[2]}; r=${BASH_REMATCH[3]}; a=${BASH_REMATCH[4]}
   if [[ $a != 0 ]]; then RUN_RC="awk $a"; elif [[ $r != 0 ]]; then RUN_RC="tr $r"; elif [[ $t != 0 ]]; then RUN_RC="tee $t"; else RUN_RC=$n; fi
+  # a full TMPDIR is named after a tee / tr / awk failure and before the driver exit (awk > tr > tee > append > driver)
+  if [[ $ar != 0 && $RUN_RC != *' '* ]]; then RUN_RC="append $ar"; fi
   RUN_TX="$tx"
   # the count: one canonical decimal line. Read with a sentinel (no trailing-newline loss) and length-checked against
   # the file size (bash drops a NUL byte from $( ), which would otherwise pass "1<NUL>2").

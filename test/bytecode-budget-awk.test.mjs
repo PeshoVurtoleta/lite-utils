@@ -226,13 +226,13 @@ for (const [sc, re] of [['G0', REASON(2, 2)], ['O1', REASON(1, 2)], ['O2', REASO
 }
 
 // mutants of the live root: each must change the E3 outcome (the anchors exist after the fix only)
-const TEE = 'tee "$OUT/raw/$5" <"$tmp" | tr \'\\000\' \'?\'';
-const TR_PLAIN = 'tr \'\\000\' \'?\' <"$tmp" | awk';
+const TEE = 'tee "$OUT/raw/$5" <"$BB_TMP" | tr \'\\000\' \'?\'';
+const TR_PLAIN = 'tr \'\\000\' \'?\' <"$BB_TMP" | awk -v fn';
 test('bytecode-budget-awk mutant: tr dropped on the --out branch -> E3 --out exits 0 (NUL cut)',
     { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbawk-m1-'));
     try {
-        const p = variant(dir, BB, 'tr-out-off', TEE, 'tee "$OUT/raw/$5" <"$tmp"');
+        const p = variant(dir, BB, 'tr-out-off', TEE, 'tee "$OUT/raw/$5" <"$BB_TMP"');
         const g = gate(p, 'E3', { withOut: true, env: mutEnv() });
         assert.equal(g.r.status, 0, g.text);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -241,7 +241,7 @@ test('bytecode-budget-awk mutant: tr dropped on the no-out branch -> E3 exits 0 
     { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbawk-m2-'));
     try {
-        const p = variant(dir, BB, 'tr-plain-off', TR_PLAIN, 'cat <"$tmp" | awk');
+        const p = variant(dir, BB, 'tr-plain-off', TR_PLAIN, 'cat <"$BB_TMP" | awk -v fn');
         const g = gate(p, 'E3', { env: mutEnv() });
         assert.equal(g.r.status, 0, g.text);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -250,7 +250,7 @@ test('bytecode-budget-awk mutant: tr before tee -> raw/ files hold 0 NUL instead
     { skip }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'bbawk-m3-'));
     try {
-        const p = variant(dir, BB, 'tr-before-tee', TEE, 'tr \'\\000\' \'?\' <"$tmp" | tee "$OUT/raw/$5"');
+        const p = variant(dir, BB, 'tr-before-tee', TEE, 'tr \'\\000\' \'?\' <"$BB_TMP" | tee "$OUT/raw/$5"');
         const g = gate(p, 'E3', { withOut: true });
         assert.deepEqual(Object.values(g.out.raw), [0, 0]);
         const live = gate(BB, 'E3', { withOut: true });
@@ -270,10 +270,10 @@ const GAP_MUT = [
     ['orphan-digits: no-digit orphan "Bytecode length:" (O2) vs the digit rule', COUNT_O, '!hdr && /^Bytecode length: [0-9]/ { n++ }', 'O2', null],
     ['orphan-digits: the orphan rule matches a digit prefix', COUNT_O, '!hdr && /^Bytecode length: [0-9]+/ { n++ }', 'O1', null],
     ['orphan-digits: a digits-to-the-end orphan rule misses 12x', COUNT_O, '!hdr && /^Bytecode length: [0-9]+$/ { n++ }', 'O3', null],
-    ['tr-delete: tr -d NUL on the no-out branch', TR_PLAIN, 'tr -d \'\\000\' <"$tmp" | awk', 'E5', null],
-    ['tr-off: no tr on the no-out branch', TR_PLAIN, 'cat <"$tmp" | awk', 'E5', null],
-    ['tr-delete: tr -d NUL on the --out branch', TEE, 'tee "$OUT/raw/$5" <"$tmp" | tr -d \'\\000\'', 'E5', 'out'],
-    ['tr-off: no tr on the --out branch', TEE, 'tee "$OUT/raw/$5" <"$tmp"', 'E5', 'out'],
+    ['tr-delete: tr -d NUL on the no-out branch', TR_PLAIN, 'tr -d \'\\000\' <"$BB_TMP" | awk -v fn', 'E5', null],
+    ['tr-off: no tr on the no-out branch', TR_PLAIN, 'cat <"$BB_TMP" | awk -v fn', 'E5', null],
+    ['tr-delete: tr -d NUL on the --out branch', TEE, 'tee "$OUT/raw/$5" <"$BB_TMP" | tr -d \'\\000\'', 'E5', 'out'],
+    ['tr-off: no tr on the --out branch', TEE, 'tee "$OUT/raw/$5" <"$BB_TMP"', 'E5', 'out'],
     ['orphan-cap: the orphan rule capped like the good rule misses a 10-digit orphan', COUNT_O, '!hdr && /^Bytecode length:/ && length($3) <= 9 { n++ }', 'O4', null],
     ['cap-off: the good rule without length($3) <= 9 reads a 10-digit length as 6', COUNT_CAP, ' {', 'C1', null],
 ];

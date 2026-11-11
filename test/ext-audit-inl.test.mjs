@@ -81,12 +81,13 @@ if (!skip) {
     ROOT_B = putBuild('root', rootText);
     const s = rootText.toString('latin1');
     // mutants: one tr -> cat per site, count-checked (exactly the expected number of matches, else the mutant is void)
-    const rt = `tr '\\000' '?' <"$raw" |`, pr = `tr '\\000' '?' <"$tmp" |`;
+    // b71 G-SIG-2: the bytecode probe reads its temp file through IBD_TMP (was a local $tmp)
+    const rt = `tr '\\000' '?' <"$raw" |`, pr = `tr '\\000' '?' <"$IBD_TMP" |`;
     const nRt = s.split(rt).length - 1, nPr = s.split(pr).length - 1;
     if (nRt !== 2 || nPr !== 1) mutVoid = `root has ${nRt} run_trace tr sites (want 2) and ${nPr} probe tr sites (want 1): mutants void`;
     else {
         MUT_RT = putBuild('mut-rt', s.split(rt).join('cat "$raw" |'));
-        MUT_PROBE = putBuild('mut-probe', s.split(pr).join('cat "$tmp" |'));
+        MUT_PROBE = putBuild('mut-probe', s.split(pr).join('cat "$IBD_TMP" |'));
     }
     // preflight mutants (U1 B1R2 pin): each edit must match exactly once, else void (mutVoid; a void mutant fails, never skips, in CI)
     const mutate = (name, from, to) => {

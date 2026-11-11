@@ -216,8 +216,9 @@ function a1relWhy(x) {
 test('A1 relative TMPDIR (a driver in another directory): exit 0 REPORTED, rel/ empty afterwards (regression pin; mutant below)', { skip }, () => {
     assert.equal(a1relWhy(a1rel(TOOL)), null);
 });
-test('MUT A1 redirect-inside-cd (`>"$tmp"` moved into the cd subshell) -> the relative-TMPDIR row goes red for ITS OWN reason (the probes lose their output), not via the baseline', { skip }, () => {
-    const m = mutant('redir-in-cd', /("\.\/\$4") \) >"\$tmp" 2>&1 \|\| nrc=\$\?/, (_, a) => `${a} >"$tmp" 2>&1 ) || nrc=$?`);
+test('MUT A1 redirect-inside-cd (`>"$BB_TMP"` moved into the cd subshell) -> the relative-TMPDIR row goes red for ITS OWN reason (the probes lose their output), not via the baseline', { skip }, () => {
+    // b71 G-SIG-2: the probe run is a drv_wait job, `( cd "$3" && exec env .. "./$4" ) >"$BB_TMP" 2>&1 <&0 &`
+    const m = mutant('redir-in-cd', /("\.\/\$4") \) >"\$BB_TMP" 2>&1 <&0 &/, (_, a) => `${a} >"$BB_TMP" 2>&1 ) <&0 &`);
     const x = a1rel(m);
     const why = a1relWhy(x);
     assert.notEqual(why, null, 'mutant survived');
@@ -656,7 +657,8 @@ test('A6 no-limit twin: the same fakes without ulimit -> exit 0 REPORTED (rows 1
     assert.equal(readdirSync(x.c.tmp).length, 0);
 });
 test('MUT A6 drop-append (BOTH 64 KiB appends removed) -> the probe-row setup reads exit 0 REPORTED (the full TMPDIR goes unseen), never baseline text', { skip }, () => {
-    const m1 = mutant('noapp-probe', `{ printf '%65536s' '' >>"$tmp"; } 2>/dev/null || ar=$?`, ':');
+    // b71 G-SIG-2: the probe appends to BB_TMP too; its line ends at `ar=$?` (base_list's carries a comment), so `\n` picks it
+    const m1 = mutant('noapp-probe', `{ printf '%65536s' '' >>"$BB_TMP"; } 2>/dev/null || ar=$?\n`, ':\n');
     // b70 G-SIG-1: base_list appends to the global BB_TMP (its EXIT trap removes it on any exit), no longer a local $base
     const m = mutant('noapp-base', `{ printf '%65536s' '' >>"$BB_TMP"; } 2>/dev/null || ar=$?`, ':', m1);
     const x = a6probe(m, 8);
