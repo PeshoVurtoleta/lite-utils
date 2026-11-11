@@ -818,7 +818,7 @@ if [[ $SELFTEST == 1 ]]; then
 fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
-for p in ${POS[@]+"${POS[@]}"} "$OUT" "$PWD"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out / the cwd: a newline is not allowed (it would forge report lines)"; done
+for p in ${POS[@]+"${POS[@]}"} "$OUT"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out: a newline is not allowed (it would forge report lines)"; done
 [[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 0 || $DIFFMODE == 1 ]] || die "--before-ref/--after-ref and --before/--after need --diff (ref and file modes are diff modes)"
@@ -880,6 +880,7 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then
+  nl_refuse "the cwd" "$PWD"   # early cwd check (Q-B68-STAGECWD): stage_check prints $REPO in its refusals
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write
 elif [[ $DIFFMODE == 1 ]]; then
   [[ ${#POS[@]} -eq 2 ]] || die "--diff needs exactly two DRIVER files (BEFORE AFTER), got ${#POS[@]} (see --help)"
@@ -910,6 +911,13 @@ NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 [[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+if [[ $DIFFMODE == 0 ]]; then nl_refuse "DRIVER (resolved)" "$DRV_DIR" "$DRV_BASE"
+elif [[ $STAGED == 0 ]]; then nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"; fi   # ref / file mode: stage_check
+[[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
 if [[ -n "$OUT" ]]; then
   # refuse before any write: an unreadable raw/ fools the emptiness test below; a symlinked report.txt redirects the write
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
@@ -923,6 +931,7 @@ if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
   # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 else

@@ -339,6 +339,47 @@ worst() { # NO-VERDICT > DIFF > SAME
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
 }
+nl_refuse() { # label str...: die if any str holds a newline or a CR (a path the report prints would forge report lines);
+  # the value is never printed
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() { # label dir: nl_refuse dir and the name the head prints for dir once `mkdir -p` made it (read-only, no write).
+  # P = mkdir -p's physical walk, replayed: the deepest existing ancestor (the OUT_UP walk, its `!= .` guard kept) by
+  # cd -P, then the rest one name at a time (an existing name -> cd -P, a new name is a new real dir, `..` pops a new
+  # name, else goes to the physical parent). The head prints the logical name (PWD joined, `.` / `..` folded) when it is
+  # -ef P (the same walk over it ends at P), else P (pwd -P). An unreplayable walk (a file or a dangling link in the way)
+  # checks nothing more: the root's own check or mkdir dies, and its post-resolve backstop stays
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
+}
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
   local e hit
@@ -1013,6 +1054,12 @@ DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- 
 [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER (after): cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
 DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
 DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_RES"
+nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"
+[[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
 
 # --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, the allowlist read
 # (v8fl_check: one --v8-options, MD-56: also with no --v8-flags), the hashed --v8-options probe, then mktemp / OUT
@@ -1035,6 +1082,7 @@ if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"
   # keep the logical OUT name when it is the same directory as the given OUT, else print the physical one
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
   RUNROOT="$OUT/raw"
 else

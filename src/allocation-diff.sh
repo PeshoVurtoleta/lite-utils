@@ -889,6 +889,12 @@ for ((i = 0; i < ${#POS[@]}; i++)); do
   [[ "${DRV_DIR[$i]}/${DRV_BASE[$i]}" -ef "${POS[$i]}" ]] || die "DRIVER (${SIDES[$i]}): cannot resolve the directory of ${POS[$i]} (a symlink before '..'?)"
   DESC[$i]="${DRV_DIR[$i]%/}/${DRV_BASE[$i]}  sha256/8 $(sha8 "${DRV_DIR[$i]}/${DRV_BASE[$i]}")"
 done
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+nl_refuse "DRIVER (resolved)" "${DESC[@]}"
+[[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
 
 # --- every refusal that spawns nothing is above this line; spawns start here: --version, the --v8-options read
 # (v8fl_check refuses here, before any disk write or run), then disk writes, then the runs ---
@@ -906,6 +912,7 @@ gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"
 if [[ -n "$OUT" ]]; then
   for s in "${SIDES[@]}"; do mkdir -p -- "$OUT/raw/$s" 2>/dev/null || die "--out: cannot create $OUT/raw/$s"; done
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
 fi
 say "allocation-diff  node $GOT_VER  $NODE_BIN  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"

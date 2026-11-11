@@ -412,6 +412,47 @@ worst() { # NO-VERDICT > DIFF > SAME
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
 }
+nl_refuse() { # label str...: die if any str holds a newline or a CR (a path the report prints would forge report lines);
+  # the value is never printed
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() { # label dir: nl_refuse dir and the name the head prints for dir once `mkdir -p` made it (read-only, no write).
+  # P = mkdir -p's physical walk, replayed: the deepest existing ancestor (the OUT_UP walk, its `!= .` guard kept) by
+  # cd -P, then the rest one name at a time (an existing name -> cd -P, a new name is a new real dir, `..` pops a new
+  # name, else goes to the physical parent). The head prints the logical name (PWD joined, `.` / `..` folded) when it is
+  # -ef P (the same walk over it ends at P), else P (pwd -P). An unreplayable walk (a file or a dangling link in the way)
+  # checks nothing more: the root's own check or mkdir dies, and its post-resolve backstop stays
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
+}
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
   local e hit
@@ -574,6 +615,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
   # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one
   [[ "$STAGE_DRIVER" -ef "$DRIVER" ]] || die "--driver: cannot resolve the directory of $DRIVER (a symlink before '..'?)"
+  # the resolved names the head prints (before / after / driver lines): a newline or a CR would forge report lines (G-X6)
+  nl_refuse "--before / --after / --driver (resolved)" "$STAGE_ABS_B" "$STAGE_ABS_A" "$STAGE_DRIVER"
   [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"
   # an unreadable or unsearchable DIR/stage reads as empty to ls -A (its error is hidden), and an unwritable one fails only
   # in stage_write, after the first spawns and DIR/raw writes: refuse both here, before any spawn or write
@@ -1150,7 +1193,7 @@ if [[ $SELFTEST == 1 ]]; then
 fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
-for p in ${POS[@]+"${POS[@]}"} "$OUT" "$PWD"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out / the cwd: a newline is not allowed (it would forge report lines)"; done
+for p in ${POS[@]+"${POS[@]}"} "$OUT"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out: a newline is not allowed (it would forge report lines)"; done
 [[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 0 || $DIFFMODE == 1 ]] || die "--before-ref/--after-ref and --before/--after need --diff (ref and file modes are diff modes)"
@@ -1212,6 +1255,7 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then
+  nl_refuse "the cwd" "$PWD"   # early cwd check (Q-B68-STAGECWD): stage_check prints $REPO in its refusals
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write
 elif [[ $DIFFMODE == 1 ]]; then
   [[ ${#POS[@]} -eq 2 ]] || die "--diff needs exactly two DRIVER files (BEFORE AFTER), got ${#POS[@]} (see --help)"
@@ -1242,6 +1286,13 @@ NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 [[ "$NODE_BIN" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
 [[ "$NODE_BIN" != *$'\n'* ]] || die "node binary: a newline is not allowed in the resolved path"
 [[ "$NODE_BIN" != *=* ]] || die "node binary: an = is not allowed in the resolved path (env would read it as a NAME=value operand, not as the program): $NODE_BIN"
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+if [[ $DIFFMODE == 0 ]]; then nl_refuse "DRIVER (resolved)" "$DRV_DIR" "$DRV_BASE"
+elif [[ $STAGED == 0 ]]; then nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"; fi   # ref / file mode: stage_check
+[[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
 if [[ -n "$OUT" ]]; then
   # refuse before any write: an unreadable raw/ fools the emptiness test below; a symlinked report.txt redirects the write
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
@@ -1255,6 +1306,7 @@ if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw" 2>/dev/null || die "--out: cannot create $OUT/raw"
   # keep the logical name when it is the directory just created; a symlink before '..' -> the physical one
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
+  nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
   [[ -z "$(ls -A "$OUT/raw")" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 else

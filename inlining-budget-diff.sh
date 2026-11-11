@@ -519,6 +519,47 @@ worst() { # NO-VERDICT > DIFF > SAME
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
 }
+nl_refuse() { # label str...: die if any str holds a newline or a CR (a path the report prints would forge report lines);
+  # the value is never printed
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() { # label dir: nl_refuse dir and the name the head prints for dir once `mkdir -p` made it (read-only, no write).
+  # P = mkdir -p's physical walk, replayed: the deepest existing ancestor (the OUT_UP walk, its `!= .` guard kept) by
+  # cd -P, then the rest one name at a time (an existing name -> cd -P, a new name is a new real dir, `..` pops a new
+  # name, else goes to the physical parent). The head prints the logical name (PWD joined, `.` / `..` folded) when it is
+  # -ef P (the same walk over it ends at P), else P (pwd -P). An unreplayable walk (a file or a dangling link in the way)
+  # checks nothing more: the root's own check or mkdir dies, and its post-resolve backstop stays
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
+}
 is_tracked() { # path: 0 iff git tracks it in the work tree around it; a git error dies
   local d b out rc=0 l
   local e hit
@@ -1112,6 +1153,14 @@ OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; d
 [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
 [[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+nl_refuse "DRIVER (resolved)" ${POS[@]+"${POS[@]}"}
+for f in ${POS[@]+"${POS[@]}"}; do nl_dir "DRIVER (resolved)" "$(dirname -- "$f")"; done
+nl_dir "--out (resolved)" "$OUT"
+[[ -z "$BEFORE_FILE$AFTER_FILE" ]] || nl_refuse "--before / --after / --driver (resolved)" "$BEFORE_FILE" "$AFTER_FILE"   # file mode prints them (Q-B68-IBDCR)
 # node version + the --v8-flags allowlist: after the read-only preflight, before the first write. The preflight refuses a
 # bad --out with 0 spawns; a path only mkdir can see through (ENAMETOOLONG) still takes these 2 spawns (LEDGER #76)
 NODE_V=$(env -u NODE_OPTIONS "$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"') || die "cannot run $NODE_BIN -p"
@@ -1127,6 +1176,7 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
 done
 mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage 2>/dev/null || die "--out: cannot create $OUT/raw .. $OUT/stage"
 OUT=$(cd "$OUT" && pwd) || die "--out: cannot resolve $OUT"
+nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
 REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 
 DEFAULT_DRIVER="// inline-diff default driver: signal read / set / peek, computed, effect, batch hot paths.
@@ -1223,6 +1273,7 @@ else
   [[ "$DRV_A" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve the directory of ${POS[1]} (a symlink before '..'?)"
   DESC_B="$DRV_B  sha256/8 $(sha8 "$DRV_B")"; DESC_A="$DRV_A  sha256/8 $(sha8 "$DRV_A")"
 fi
+nl_refuse "DRIVER (resolved)" "$DRV_B" "$DRV_A"   # backstop (G-X6)
 
 # ---------------------------------------------------------------------------------------------
 # limits (from this node binary, then --v8-flags overrides)

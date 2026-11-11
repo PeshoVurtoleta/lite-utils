@@ -1,5 +1,5 @@
 #: lib/stage.sh -- stage_check, stage_write: the ref / file modes of a diff (ONE module file per side + one driver).
-#: Reads BEFORE_REF AFTER_REF BEFORE_FILE AFTER_FILE MODULE DRIVER REPO OUT POS; uses die sha8 refuse_live (lib/common.sh).
+#: Reads BEFORE_REF AFTER_REF BEFORE_FILE AFTER_FILE MODULE DRIVER REPO OUT POS; uses die sha8 refuse_live nl_refuse (lib/common.sh).
 #: stage_check (every refusal, before any disk write) sets STAGE_MODE (ref|file) STAGE_NAME STAGE_DRIVER STAGE_ABS_B
 #: STAGE_ABS_A (file mode) STAGE_SHA_B STAGE_SHA_A (ref mode: full commit shas) and REPO (ref mode: its toplevel); it rewrites a
 #: BEFORE_FILE AFTER_FILE DRIVER that starts with '-' as ./<value> (a name, never an option).
@@ -91,6 +91,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
   # the import check above read $DRIVER through the kernel (physical path); the copy below reads STAGE_DRIVER (bash's
   # logical join). A symlink before '..' makes them two files (a decoy driver would be staged): refuse unless they are one
   [[ "$STAGE_DRIVER" -ef "$DRIVER" ]] || die "--driver: cannot resolve the directory of $DRIVER (a symlink before '..'?)"
+  # the resolved names the head prints (before / after / driver lines): a newline or a CR would forge report lines (G-X6)
+  nl_refuse "--before / --after / --driver (resolved)" "$STAGE_ABS_B" "$STAGE_ABS_A" "$STAGE_DRIVER"
   [[ ! -L "$OUT/stage" ]] || die "--out: $OUT/stage is a symlink (refused: the writes would follow it)"
   # an unreadable or unsearchable DIR/stage reads as empty to ls -A (its error is hidden), and an unwritable one fails only
   # in stage_write, after the first spawns and DIR/raw writes: refuse both here, before any spawn or write

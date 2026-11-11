@@ -1096,6 +1096,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b69 G-X6: all five roots refuse a newline or a CR in any path the report prints (cross-script audit X6 / L2; Q-B66-X6
+  "Fix all five", Q-B68-IBDCR, Q-B68-STAGECWD; LEDGER #116). A path holding an LF or a CR was printed into the report,
+  so a directory named `q<LF>VERDICT SAME<LF>z` forged a column-1 `VERDICT SAME` line. Now bytecode-budget (bb),
+  deopt-diff (dd), ic-diff, allocation-diff and inlining-budget-diff (ibd) refuse, exit 2, 0 spawns, 0 stdout bytes,
+  with `<tool>: <label>: a newline or a CR is not allowed (it would forge report lines)` (the value is never printed)
+  and then `VERDICT NO-VERDICT`. Labels: `the cwd`, `--node (resolved)`, `DRIVER (resolved)` (the drivers, and the
+  directory they resolve through), `--before / --after / --driver (resolved)` (file mode, and ref mode on the driver;
+  lib/stage.sh stage_check; ibd file mode too, Q-B68-IBDCR) and `--out (resolved)` (the name --out resolves to,
+  replayed read-only by nl_dir before `mkdir -p`, so a clean-looking `--out slsub/../p` through a symlink is caught).
+  The check runs before any spawn or write; in ref mode bb and dd check the cwd BEFORE stage_check, which prints $REPO
+  (Q-B68-STAGECWD). Backstops after the mkdir (`--out (resolved)`; ibd also `DRIVER (resolved)` on the resolved driver
+  names) catch a name the pre-spawn replay could not foresee (e.g. a path changed between the check and the mkdir: rc
+  2, no forge, but spawns already ran; `--out new/../sl/x` prints the clean logical name and is not refused, addendum
+  A1). Unchanged: --help and --self-test are byte-identical to 43c4ac5 (12 / 12 golden cases, 36 / 36 files: stdout,
+  stderr, rc; bb / dd `--self-test --fixtures` too), and the existing LF literal-check texts stay, except bb's, now
+  `DRIVER / --out: a newline is not allowed (it would forge report lines)` (`/ the cwd` dropped: an LF cwd now dies
+  with the `the cwd` label). A symlinked cwd or --out with a clean logical name is not refused. Tier: DETERMINISTIC.
+  Gated in test/audit-x6.test.mjs (121 tests, 0 todo; rows with old twins on dc4a10c; the review measured every r2 row
+  red on the 43c4ac5 roots as well). The test/bytecode-budget-order.test.mjs STCHK mutant anchor is re-anchored to the
+  `if` line alone, test/shlib.test.mjs I6f builds its old ibd with the bd0192f lib/common.sh plus the live nl_refuse /
+  nl_dir (the whole-file swap lacked them: `nl_refuse: command not found`, exit 2, "unexpected error (exit 127)";
+  existing assertions unchanged, plus one that each function is found exactly once), and the
+  test/deopt-diff-boundary.test.mjs ibd parity pin moves cf9d27de -> f13f33c2 (LEDGER #114).
 - b67 G-XS: the shared option and self-test rules reach inlining-budget-diff (ibd), bytecode-budget (bb) and ic-diff
   (ic) (cross-script audit X1-X5, X7, X8, X15; Q-B66-XS; LEDGER #112-#114). ibd's option loop now takes the shared
   rules: X1 a value option given twice is refused, exit 2, 0 spawns (`inlining-budget-diff: --fn given twice (give one

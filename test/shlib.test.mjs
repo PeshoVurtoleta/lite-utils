@@ -318,7 +318,15 @@ test('I6f fallback: ibd built WITHOUT its tracked.sh include still refuses A1a; 
     const fb = privBuild('fb', [noInc]);
     assert.equal(a1aVerdict(join(fb, 'inlining-budget-diff.sh')), null,
         'fallback is_tracked (common.sh) must refuse A1a');
-    const old = privBuild('fb-old', [noInc, ['lib', 'common.sh', null, readFileSync(hist3().common, 'utf8')]]);
+    // G-X6 (b69): the roots now call nl_refuse / nl_dir, which the bd0192f common.sh lacks; only is_tracked must be the old one,
+    // so the old text gets the live nl_refuse() and nl_dir() functions appended (each extracted by its start line to the column-0 `}`)
+    const live = readFileSync(join(ROOT, 'lib', 'common.sh'), 'utf8');
+    const fn = (name) => {
+        const m = live.match(new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n(?:(?!\\}\\n)[^\\n]*\\n)*\\}\\n`, 'gm'));
+        assert.ok(m !== null && m.length === 1, `lib/common.sh must hold exactly one ${name}() { ... } (found ${m === null ? 0 : m.length})`);
+        return m[0];
+    };
+    const old = privBuild('fb-old', [noInc, ['lib', 'common.sh', null, readFileSync(hist3().common, 'utf8') + '\n' + fn('nl_refuse') + fn('nl_dir')]]);
     assert.notEqual(a1aVerdict(join(old, 'inlining-budget-diff.sh')), null,
         'the bd0192f common.sh must not refuse A1a');
     const f = a1aFixture(); passesIbd(runScript(join(old, 'inlining-budget-diff.sh'), f.d, f.args));

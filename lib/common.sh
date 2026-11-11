@@ -1,5 +1,5 @@
 #: lib/common.sh -- die say sha8 usage multiset devino top_of live_tops resolve_links is_tracked
-#: refuse_live worst. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
+#: refuse_live worst nl_refuse nl_dir. Reads at call time: REPORT (say, die), AFTER_FILE (live_tops: the toplevels around its dir and,
 #: for a symlink, around the dir of its chain's end; refuse_live: its name joins the cand list) and REPO
 #: (live_tops), $what (top_of's die text, through bash dynamic scope: refuse_live's local label), $0 (usage).
 #: Sets TOP_OF (top_of; a local of live_tops) and LIVE_TOPS (live_tops; a local of refuse_live). top_of and
@@ -7,6 +7,8 @@
 #: only the subshell, and the run goes on with no toplevels). live_tops resolves a symlinked --after in $( ) but
 #: checks that subshell's status and dies in the current shell ("--after: cannot resolve its symlink chain").
 #: resolve_links and is_tracked give a `-`-led dirname a "./" before the cd (bash reads `cd -- -` as OLDPWD).
+#: nl_refuse / nl_dir (G-X6, ruling Q-B66-X6): cold path, before the first spawn or write; nl_refuse is a pure `case` (no
+#: fork); nl_dir also reads PWD (the caller checks "the cwd" first) and dies only through nl_refuse.
 #: @SCRIPT@ is the script name (build.sh substitutes it).
 # ---------------------------------------------------------------------------------------------
 # helpers
@@ -98,4 +100,45 @@ worst() { # NO-VERDICT > DIFF > SAME
   if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
   elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
   else echo SAME; fi
+}
+nl_refuse() { # label str...: die if any str holds a newline or a CR (a path the report prints would forge report lines);
+  # the value is never printed
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() { # label dir: nl_refuse dir and the name the head prints for dir once `mkdir -p` made it (read-only, no write).
+  # P = mkdir -p's physical walk, replayed: the deepest existing ancestor (the OUT_UP walk, its `!= .` guard kept) by
+  # cd -P, then the rest one name at a time (an existing name -> cd -P, a new name is a new real dir, `..` pops a new
+  # name, else goes to the physical parent). The head prints the logical name (PWD joined, `.` / `..` folded) when it is
+  # -ef P (the same walk over it ends at P), else P (pwd -P). An unreplayable walk (a file or a dangling link in the way)
+  # checks nothing more: the root's own check or mkdir dies, and its post-resolve backstop stays
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
 }

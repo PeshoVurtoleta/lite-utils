@@ -480,6 +480,36 @@ LITERAL), r2 APPROVED, r3 a 5-line test-only round (ibd-u2 F8 / F14, the parity 
 
 ---
 
+**#116 G-X6 (b67 / b69): newline and CR refusal for every printed path (cross-script audit X6 / L2; Q-B66-X6,
+Q-B68-IBDCR, Q-B68-STAGECWD, Q-B69-R2TEST).** (a) Defect class: the report prints the cwd, --node, the drivers and the
+resolved --out, and an LF or CR in any of them forges a column-1 line (`VERDICT SAME`). The old roots failed the cwd /
+--out rows on all five tools (bb's LF cwd by die text only), forged through a driver reached via a symlinked `..` on all
+five (T7) and in file mode on bb and dd (T8) (census on the 43c4ac5 roots, .handoff/evidence/b68-x6/CENSUS.md; the
+dc4a10c old twins fail the same rows); fixed by nl_refuse / nl_dir (lib/common.sh, cold path, before any spawn or write)
+plus post-mkdir backstops (#91 (c) covered the given arguments and `$PWD` for LF only; superseded here). (b) r1 DESIGN
+catch (B3, ruled Q-B68-STAGECWD): in ref mode bb and dd ran stage_check, which prints `$REPO` (the cwd's toplevel),
+BEFORE the cwd check; a refusal placed after a call that prints the same path is no refusal (for an LF a bb regression
+vs 43c4ac5, whose old cwd check refused first; a CR already forged bb there, and dd forged with either). Rule (law 3):
+put the refusal before the first call that prints the value, not only before the first spawn. The same r1 found B1 (ibd
+checked each driver's dirname only, so a CR in a driver BASENAME reached the backstop after 2 spawns and a mkdir) and B2
+(ROW 5 skipped as "not testable portably", false). (c) r2 gate-teeth catch (REJECTED, test-only, Q-B69-R2TEST): the fix
+covered the driver basename, the rows covered only the directory, so removing the B1 fix survived all 24 ibd rows. Rule
+(law 6): a row must put the bad byte where the FIX looks, and a mutant that removes the fix must go red; ROW 11 (a CR in
+an ibd driver basename, CR only because an LF dies earlier with another message) was added with an old twin. Law 6
+again: the rows derive from the plan ASSERTIONS and the rulings, never from what a root printed, and each has an
+old-root twin. (d) Sibling anchor fallout (applies #114): the new early-cwd line made the
+test/bytecode-budget-order.test.mjs STCHK mutant anchor match 0 times; it is re-anchored to the `if` line alone, and the
+ibd parity pin in test/deopt-diff-boundary.test.mjs moves cf9d27de -> f13f33c2. A test that swaps a WHOLE old lib file
+into a fresh build breaks when a unit adds a lib function the roots call (test/shlib.test.mjs I6f: bd0192f lib/common.sh
+has no nl_refuse, `command not found`, exit 2, "unexpected error (exit 127)"); the targeted list missed it because that
+file does not import the changed root, and only the full suite caught it (#114). Reviews: r1 REJECTED (3 blockers), r2
+REJECTED (1 test-only LITERAL), r3 APPROVED. Golden: --help and --self-test (bb / dd `--self-test --fixtures` too)
+byte-identical to 43c4ac5, 12 / 12 cases (36 / 36 files). Gate: test/audit-x6.test.mjs, 121 tests, 0 todo,
+DETERMINISTIC. Evidence: `.handoff/PLAN-b67-gx6.md`, `.handoff/RULINGS-b68.md`, `.handoff/RULINGS-b69.md`,
+`.handoff/evidence/b69-gx6/`, `.handoff/evidence/b68-x6/` (local, untracked).
+
+---
+
 ## C. CI / platform lessons
 
 **#38 History pins reachable only via the local reflog (burst 35).** Review of `ci.yml` found 4 of 5 history-test
@@ -720,8 +750,9 @@ five mutants of precedence and anchoring contracts survived every file (append h
 tool failure, append / node order swapped in base_list, the baseline checks moved above `n == 0`, `*"$fn"*`
 unanchored); each got a pin row and a MUT control asserting the specific wrong text and the absence of the right one.
 (c) r1 blocker 3: the newline refusal checked the given arguments only; a relative DRIVER or --out from a cwd with a
-newline in its name forged a column-1 `VERDICT SAME` (T1.4 missed that route); the refusal now also covers `$PWD`. (d)
-bash 3.2 counts `ulimit -f` in 1024-byte blocks outside posix mode (a limit is not in bytes). (e) A redirect-open
+newline in its name forged a column-1 `VERDICT SAME` (T1.4 missed that route); the refusal now also covers
+`$PWD` (see #116). (d) bash 3.2 counts `ulimit -f` in 1024-byte blocks outside posix mode (a limit is not in
+bytes). (e) A redirect-open
 failure leaks past a `2>/dev/null` written after it on the same command (redirects apply left to right); the code
 wraps the append in a brace group, `{ ...; } 2>/dev/null`. (f) `set -e` is cleared inside `$( )`, so every probe step
 is guarded by hand with `||`. (g) r1 blocker 1: a row titled "local only" must skip itself under CI=true; its skip

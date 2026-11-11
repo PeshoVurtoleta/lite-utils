@@ -1312,6 +1312,7 @@ done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
 if [[ $STAGED == 1 ]]; then
   [[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
+  nl_refuse "the cwd" "$PWD"   # early cwd check (Q-B68-STAGECWD): stage_check prints $REPO in its refusals
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write (--out is required)
 else
   [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
@@ -1353,6 +1354,12 @@ if [[ $STAGED == 0 ]]; then
   DESC_B="${DRV_B_DIR%/}/$DRV_B_BASE  sha256/8 $(sha8 "$DRV_B_DIR/$DRV_B_BASE")"
   DESC_A="${DRV_A_DIR%/}/$DRV_A_BASE  sha256/8 $(sha8 "$DRV_A_DIR/$DRV_A_BASE")"
 fi
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+[[ $STAGED == 1 ]] || nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"   # ref / file mode: stage_check
+[[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
 
 # --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, then the --v8-options read (lib/v8flags.sh: an allowlist refusal exits 2 there), then disk writes (--out only), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
@@ -1363,6 +1370,7 @@ if [[ -n "$OUT" ]]; then
   OUT_L=$(cd -- "$OUT" && pwd); [[ "$OUT_L" -ef "$OUT" ]] || OUT_L=$(cd -P -- "$OUT" && pwd -P); OUT=$OUT_L
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
 fi
+[[ -z "$OUT" ]] || nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
 MODE=diff
 if [[ $STAGED == 1 ]]; then
   stage_write   # lib/stage.sh: OUT/stage/before and OUT/stage/after, each the module + the driver

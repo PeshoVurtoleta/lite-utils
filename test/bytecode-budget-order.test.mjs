@@ -158,7 +158,7 @@ const STW = 'if [[ $STAGED == 1 ]]; then\n  stage_write   # lib/stage.sh: OUT/st
 const HEADDEF = 'bb_head() { # 1 = the run head after stage_write;';
 const SPAWN = 'GOT_VER=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"\nv8fl_check "$NODE_BIN"\n';
 const OUTIF = '\nif [[ -n "$OUT" ]]; then\n  # refuse before any write:';
-const STCHK = 'if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then\n  stage_check   #';
+const STCHK = 'if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then\n';   // G-X6 r2: the early cwd check now sits above stage_check
 const MUTANTS = {
     // the raw/before + raw/after mkdir back in the --out block, before the spawns (its pre-G-ORDER place)
     'M-raw-early': [[RAW, ''], [REP, REP.replace('  REPORT=', '  if [[ $DIFFMODE == 1 ]]; then mkdir "$OUT/raw/before" "$OUT/raw/after" 2>/dev/null || die "--out: cannot create $OUT/raw/before and $OUT/raw/after"; fi\n  REPORT=')]],

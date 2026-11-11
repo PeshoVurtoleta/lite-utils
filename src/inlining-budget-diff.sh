@@ -902,6 +902,14 @@ OUT_UP="$OUT"; while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; d
 [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
 [[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
+# G-X6 (ruling Q-B66-X6): every path the report prints, refused before the first spawn or write if it holds a newline or a
+# CR (it would forge report lines): the cwd, --node, the drivers and the name --out resolves to (nl_refuse, nl_dir)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--node (resolved)" "$NODE_BIN"
+nl_refuse "DRIVER (resolved)" ${POS[@]+"${POS[@]}"}
+for f in ${POS[@]+"${POS[@]}"}; do nl_dir "DRIVER (resolved)" "$(dirname -- "$f")"; done
+nl_dir "--out (resolved)" "$OUT"
+[[ -z "$BEFORE_FILE$AFTER_FILE" ]] || nl_refuse "--before / --after / --driver (resolved)" "$BEFORE_FILE" "$AFTER_FILE"   # file mode prints them (Q-B68-IBDCR)
 # node version + the --v8-flags allowlist: after the read-only preflight, before the first write. The preflight refuses a
 # bad --out with 0 spawns; a path only mkdir can see through (ENAMETOOLONG) still takes these 2 spawns (LEDGER #76)
 NODE_V=$(env -u NODE_OPTIONS "$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"') || die "cannot run $NODE_BIN -p"
@@ -917,9 +925,11 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
 done
 mkdir -p "$OUT"/raw "$OUT"/dec "$OUT"/bud "$OUT"/ms "$OUT"/stage 2>/dev/null || die "--out: cannot create $OUT/raw .. $OUT/stage"
 OUT=$(cd "$OUT" && pwd) || die "--out: cannot resolve $OUT"
+nl_refuse "--out (resolved)" "$OUT"   # backstop (G-X6): a name the pre-spawn replay could not foresee
 REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
 
 # @include lib/modes.sh
+nl_refuse "DRIVER (resolved)" "$DRV_B" "$DRV_A"   # backstop (G-X6)
 
 # ---------------------------------------------------------------------------------------------
 # limits (from this node binary, then --v8-flags overrides)
