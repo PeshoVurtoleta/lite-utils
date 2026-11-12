@@ -1096,6 +1096,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b75 F-F: allocation-diff (ad), bytecode-budget (bb), deopt-diff (dd) and ic-diff refuse a newline or a CR in a raw
+  DRIVER positional, and ad, bb, dd, ic-diff and inlining-budget-diff (ibd) in the raw `--out` value, before any refusal
+  prints them (finding fe-rev-1, LEDGER #125; rulings Q-B74-FERAW, Q-B75-FFSCOPE, Q-B75-FFBBSTAGE; commit 145c4bf).
+  Before, the G-X6 check ran on the RESOLVED name while earlier refusals echoed the RAW value, so a CR reached stderr
+  (exit 2, 0 node spawns, no verdict change): `DRIVER (before|after|driver) not found ...` (bb measure: `DRIVER not
+  found ...`), `cannot resolve the directory of ...` and (dd / ic) rep_refuse for a DRIVER such as
+  `d<CR>/../o/report.txt`; the --out refusals of ad, dd, ic and ibd (`--out: f^M exists and is not a directory`); bb
+  ref / file mode's stage_check (`--out: o^M/stage is a symlink`). Now a CR (and a newline in an ad / dd / ic DRIVER)
+  gets `<tool>: DRIVER: a newline or a CR is not allowed (it would forge report lines)` (or `--out: ...`), then
+  `VERDICT NO-VERDICT`, exit 2, in every mode; the value is never echoed. A newline in --out (all five) or in a bb
+  DRIVER still meets the earlier newline-only refusal, its text unchanged. It replaces ad / dd / ic's newline-only
+  `DRIVER: a newline is not allowed in a path`. Inputs with no newline or CR behave as before. -h (ad, bb, dd, ic):
+  --out and the DRIVER paths take "no newline or CR"; ibd -h unchanged; self-tests unchanged. Tier: DETERMINISTIC.
+  Gated in test/ref-cr-refuse.test.mjs (96 -> 223 tests: ROW 12 per tool and mode with old twins on 4dadb5d and no-CR
+  controls; ROW 13, 29 mutants). A4 ibd pin ae0544f9 -> fe8919f5. Roots: allocation-diff 953026e3 -> cd026337,
+  bytecode-budget 5c24c28b -> 409a1543, deopt-diff e841a841 -> a6c13350, ic-diff 3a866749 -> d85d8b0e,
+  inlining-budget-diff ae0544f9 -> fe8919f5; lib unchanged. Review: r1 REJECTED (1 LITERAL: no after-positional row),
+  r2 APPROVED. npm test (private copy, /bin/bash 3.2, quiet lock, host PRELIMINARY: one other node at 12.9% CPU): 3614
+  tests, 3600 pass, 0 fail, 14 skip, rc 0, 1664 s.
 - b74 F-E: deopt-diff (dd), ic-diff and inlining-budget-diff (ibd): F-C's input-file refusal (rep_refuse, which prints the
   input value) now runs after the G-X6 newline / CR refusals, still before any node / git / mktemp spawn or write
   (finding fd-rev-1, the F-D r1 reviewer; rulings Q-B74-FCSEAM, Q-B74-FESCOPE). Before, an input with a CR that was

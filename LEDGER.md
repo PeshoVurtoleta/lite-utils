@@ -1546,7 +1546,7 @@ SAME by exit code with no VERDICT line, and it cannot be fixed inside the script
 must require the VERDICT line, not only the exit code. The README /
 llms.txt Known-limits line follows in Phase 6 (they do not exist yet). Evidence: `.handoff/RULINGS-b74.md`.
 
-**#125 fe-rev-1: a CR in a path component that `..` removes reaches stderr in driver mode (class 3; OPEN, ruled b74
+**#125 fe-rev-1: a CR in a path component that `..` removes reaches stderr in driver mode (class 3; FIXED b75 F-F, ruled b74
 Q-B74-FERAW: fix next burst; source F-E reviewer).** In driver mode dd, ic and bb run G-X6 on the RESOLVED driver name
 (DESC_B / DESC_A; bb DRV_DIR / DRV_BASE), but some refusals print the RAW positional (rep_refuse; also the older
 `DRIVER (before) not found ...: ${POS[0]}` raw-echo refusals), so a CR in a component that `..` removes is printed.
@@ -1556,4 +1556,25 @@ nl_refuse the raw values). Not caused by F-E (768c388 behaves the same); exit 2,
 message (print the resolved name) or adds a refusal (nl_refuse the raw POS). Mirror case: #122 (lib-cross-fable-2).
 Ruled 2026-11-12 (Q-B74-FERAW): unit F-F, next burst -- dd, ic and bb (driver mode) nl_refuse the RAW positional
 values before any refusal can print them (as ibd and staged mode already do), + rows per tool.
-Evidence: #121 (e), `.handoff/RULINGS-b74.md`.
+FIXED 2026-11-12 (b75 F-F, commit 145c4bf): the b75 orchestrator's probes (Q-B75-FFSCOPE) found the same seam
+wider: bb measure mode and ad's raw DRIVER, and the raw --out value in the --out refusals of ad, dd, ic, ibd; the F-F
+coder (Q-B75-FFBBSTAGE) added bb ref / file mode's stage_check. Each root now nl_refuses the raw DRIVER positionals
+(ad, bb, dd, ic) and the raw --out (all five) before the first refusal that echoes them; gate
+test/ref-cr-refuse.test.mjs ROW 12 / 13. Lesson: the r1 reviewer's `${POS[0]}`-only mutant survived because every
+DRIVER row put the CR in the BEFORE positional -- a check over a list needs a row per list position. Non-path raw
+echoes stay open: #126.
+Evidence: #121 (e), `.handoff/RULINGS-b74.md`, `.handoff/RULINGS-b75.md`.
+
+**#126 Non-path refusals echo a raw argv value with its CR (class 3; OPEN, ruled b75 Q-B75-NONPATH: unit F-G; source b75
+F-F coder's sweep, claude-opus-5-5).** After F-F the raw DRIVER and --out values are refused before they are printed, but some
+refusals still print a raw argv value that is not a path: `unknown option $a` (all five roots), a --fn entry that fails FN_RE
+(`got '$t'`: bb, dd, ic, ibd), `--v8-flags ... got '$f'` (all five), `--runs ... got '$RUNS'`, bb `--max` (`'$e'` /
+`'$n'`) and `--node-version` (`'$WANT_VER'`), and `node binary not found: $NODE_BIN`. A CR in such a value reaches stderr:
+exit 2, 0 spawns, no verdict change (UNVERIFIED per site beyond the sweep's reading). Ruled 2026-11-12 (Q-B75-NONPATH):
+one LEDGER finding, unit F-G after F-F nl_refuses / stops echoing them. Also echoed raw (b75 docs reviewer,
+claude-opus-5-5; not in the sweep): lib/v8flags.sh `--v8-flags must not set $f` (after the --version / --v8-options
+spawns, so not 0 spawns), the --node path echoes `node binary is not an executable file: $NODE_RES`, `... not a file
+on PATH ...: $NODE_BIN -> $NODE_RES` and `node binary: cannot resolve the directory of $NODE_RES`, and dd `--fixtures:
+not a readable directory: $FIXTURES`; ibd's --fn check is an inline regex, not FN_RE. Mirror: #122
+(lib-cross-fable-2), #125.
+Evidence: `.handoff/RULINGS-b75.md`.
