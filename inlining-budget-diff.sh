@@ -1240,6 +1240,7 @@ for x in $OUT_NAMES; do
   [[ ! -L "$OUT/$x" ]] || die "--out: $OUT/$x is a symlink (refused: the write would follow it)"
   [[ ! -f "$OUT/$x" ]] || { RL=$(find "$OUT/$x" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/$x has another hard link (refused: the write would change that file too)"
 done
+nl_refuse "--before-ref / --after-ref / --driver / --repo" "$BEFORE_REF" "$AFTER_REF" "$DRIVER" "$REPO"   # ref mode prints the refs in the head; the refusals of lib/modes.sh print --driver and --repo (Q-XF-CR)
 rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
 [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"

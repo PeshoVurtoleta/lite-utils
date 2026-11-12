@@ -95,8 +95,8 @@
 #   =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
-#   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; their values take
-#   no newline.
+#   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; the seven ref /
+#   file values take no newline or CR.
 #
 # DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
 #   `node [v8 flags] --no-flush-bytecode --print-bytecode --print-bytecode-filter=<fn> DRIVER`
@@ -596,9 +596,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
     [[ -n "$BEFORE_FILE" && -n "$AFTER_FILE" ]] || die "--before and --after go together"
   fi
   [[ ${#POS[@]} -eq 0 ]] || die "$STAGE_MODE mode takes no DRIVER paths (give --driver FILE), got ${#POS[@]}"
-  for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
-    [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
-  done
+  # the head prints the refs and --module, and the refusals below print every one of the seven: a newline or a CR would forge lines (G-X6)
+  nl_refuse "--before-ref / --after-ref / --before / --after / --module / --driver / --repo" "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"
   # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename and cp read ./-NAME
   [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"

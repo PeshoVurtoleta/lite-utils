@@ -87,7 +87,7 @@
 #   with --self-test"; DIR with a newline exits "--fixtures: a newline is not allowed", and DIR that is not a
 #   readable, searchable directory "--fixtures: not a readable directory: DIR". --self-test / --help take no =value.
 #   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
-#   ref / file values take no newline.
+#   ref / file values take no newline or CR.
 #
 # DRIVER (driver mode): exactly two existing readable files (ref / file mode: no DRIVER path; each side runs its
 #   staged copy of --driver), each run as

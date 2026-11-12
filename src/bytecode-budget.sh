@@ -95,8 +95,8 @@
 #   =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
-#   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; their values take
-#   no newline.
+#   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; the seven ref /
+#   file values take no newline or CR.
 #
 # DRIVER: exactly one existing readable file (diff mode: exactly two, DRIVER_BEFORE DRIVER_AFTER), each run as
 #   `node [v8 flags] --no-flush-bytecode --print-bytecode --print-bytecode-filter=<fn> DRIVER`

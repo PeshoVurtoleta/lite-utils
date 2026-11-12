@@ -87,7 +87,7 @@
 #   with --self-test"; DIR with a newline exits "--fixtures: a newline is not allowed", and DIR that is not a
 #   readable, searchable directory "--fixtures: not a readable directory: DIR". --self-test / --help take no =value.
 #   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
-#   ref / file values take no newline.
+#   ref / file values take no newline or CR.
 #
 # DRIVER (driver mode): exactly two existing readable files (ref / file mode: no DRIVER path; each side runs its
 #   staged copy of --driver), each run as
@@ -689,9 +689,8 @@ stage_check() { # refuse a bad ref / file staging (no disk write); set the STAGE
     [[ -n "$BEFORE_FILE" && -n "$AFTER_FILE" ]] || die "--before and --after go together"
   fi
   [[ ${#POS[@]} -eq 0 ]] || die "$STAGE_MODE mode takes no DRIVER paths (give --driver FILE), got ${#POS[@]}"
-  for x in "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"; do
-    [[ "$x" != *$'\n'* ]] || die "--before-ref / --after-ref / --before / --after / --module / --driver / --repo: a newline is not allowed"
-  done
+  # the head prints the refs and --module, and the refusals below print every one of the seven: a newline or a CR would forge lines (G-X6)
+  nl_refuse "--before-ref / --after-ref / --before / --after / --module / --driver / --repo" "$BEFORE_REF" "$AFTER_REF" "$BEFORE_FILE" "$AFTER_FILE" "$MODULE" "$DRIVER" "$REPO"
   # a path value that starts with '-' is a name, never an option: refuse_live, dirname, basename and cp read ./-NAME
   [[ "$BEFORE_FILE" != -* ]] || BEFORE_FILE="./$BEFORE_FILE"; [[ "$AFTER_FILE" != -* ]] || AFTER_FILE="./$AFTER_FILE"; [[ "$DRIVER" != -* ]] || DRIVER="./$DRIVER"
   [[ -n "$OUT" ]] || die "$STAGE_MODE mode needs --out DIR (the staged copies are written to DIR/stage)"
