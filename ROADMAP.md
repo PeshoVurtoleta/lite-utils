@@ -5,6 +5,8 @@
 > lite-perf-gate into a test suite.
 
 Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
+1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3). Next: the
+post-1.0 minors (section 3, "Post-1.0 minors"; D-5).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -115,7 +117,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Tests: self-test on canned + real fixtures (S-9), mutants, and a live deterministic gate on a bundled
   tiny driver (S-6).
 
-### Phase 3 -- deopt-diff.sh -- G1-G3 DONE, G4 open
+### Phase 3 -- deopt-diff.sh -- shipped in 1.0.0 (the group status lines below are history)
 - Status 2026-11-03: G1 + G2 DONE 2026-11-02 (verdict core; ref + file modes; qa APPROVED); G3 DONE 2026-11-03
   (REPORTED tier section per --fn; B1-B4 APPROVED, no qa; commits dc02285 + d22a330); G4 open (B0 fixtures
   done, commit 5ecd79a; B1-B4 open). Status 2026-11-04: unchanged; external-audit fixes to this script
@@ -129,7 +131,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Controls (S-8): a driver that deopts on a type change after `%OptimizeFunctionOnNextCall` (must DIFF
   against the monomorphic driver) and an identical pair (must SAME).
 
-### Phase 4 -- allocation-diff.sh -- G1 B1-B3 DONE, B4 open; G2-G3 open
+### Phase 4 -- allocation-diff.sh -- shipped in 1.0.0 (the group status lines below are history)
 - Status 2026-11-04: G1 B1-B3 DONE and committed, no qa: B1 (records + judge + run_side; 2ed1c33), B1g
   (guard counter; a5fe5d5), B2 (self-test 72 checks, full -h, default --runs 5 per MD-31; 8d0001e), B2h
   (unreadable --out DIR/raw refused before any spawn; 8070907), B3 (test file, self-test pinned at 73;
@@ -142,7 +144,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - Docs state S-7 plainly: counts, not bytes; a cold window over-reports.
 - Controls: an allocating loop (must be > 0) and a zero-alloc loop (must be 0) at fixed N.
 
-### Phase 5 -- ic-diff.sh -- G1 B1-B4 DONE, G2-G4 open
+### Phase 5 -- ic-diff.sh -- shipped in 1.0.0 (the group status lines below are history)
 - Status 2026-11-04: G1 B1-B4 DONE and committed, no qa: B1 (records + judge + run_side; ea8ef48), B2
   (self-test 64 checks + full -h; 127d991), B3 (test file, self-test pinned at 64; 6a58644), B4
   (CHANGELOG entries; 1fc4128). G2 (ref / file modes), G3 (REPORTED sections), G4 (natives control
@@ -154,7 +156,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - REPORTED section (absorbs map diff): deprecated maps, dictionary-mode normalizations
   (`--trace-maps` / `--log-maps`, only the lines that name the function's receiver maps).
 
-### Phase 6 -- docs (after the Phase 7 audit fixes; D-4)
+### Phase 6 -- docs (after the Phase 7 audit fixes; D-4) -- shipped in 1.0.0
 - README per the suite blueprint (LiteSepforge spine, adapted: one section per script with usage, verdict,
   tier, controls), `llms.txt`, CHANGELOG entries. Each claim tagged with its tier (S-5).
 - Publish shape (D-1): package.json `files[]` / `bin` / `repository`, drop `"private"`; a test pins
@@ -162,7 +164,10 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   who has never seen the suite: requirements (bash >= 3.2, POSIX awk, node), the three run modes,
   exit codes, and how to copy one script vs install the package.
 
-### Phase 7 -- rolling audit, per script, BEFORE Phase 6 (D-4, maintainer 2026-11-04; was "After Phase 6")
+### Phase 7 -- rolling audit, per script, BEFORE Phase 6 (D-4, maintainer 2026-11-04; was "After Phase 6") -- DONE
+- Done for 1.0.0: the per-script audits (2026-11-04, 2026-11-07, 2026-11-09) and their fixes; the cross-script
+  review (2026-11-10); the two-model final review with its cross-check (2026-11-11; fix groups F-A..F-E, plus
+  F-F / F-G found while landing them); Phase 6; the confirmation pass; then the release.
 - Order: each script is audited as soon as it is AUDIT-READY, while the others are still being coded.
   Code only until 1.0.0: no adoption anywhere (consumers such as lite-signal audit the scripts; they do
   not gate on them). Then audit fixes -> Phase 6 docs -> a confirmation pass (every reproduction.mjs
@@ -196,10 +201,24 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   findings go to LEDGER section F and the README "Known limits" with their reproduction.
   The reviewer argues each finding's class; the maintainer rules the disputed ones.
 
-### Post-1.0 research leads (maintainer 2026-11-03: "Yes, please, add them")
-- These are LEADS, not plans. Each would start with a TASK 0 probe on the node of that day (a flag
-  listed by `--v8-options` is not proof it works). None gates 1.0.0 (D-3 unchanged: the first release
-  is 1.0.0 after Phases 3-7). No timing-based tool here (that is lite-perf-gate's job).
+### Post-1.0 minors (RULED 2026-11-12, D-5; was "Post-1.0 research leads", maintainer 2026-11-03)
+- One small script per minor, each from focused bursts (maintainer 2026-11-10). Order (Q-M-ORDER (a)):
+  1. 1.1.0 alloc-per-op: its own tool with `bin: alloc-per-op` (Q-M-SHAPE (a); LiteBisect's
+     `test/gates/lu.mjs` resolves it by that stem). Input: the maintainer's untracked prototype
+     `alloc-per-op.mjs` (sha256/8 d4386d85). A research burst comes first (new public surface).
+  2. 1.0.x maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a)). No new surface.
+  3. 1.2.0 import-audit (L1 below).
+  4. 1.3.0 code-size-diff (L4 below).
+  5. 1.4.0 suite-run (L6 below).
+  6. heap-count-diff (L5 below): kept or dropped after 1.1.0 ships.
+  7. shape-diff (L2 below): last.
+  ablation-run (L3 below) is not a minor: if ever wanted, a mode of deopt-diff / allocation-diff.
+- Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
+  Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
+  other minor gets one reviewer + a cross-check.
+- The L1-L6 notes below (2026-11-03) are leads, the input to each tool's research burst, not plans. Each
+  tool starts with a TASK 0 probe on the node of that day (a flag listed by `--v8-options` is not proof
+  it works). No timing-based tool here (that is lite-perf-gate's job).
 - REPORTED probe facts (node v26.8.2, 2026-11-03, local darwin host, untimed,
   `env -u NODE_OPTIONS`, one run each):
   `--trace-protector-invalidation` works (patching `Array.prototype[Symbol.iterator]` printed
@@ -225,7 +244,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   catches inlining bloat that bytecode-budget cannot see; reuses ic-diff's code-creation parser.
 - L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
-- L6 suite-wide runner (not a tool): run the five scripts over every package's drivers; store the
+- L6 suite-wide runner: run the five scripts over every package's drivers; store the
   REPORTED tables as a per-package baseline.
 
 ## 4. Known drift to fix
@@ -253,7 +272,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
 - D-2 ANSWERED 2026-11-02: keep the lib split into fragments (six at Phase 1; see S-2).
 - D-3 ANSWERED 2026-11-02: no early release. 1.0.0 ships only after Phases 3-7
   (was 0.1.0; maintainer 2026-11-03; Phase 7 audit added 2026-11-03); every consuming module needs
-  all five scripts (inlining-budget-diff + the four S-1 ones).
+  all five scripts (inlining-budget-diff + the four S-1 ones). RELEASED 2026-11-12 as 1.0.0 (0894b0b, tag
+  v1.0.0) once Phases 3-7 were done; the maintainer ruled HOLD-RELEASE D-3 removed in b78 (Q-B78-HOLD).
 - D-4 ANSWERED 2026-11-04: rolling audit. Phase 7 moves BEFORE Phase 6: each script is audited as soon
   as it is AUDIT-READY (orchestrator pings the maintainer), in the maintainer's chained FINDINGS.md +
   reproduction.mjs format; every fix proposal is kept and measured by reproduction. Code only until
@@ -273,3 +293,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   --v8-options read") and CI-LINUX (the 6 ubuntu CI rows were BSD-userland oracle assumptions; fixed, and
   confirmed by the first fully green CI run, 42130164758 on aecb40f: all 8 legs, macOS + ubuntu x node 26.8.2 /
   26 / 22 / 24).
+- D-5 ANSWERED 2026-11-12: the post-1.0 minors plan, in the maintainer's words: "The order above,
+  alloc-per-op as its own command, a full two-model audit for alloc-per-op only and lighter checks for the
+  rest, the 1.0.x patch after 1.1.0, before it" -> Q-M-ORDER (a), Q-M-SHAPE (a), Q-M-AUDIT (a), Q-M-PATCH (a)
+  (read as "after 1.1.0, before 1.2.0"; confirmed by Q-B79-PATCH, b79). Shape: section 3, "Post-1.0 minors".
