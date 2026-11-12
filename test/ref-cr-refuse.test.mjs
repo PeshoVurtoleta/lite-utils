@@ -20,7 +20,17 @@
 //   ROW 8  mutants of the live root (count-checked, exact once): fixC (a) ibd checks "$BEFORE_REF" only, (b) the lib/stage.sh line
 //          reverted to the newline-only loop, (c) lib/stage.sh checks "$MODULE" only, and "drop one value" for each of the seven
 //          bb / dd values and the four ibd values: each turns its named rows red
-//          (r1) the ibd line moved back after the G-X6 block (below rep_refuse): ROW 4b red
+//          (r1) the ibd line moved back below rep_refuse (now after the G-X6 block, b74 F-E): ROW 4b red
+//   ROW 10 b74 F-E (rulings Q-B74-FCSEAM, Q-B74-FESCOPE; finding fd-rev-1): an input value with a CR that is also -ef <o>/report.txt
+//          (or ibd's <o>/budget.turbo.tsv, an OUT_NAMES file): <x>/x<CR> a symlink to it, <o> created with it empty. ibd driver mode
+//          (the DRIVER positional, to report.txt and to budget.turbo.tsv), ibd file mode (--before / --after), dd driver mode (the
+//          before positional), ic (the after positional): the G-X6 refusal fires, never rep_refuse (whose text echoes the value).
+//          Same oracle as ROW 4b; label `DRIVER (resolved)` (ibd file mode: `--before / --after / --driver (resolved)`)
+//   ROW 10 OLD twin per row: the 768c388 root (b74 F-D, before F-E) fails the row WITH a CR on stderr. SKIP / CI=true as ROW 6
+//   ROW 10 bb-clean pin: bb driver mode (x<CR> before positional) and file mode (--before x<CR>): GREEN on the live AND the
+//          768c388 root (bb's G-X6 / stage_check already ran before its rep_refuse; pins that bb stays clean)
+//   ROW 11 mutants (exact once): rep_refuse moved back above G-X6 per tool (ibd: below the ref-mode line; dd / ic: back into the
+//          --out block): each turns its tool's ROW 10 rows red with a CR on stderr
 //   ROW 9  retention: the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged
 // Own fake node (bash): logs one SPAWN line per call, answers --version / --v8-options (tracked fixture) / -p, else prints its
 // last argument's file and exits 0. No timing assertions. Git repos under one mkdtemp top, editor env stripped.
@@ -40,6 +50,7 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const BASH = existsSync('/bin/bash') ? '/bin/bash' : '/usr/bin/bash';
 const OPTS_FIX = join(PKG, 'test', 'fixtures', 'v8flags', 'v8-options.v26.8.2.txt');
 const OLD_SHA = '035e939';
+const OLD_FE = '768c388';   // b74 F-D: rep_refuse before G-X6 in ibd / dd / ic (ROW 10 old twins)
 const CI_STRICT = process.env.CI === 'true';
 const CR = '\r', NL = '\n';
 
@@ -110,14 +121,17 @@ function once(src, from, to, what) {   // an exact-once, count-checked edit
 // ---- the old twins ----
 const haveOld = spawn('git', ['cat-file', '-e', `${OLD_SHA}^{commit}`], { cwd: PKG }, 'git cat-file').status === 0 ? true : `commit ${OLD_SHA} not available (shallow clone?)`;
 const OLDSKIP = skip || (haveOld === true || CI_STRICT ? false : haveOld);
+const haveOldFe = spawn('git', ['cat-file', '-e', `${OLD_FE}^{commit}`], { cwd: PKG }, 'git cat-file').status === 0 ? true : `commit ${OLD_FE} not available (shallow clone?)`;
+const OLDFESKIP = skip || (haveOldFe === true || CI_STRICT ? false : haveOldFe);
 const OLD = {};
-function oldRoot(t) {
-    if (OLD[t]) return OLD[t];
-    const g = spawn('git', ['show', `${OLD_SHA}:${t}.sh`], { cwd: PKG, encoding: 'buffer' }, `git show ${t}.sh`, 30000);
-    assert.equal(g.status, 0, `git show ${OLD_SHA}:${t}.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+function oldRoot(t, sha = OLD_SHA) {
+    const k = `${sha}:${t}`;
+    if (OLD[k]) return OLD[k];
+    const g = spawn('git', ['show', `${sha}:${t}.sh`], { cwd: PKG, encoding: 'buffer' }, `git show ${t}.sh`, 30000);
+    assert.equal(g.status, 0, `git show ${sha}:${t}.sh failed (CI_STRICT: an unreachable pin is a failure)`);
     const p = join(mk('old'), `${t}.sh`);
     writeFileSync(p, g.stdout); chmodSync(p, 0o755);
-    return (OLD[t] = p);
+    return (OLD[k] = p);
 }
 
 // ---- fake node ----
@@ -155,7 +169,7 @@ const LABEL = {
     [DD]: '--before-ref / --after-ref / --before / --after / --module / --driver / --repo',
     [IBD]: '--before-ref / --after-ref / --driver / --repo',
 };
-const want = (tool) => `${tool}: ${LABEL[tool]}: a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`;
+const want = (tool, label = LABEL[tool]) => `${tool}: ${label}: a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`;
 // ref-mode argv: bb / dd need --module and --driver; ibd stages Signal.js and writes its default driver
 const refArgs = (tool, c, b, a, { repo = G.R, module = 'src/Mod.js', driver = c.drv } = {}) => (tool === IBD
     ? [...HEAD[tool], '--before-ref', b, '--after-ref', a, '--repo', repo, ...(driver === c.drv ? [] : ['--driver', driver])]
@@ -186,12 +200,12 @@ for (const tool of [BB, DD, IBD]) {
 }
 
 // the ONE oracle: the list of failed expectations (empty = the fixed behaviour)
-function problems(r, c, tool, tree0, outPre = false) {
+function problems(r, c, tool, tree0, outPre = false, label = LABEL[tool]) {
     const bad = [];
     if (r.status !== 2) bad.push(`rc ${r.status} != 2`);
     if (c.spawns() !== 0) bad.push(`${c.spawns()} fake-node spawns != 0`);
     if (r.stdout !== '') bad.push(`${r.stdout.length} stdout bytes != 0`);
-    if (r.stderr !== want(tool)) bad.push(`stderr is not exactly ${JSON.stringify(want(tool))}`);
+    if (r.stderr !== want(tool, label)) bad.push(`stderr is not exactly ${JSON.stringify(want(tool, label))}`);
     if (r.stderr.includes(CR)) bad.push('a CR on stderr');
     if (!outPre && existsSync(c.o)) bad.push('--out dir created');   // ROW 4b: <o> exists before; the case-tree check covers it
     const t = tree(c);
@@ -201,7 +215,7 @@ function problems(r, c, tool, tree0, outPre = false) {
 function runRow(root, name, R) {
     const c = mkCase(); const argv = R.argv(c); const tree0 = tree(c);
     const r = run(root, c, argv, name);
-    return { r, bad: problems(r, c, R.tool, tree0, R.outPre === true) };
+    return { r, bad: problems(r, c, R.tool, tree0, R.outPre === true, R.label) };
 }
 
 for (const [name, R] of Object.entries(ROWS)) {
@@ -250,10 +264,12 @@ MUTANTS.push({ id: '(a) ibd checks "$BEFORE_REF" only', tool: IBD, edit: [IBD_LI
 for (const v of ['BEFORE_REF', 'AFTER_REF', 'DRIVER', 'REPO']) {
     MUTANTS.push({ id: `drop ${v} (ibd)`, tool: IBD, edit: [IBD_LINE, IBD_LINE.replace(` "$${v}"`, '')], rows: ROWOF[v].map((n) => `ibd ${n}`).concat(v === 'DRIVER' ? ['ibd driver CR report-link'] : []) });
 }
-// (r1) the b74 F-D r1 seam: the ibd line back below rep_refuse (after the G-X6 file-mode line, where r1 had it)
+// (r1) the b74 F-D r1 seam: the ibd line back below rep_refuse (b74 F-E: rep_refuse now sits after the G-X6 file-mode line)
 const IBD_FULL = `${IBD_LINE}   # ref mode prints the refs in the head; the refusals of lib/modes.sh print --driver and --repo (Q-XF-CR)\n`;
 const IBD_FM = '[[ -z "$BEFORE_FILE$AFTER_FILE" ]] || nl_refuse "--before / --after / --driver (resolved)" "$BEFORE_FILE" "$AFTER_FILE"   # file mode prints them (Q-B68-IBDCR)\n';
-MUTANTS.push({ id: '(r1) ibd line moved back below rep_refuse', tool: IBD, edits: [[IBD_FULL, ''], [IBD_FM, IBD_FM + IBD_FULL]], rows: ['ibd driver CR report-link'] });
+const REP_ARGS = 'rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"\n';
+const REP_C = '# rep_refuse prints the input value: it runs after the G-X6 newline / CR refusals above, before the first spawn or write (finding fd-rev-1, ruling Q-B74-FCSEAM)\n';
+MUTANTS.push({ id: '(r1) ibd line moved back below rep_refuse', tool: IBD, edits: [[IBD_FULL, ''], [IBD_FM + REP_C + REP_ARGS, IBD_FM + REP_C + REP_ARGS + IBD_FULL]], rows: ['ibd driver CR report-link'] });
 const MUT = {};
 function mutRoot(m) {
     if (MUT[m.id]) return MUT[m.id];
@@ -270,6 +286,65 @@ for (const m of MUTANTS) {
             assert.ok(ROWS[n], `mutant ${m.id} names an unknown row ${n}`);
             const { r, bad } = runRow(p, `${n} (${m.id})`, ROWS[n]);
             assert.ok(bad.length > 0, `mutant ${m.id} survives row ${n}\n${msg(r)}`);
+        }
+    });
+}
+
+// ---- ROW 10 / 11: b74 F-E (rulings Q-B74-FCSEAM, Q-B74-FESCOPE; finding fd-rev-1) ----
+const IC = 'ic-diff';
+HEAD[IC] = ['--fn', 'add'];
+const RES = 'DRIVER (resolved)', FMODE = '--before / --after / --driver (resolved)';
+// <o> made with an empty report.txt (and, for ibd's OUT_NAMES row, the named file); <x>/x<CR> a symlink to <o>/<name>
+function crLink(c, name = 'report.txt') {
+    mkdirSync(c.o); writeFileSync(join(c.o, 'report.txt'), '');
+    if (name !== 'report.txt') writeFileSync(join(c.o, name), '');
+    const l = join(c.x, `x${CR}`); symlinkSync(join(c.o, name), l);
+    return l;
+}
+function sig(c) { const p = join(c.x, 's', 'Signal.js'); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, 'export const add = (a, b) => a + b;\n'); return p; }
+const FE = {
+    'ibd driver-pos CR report-link': { tool: IBD, label: RES, argv: (c) => [...HEAD[IBD], crLink(c)] },
+    'ibd driver-pos CR budget-link': { tool: IBD, label: RES, argv: (c) => [...HEAD[IBD], crLink(c, 'budget.turbo.tsv')] },
+    'ibd file-before CR report-link': { tool: IBD, label: FMODE, argv: (c) => { const l = crLink(c); return [...HEAD[IBD], '--before', l, '--after', sig(c)]; } },
+    'ibd file-after CR report-link': { tool: IBD, label: FMODE, argv: (c) => { const l = crLink(c); return [...HEAD[IBD], '--before', sig(c), '--after', l]; } },
+    'dd driver-pos CR report-link': { tool: DD, label: RES, argv: (c) => [...HEAD[DD], crLink(c), c.drv] },
+    'ic driver-pos CR report-link': { tool: IC, label: RES, argv: (c) => [...HEAD[IC], c.drv, crLink(c)] },
+    'bb driver-pos CR report-link (bb-clean pin)': { tool: BB, label: RES, pin: true, argv: (c) => [...HEAD[BB], crLink(c), c.drv] },
+    'bb file-before CR report-link (bb-clean pin)': { tool: BB, label: LABEL[BB], pin: true, argv: (c) => [...HEAD[BB], '--driver', c.drv, '--before', crLink(c), '--after', c.fa] },
+};
+for (const R of Object.values(FE)) { R.row = 10; R.outPre = true; }
+for (const [name, R] of Object.entries(FE)) {
+    test(`ROW 10 ${name}: rc 2, 0 spawns, the exact G-X6 refusal (not rep_refuse), no CR on stderr, the case tree (incl. <o>) unchanged`, { skip }, () => {
+        const { r, bad } = runRow(LIVE(R.tool), name, R);
+        assert.deepEqual(bad, [], msg(r));
+    });
+    if (R.pin) {
+        test(`ROW 10 bb-clean pin OLD ${name}: the ${OLD_FE} root ALREADY meets the row (bb was never in the seam)`, { skip: OLDFESKIP }, () => {
+            const { r, bad } = runRow(oldRoot(R.tool, OLD_FE), `${name} (old)`, R);
+            assert.deepEqual(bad, [], msg(r));
+        });
+    } else {
+        test(`ROW 10 OLD twin ${name}: the ${OLD_FE} root fails the row with a CR on stderr`, { skip: OLDFESKIP }, () => {
+            const { r, bad } = runRow(oldRoot(R.tool, OLD_FE), `${name} (old)`, R);
+            assert.ok(bad.includes('a CR on stderr'), `old root has no CR on stderr (the row has no teeth): ${JSON.stringify(bad)}\n${msg(r)}`);
+        });
+    }
+}
+// ROW 11 mutants: rep_refuse back at its 768c388 place, per tool
+const DD_REP = '[[ -z "$OUT" ]] || ' + REP_ARGS, IC_REP = '[[ -z "$OUT" ]] || rep_refuse "${POS[@]}"\n';
+const RAW_LS = '  [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"\n';
+const FE_MUT = [
+    { id: 'ibd rep_refuse back above G-X6', tool: IBD, edits: [[REP_C + REP_ARGS, ''], [IBD_FULL, IBD_FULL + REP_ARGS]], rows: Object.keys(FE).filter((n) => n.startsWith('ibd ')) },
+    { id: 'dd rep_refuse back above G-X6', tool: DD, edits: [[REP_C + DD_REP, ''], [RAW_LS, RAW_LS + '  ' + REP_ARGS]], rows: ['dd driver-pos CR report-link'] },
+    { id: 'ic rep_refuse back above G-X6', tool: IC, edits: [[REP_C + IC_REP, ''], [RAW_LS, RAW_LS + '  rep_refuse "${POS[@]}"\n']], rows: ['ic driver-pos CR report-link'] },
+];
+for (const m of FE_MUT) {
+    test(`ROW 11 mutant ${m.id}: rows ${m.rows.join(', ')} go red with a CR on stderr`, { skip }, () => {
+        const p = mutRoot(m);
+        for (const n of m.rows) {
+            assert.ok(FE[n], `mutant ${m.id} names an unknown row ${n}`);
+            const { r, bad } = runRow(p, `${n} (${m.id})`, FE[n]);
+            assert.ok(bad.includes('a CR on stderr'), `mutant ${m.id} survives row ${n}: ${JSON.stringify(bad)}\n${msg(r)}`);
         }
     });
 }

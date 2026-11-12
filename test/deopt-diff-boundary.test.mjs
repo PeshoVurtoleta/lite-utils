@@ -603,7 +603,7 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'fillers-final');
 // bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
-const PARITY = [['inlining-budget-diff.sh', '476d640a']];
+const PARITY = [['inlining-budget-diff.sh', 'ae0544f9']];
 function assertParity(live, ref, want) {
     assert.equal(sha8(live), want, 'live sha256/8');
     assert.ok(Buffer.compare(live, ref) === 0, 'live differs from the reference copy');

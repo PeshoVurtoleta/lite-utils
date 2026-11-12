@@ -1241,7 +1241,6 @@ for x in $OUT_NAMES; do
   [[ ! -f "$OUT/$x" ]] || { RL=$(find "$OUT/$x" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/$x has another hard link (refused: the write would change that file too)"
 done
 nl_refuse "--before-ref / --after-ref / --driver / --repo" "$BEFORE_REF" "$AFTER_REF" "$DRIVER" "$REPO"   # ref mode prints the refs in the head; the refusals of lib/modes.sh print --driver and --repo (Q-XF-CR)
-rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
 [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
 [[ ! -e "$OUT/report.txt" || ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) ]] || die "--out: cannot write $OUT/report.txt"
 [[ ! -f "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
@@ -1253,6 +1252,8 @@ nl_refuse "DRIVER (resolved)" ${POS[@]+"${POS[@]}"}
 for f in ${POS[@]+"${POS[@]}"}; do nl_dir "DRIVER (resolved)" "$(dirname -- "$f")"; done
 nl_dir "--out (resolved)" "$OUT"
 [[ -z "$BEFORE_FILE$AFTER_FILE" ]] || nl_refuse "--before / --after / --driver (resolved)" "$BEFORE_FILE" "$AFTER_FILE"   # file mode prints them (Q-B68-IBDCR)
+# rep_refuse prints the input value: it runs after the G-X6 newline / CR refusals above, before the first spawn or write (finding fd-rev-1, ruling Q-B74-FCSEAM)
+rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
 # node version + the --v8-flags allowlist: after the read-only preflight, before the first write. The preflight refuses a
 # bad --out with 0 spawns; a path only mkdir can see through (ENAMETOOLONG) still takes these 2 spawns (LEDGER #76)
 NODE_V=$(env -u NODE_OPTIONS "$NODE_BIN" -p 'process.version + " (V8 " + process.versions.v8 + ")"') || die "cannot run $NODE_BIN -p"

@@ -817,7 +817,6 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
-  rep_refuse "${POS[@]}"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
   [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
@@ -851,6 +850,8 @@ nl_refuse "the cwd" "$PWD"
 nl_refuse "--node (resolved)" "$NODE_RES"
 nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"
 [[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
+# rep_refuse prints the input value: it runs after the G-X6 newline / CR refusals above, before the first spawn or write (finding fd-rev-1, ruling Q-B74-FCSEAM)
+[[ -z "$OUT" ]] || rep_refuse "${POS[@]}"
 
 # --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, the allowlist read
 # (v8fl_check: one --v8-options, MD-56: also with no --v8-flags), the hashed --v8-options probe, then mktemp / OUT

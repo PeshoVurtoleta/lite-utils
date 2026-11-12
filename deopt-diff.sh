@@ -1722,7 +1722,6 @@ if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
   [[ ! -L "$OUT/raw" ]] || die "--out: $OUT/raw is a symlink (refused: the writes would follow it)"
   [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"
-  rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
   [[ ! -L "$OUT/report.txt" ]] || die "--out: $OUT/report.txt is a symlink (refused: the write would follow it)"
   [[ ( -f "$OUT/report.txt" && -w "$OUT/report.txt" ) || ( ! -e "$OUT/report.txt" && ( ! -e "$OUT" || -w "$OUT" ) ) ]] || die "--out: cannot write $OUT/report.txt"
   [[ ! -e "$OUT/report.txt" ]] || { RL=$(find "$OUT/report.txt" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/report.txt has another hard link (refused: the write would change that file too)"
@@ -1757,6 +1756,8 @@ nl_refuse "the cwd" "$PWD"
 nl_refuse "--node (resolved)" "$NODE_BIN"
 [[ $STAGED == 1 ]] || nl_refuse "DRIVER (resolved)" "$DESC_B" "$DESC_A"   # ref / file mode: stage_check
 [[ -z "$OUT" ]] || nl_dir "--out (resolved)" "$OUT"
+# rep_refuse prints the input value: it runs after the G-X6 newline / CR refusals above, before the first spawn or write (finding fd-rev-1, ruling Q-B74-FCSEAM)
+[[ -z "$OUT" ]] || rep_refuse ${POS[@]+"${POS[@]}"} "$DRIVER" "$BEFORE_FILE" "$AFTER_FILE"
 
 # --- every refusal but the --v8-flags allowlist is above this line; spawns start here: --version, then the --v8-options read (lib/v8flags.sh: an allowlist refusal exits 2 there), then disk writes (--out only), then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
