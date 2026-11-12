@@ -33,10 +33,16 @@ const CI_STRICT = process.env.CI === 'true';
 const sha8 = (b) => createHash('sha256').update(b).digest('hex').slice(0, 8);
 const NODE_REAL = process.execPath;
 const CYCLES = 12; // spec says 20; 12 keeps the file under ~90 s on a loaded host (20: file 72-109 s)
-// Q-B66-G4REAL: the A1 / A2 real-node fix rows branch on V8: rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT "code kind outside
-// the allowlist" (ic-diff's code-kind table is V8 14.x only; CI run 42850759205). Q-B66-G4TWIN: their OLD twins run on
+// Q-B66-G4REAL / Q-B78-ICV8: the A1 / A2 real-node fix rows branch on the V8 major: rc 0 SAME on V8 >= 14 (14.6 and 15.6
+// share the CodeKind numbering, V8 src/objects/code-kind.h at 14.6.202.34 and 15.6.75.25), else rc 2 NO-VERDICT "code kind
+// outside the allowlist" (V8 12.x / 13.x number Builtin 2; CI run 42850759205). Q-B66-G4TWIN: their OLD twins run on
 // every V8 and assert rc 2 NO-VERDICT "no IC log" (the old root writes no log, so no code-kind check runs).
-const V8_14 = /^14\./.test(process.versions.v8);
+// icRealExpect: pure; an unparseable version THROWS (fail closed: never silently picks a branch).
+function icRealExpect(v8) {
+    const m = /^(\d+)\./.exec(typeof v8 === 'string' ? v8 : '');
+    if (m === null) throw new Error(`icRealExpect: unparseable V8 version ${JSON.stringify(v8)}`);
+    return Number(m[1]) >= 14 ? 'SAME' : 'refuse';
+}
 
 function cleanEnv(extra = {}) {
     const e = { ...process.env };
@@ -198,6 +204,16 @@ test('A1 OLD twin: TMPDIR=<d>/t%p%t%% -> rc 2', { skip: OLDSKIP }, () => {
 });
 // real node: one tiny driver; the tool reads real V8 --log-ic output. One attempt each, generous cap.
 const REAL_DRV = 'function get(o) { return o.x; }\nfor (let i = 0; i < 200; i++) get({ x: i });\n';
+// canned rows for the V8 split (no spawn; Q-B78-ICV8)
+for (const [v, want] of [['12.4.254.21-node.33', 'refuse'], ['13.6.233.10-node.18', 'refuse'], ['14.6.202.34-node.28', 'SAME'],
+    ['15.6.75.50-node.11', 'SAME'], ['16.0.1', 'SAME']]) {
+    test(`icRealExpect canned: V8 ${v} -> ${want}`, () => { assert.equal(icRealExpect(v), want); });
+}
+for (const v of ['', 'x', '.14.6', 'v14.6.202.34', '14']) {
+    test(`icRealExpect canned: V8 ${JSON.stringify(v)} throws (fail closed)`, () => {
+        assert.throws(() => icRealExpect(v), /unparseable V8 version/);
+    });
+}
 function realCase(extra) {
     const c = mkCase();
     for (const n of ['mono', 'mono2']) writeFileSync(join(dirname(c.D[n]), 'driver.js'), REAL_DRV);
@@ -205,13 +221,14 @@ function realCase(extra) {
     const r = run(extra.root, c, ['--node', NODE_REAL, ...(extra.out ? ['--out', o] : []), '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cap: 120000, ...(extra.run || {}) });
     return { c, o, r };
 }
-test('A1 real node: --out o%pz, process.execPath -> rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT \'code kind outside the allowlist\' (one attempt; Q-B66-G4REAL)', { skip }, () => {
+test('A1 real node: --out o%pz, process.execPath -> rc 0 SAME on V8 >= 14 (14.6 and 15.6 share the CodeKind numbering), else rc 2 NO-VERDICT \'code kind outside the allowlist\' (one attempt; Q-B66-G4REAL, Q-B78-ICV8)', { skip }, () => {
+    const want = icRealExpect(process.versions.v8);
     const { r, o } = realCase({ root: TOOL, out: true });
-    if (V8_14) {
+    if (want === 'SAME') {
         code(r, 0, 'A1 real'); assert.equal(verdict(r), 'SAME', msg(r));
         assert.ok(existsSync(join(o, 'raw', 'before', 'run.1.log')));
     } else {
-        code(r, 2, 'A1 real off V8 14.x'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+        code(r, 2, 'A1 real below V8 14'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
         assert.ok((r.stdout + r.stderr).includes('code kind outside the allowlist'), msg(r));
     }
 });
@@ -250,12 +267,13 @@ function a2Real(root) {
     const r = run(root, c, ['--node', NODE_REAL, '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cwd: w, tmpdir: '../tmp2', cap: 120000 });
     return { t, r };
 }
-test('A2 real node: relative TMPDIR -> rc 0 SAME on V8 14.x, else rc 2 NO-VERDICT \'code kind outside the allowlist\'; 0 entries (one attempt; Q-B66-G4REAL)', { skip }, () => {
+test('A2 real node: relative TMPDIR -> rc 0 SAME on V8 >= 14 (14.6 and 15.6 share the CodeKind numbering), else rc 2 NO-VERDICT \'code kind outside the allowlist\'; 0 entries (one attempt; Q-B66-G4REAL, Q-B78-ICV8)', { skip }, () => {
+    const want = icRealExpect(process.versions.v8);
     const { t, r } = a2Real(TOOL);
-    if (V8_14) {
+    if (want === 'SAME') {
         code(r, 0, 'A2 real'); assert.equal(verdict(r), 'SAME', msg(r));
     } else {
-        code(r, 2, 'A2 real off V8 14.x'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
+        code(r, 2, 'A2 real below V8 14'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
         assert.ok((r.stdout + r.stderr).includes('code kind outside the allowlist'), msg(r));
     }
     assert.deepEqual(ls(t), []);

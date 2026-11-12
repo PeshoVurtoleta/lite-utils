@@ -1,6 +1,7 @@
 // test/pack.test.mjs -- the publish shape of @zakkster/lite-utils (b76 Phase 6, PLAN-b76-p6.md ASSERTIONS A1-A6; rulings
 // Q-P6-BIN, Q-P6-REPO, Q-P6-PRIVATE, Q-P6-KEYWORDS (a)). Oracle: the plan's lists, not the package.json under test.
 //   A1 `npm pack --dry-run --json` in a private decoy copy lists exactly the 10 shipped paths.
+//      Its json: npm <= 11 an array of one, npm 12 an object keyed by the package name (npm/cli PR 9247; Q-B78-PACK).
 //   A2 package.json fields (no "private", bin, repository / homepage / bugs, engines, license, author, keywords) and
 //      `npm pkg fix` leaves it byte-identical.
 //   A3 an offline tarball install gives five node_modules/.bin commands; each `-h` exits 2 with its own first line.
@@ -127,12 +128,39 @@ function decoyCopy(pkgText) {
     writeFileSync(join(d, 'package.json'), pkgText);
     return d;
 }
+// pure (Q-B78-PACK): the sorted path list of a `npm pack --json` result in exactly one of two shapes: (i) an array of
+// exactly one entry whose name is `name` (npm <= 11); (ii) a plain object with exactly one own key, equal to `name`
+// (the package.json under test, never the json), whose value's name is `name` too (npm 12). Either entry holds a
+// files array of { path: string }.
+// Anything else fails with a message naming the shape.
+function packEntry(j, name, what) {
+    assert.ok(typeof name === 'string' && name !== '', `${what}: expected package name ${JSON.stringify(name)}`);
+    let e, shape;
+    if (Array.isArray(j)) {
+        shape = 'array shape (npm <= 11)';
+        assert.ok(j.length === 1, `${what}: ${shape} must hold exactly one package, got ${j.length}`);
+        e = j[0];
+        assert.ok(e !== null && typeof e === 'object' && e.name === name, `${what}: ${shape}: the entry's name must be ${JSON.stringify(name)}, got ${JSON.stringify(e && e.name)}`);
+    } else if (j !== null && typeof j === 'object' && Object.getPrototypeOf(j) === Object.prototype) {
+        shape = 'keyed shape (npm 12)';
+        const keys = Reflect.ownKeys(j).map(String);
+        assert.ok(keys.length === 1 && keys[0] === name, `${what}: ${shape} must hold exactly one key ${JSON.stringify(name)}, got ${JSON.stringify(keys)}`);
+        e = j[name];
+        assert.ok(e !== null && typeof e === 'object' && e.name === name, `${what}: ${shape}: the entry's name must be ${JSON.stringify(name)}, got ${JSON.stringify(e && e.name)}`);
+    } else {
+        assert.fail(`${what}: neither the array shape (npm <= 11) nor the keyed shape (npm 12): ${j === null ? 'null' : typeof j}`);
+    }
+    assert.ok(e !== null && typeof e === 'object' && Array.isArray(e.files), `${what}: ${shape}: the entry has no files array`);
+    for (const x of e.files) {
+        assert.ok(x !== null && typeof x === 'object' && typeof x.path === 'string', `${what}: ${shape}: a files element without a string path: ${JSON.stringify(x)}`);
+    }
+    return e.files.map((x) => x.path).sort();
+}
 function dryRun(dir, what) {
+    const name = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name;   // the text decoyCopy wrote
     const r = npm(['pack', '--dry-run', '--json', '--ignore-scripts', '--offline'], dir, what);
     assert.equal(r.status, 0, `${what}: exit ${r.status}\n${r.stderr}`);
-    const j = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(j) && j.length === 1, `${what}: one package in the json`);
-    return j[0].files.map((f) => f.path).sort();
+    return packEntry(JSON.parse(r.stdout), name, what);
 }
 // pack to a tgz, install it offline into a fresh dir; returns that dir's node_modules/.bin
 function installTgz(dir, what) {
@@ -195,6 +223,36 @@ function rootProblems(name, text) {
 const LIVE_PKG = () => readFileSync(join(ROOT, 'package.json'), 'utf8');
 
 // ---- A1 ----
+// packEntry canned rows (no npm spawn, so outside NPMSKIP; Q-B78-PACK). The keyed entry is a trimmed npm 12.2.2 sample.
+const PN = '@zakkster/lite-utils';
+const cFiles = () => [{ path: 'llms.txt', size: 11309, mode: 420 }, { path: 'LICENSE', size: 1099, mode: 420 }];
+const cKeyed = () => ({ [PN]: { id: `${PN}@0.0.0`, name: PN, version: '0.0.0', size: 263302, unpackedSize: 834368,
+    shasum: 'cbcc6e9d194b00855d0c5bf9123abb9a652d6d60', filename: 'zakkster-lite-utils-0.0.0.tgz', files: cFiles(), entryCount: 2, bundled: [] } });
+const cArr = () => [{ id: `${PN}@0.0.0`, name: PN, version: '0.0.0', files: cFiles(), entryCount: 2, bundled: [] }];
+test('packEntry canned: an array of one (npm <= 11) -> its sorted paths', () => {
+    assert.deepEqual(packEntry(cArr(), PN, 'canned'), ['LICENSE', 'llms.txt']);
+});
+test('packEntry canned: an object keyed by the package name (npm 12) -> its sorted paths', () => {
+    assert.deepEqual(packEntry(cKeyed(), PN, 'canned'), ['LICENSE', 'llms.txt']);
+});
+const keyedWith = (patch) => { const o = cKeyed(); patch(o[PN]); return o; };
+for (const [label, json, re] of [
+    ['an array of two', () => [...cArr(), ...cArr()], /array shape \(npm <= 11\) must hold exactly one package, got 2/],
+    ['an empty array', () => [], /array shape \(npm <= 11\) must hold exactly one package, got 0/],
+    ['an object with two keys', () => ({ ...cKeyed(), other: cKeyed()[PN] }), /keyed shape \(npm 12\) must hold exactly one key/],
+    ['an object keyed by another name', () => ({ '@zakkster/lite-other': { ...cKeyed()[PN] } }), /keyed shape \(npm 12\) must hold exactly one key/],
+    ['an array of one whose name differs', () => [{ ...cArr()[0], name: '@zakkster/lite-other' }], /array shape \(npm <= 11\): the entry's name must be/],
+    ['a keyed value whose name differs', () => keyedWith((e) => { e.name = '@zakkster/lite-other'; }), /keyed shape \(npm 12\): the entry's name must be/],
+    ['an entry with no files', () => keyedWith((e) => { delete e.files; }), /keyed shape \(npm 12\): the entry has no files array/],
+    ['files not an array', () => [{ ...cArr()[0], files: { path: 'LICENSE' } }], /array shape \(npm <= 11\): the entry has no files array/],
+    ['a file without a string path', () => keyedWith((e) => { e.files.push({ size: 1, mode: 420 }); }), /keyed shape \(npm 12\): a files element without a string path/],
+    ['null', () => null, /neither the array shape \(npm <= 11\) nor the keyed shape \(npm 12\): null/],
+    ['a string', () => 'x', /neither the array shape \(npm <= 11\) nor the keyed shape \(npm 12\): string/],
+]) {
+    test(`packEntry canned must-fail: ${label}`, () => {
+        assert.throws(() => packEntry(json(), PN, 'canned'), re);
+    });
+}
 test('A1 npm pack --dry-run --json lists exactly the 10 shipped paths; no decoy, src/, lib/, test/, build.sh, LEDGER, ROADMAP, audit/, .handoff/', { skip: NPMSKIP }, () => {
     const files = dryRun(decoyCopy(LIVE_PKG()), 'A1 pack --dry-run');
     assert.deepEqual(files, WANT_FILES);

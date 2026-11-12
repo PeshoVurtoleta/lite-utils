@@ -182,7 +182,9 @@ ic-diff.sh --self-test
 - **Tier.** On a user driver the verdict is STATISTICAL (IC states follow warm-up, GC and tier-up timing);
   `--self-test` is DETERMINISTIC.
 - **Node 22 and 24.** The tool always ends `NO-VERDICT` there (a code-kind numbering table that is V8 14.x only), by
-  design, never a wrong verdict (LEDGER #83).
+  design, never a wrong verdict (LEDGER #83). V8 15.6 (node 27 alpha) shares the V8 14.x code-kind numbering (the
+  CODE_KIND_LIST of V8 `src/objects/code-kind.h` is identical at 14.6.202.34 and 15.6.75.25), so the tool gives
+  verdicts there; only the nightly exercises prerelease nodes, the CI matrix does not (LEDGER #128).
 
 ---
 

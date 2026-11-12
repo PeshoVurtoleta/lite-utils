@@ -100,7 +100,8 @@ functions change?
 - Driver mode ONLY. There is no ref mode and no file mode.
 - Exit 0 SAME, 1 DIFF, 2 NO-VERDICT.
 - On node 22 and 24 this tool always ends NO-VERDICT (by design; see Known
-  limits).
+  limits). V8 15.6 (node 27 alpha) shares the V8 14.x numbering: verdicts
+  there (#128).
 - Tier: the verdict on a user driver is STATISTICAL; `--self-test` is
   DETERMINISTIC.
 
@@ -193,7 +194,8 @@ Each bullet names its LEDGER id.
   (#124)
 - #66: `--v8-flags` numeric values are checked for FORM only; a value such as `=NaN` passes the check, node then fails,
   and the tool ends NO-VERDICT.
-- #83: ic-diff on node 22 and 24 ends NO-VERDICT; a NO-VERDICT, never a wrong verdict.
+- #83: ic-diff on node 22 and 24 ends NO-VERDICT; a NO-VERDICT, never a wrong verdict. V8 15.6 (node 27 alpha) uses
+  the V8 14.x numbering, so it gives verdicts (#128).
 - #122: a refusal may print a name that git, readlink or a PATH lookup resolved; a CR or newline in it (behind a
   symlink with a clean name, or in a PATH directory) reaches stderr inside that refusal; exit 2.
 - #84: allocation-diff does not strip NODE_NO_WARNINGS (it strips four other names); it can move the GC count.

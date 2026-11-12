@@ -1089,6 +1089,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- b78 nightly triage (LEDGER #128; rulings Q-B78-ICV8, Q-B78-PACK, Q-B78-LATEST): tests and CI only, no tool change.
+  The audit-g4 real-node rows expect SAME on V8 >= 14 (V8 15.6, node 27 alpha, shares the 14.x code-kind numbering)
+  and the refusal below 14, with canned version rows. test/pack.test.mjs reads both `npm pack --dry-run --json`
+  shapes, an array (npm <= 11) and an object keyed by package name (npm 12), with canned shape rows including the
+  must-fail shapes. The nightly job timeout goes 120 -> 180 min; `latest` is kept (alpha included).
 - `bytecode-budget.sh` report and gate mode: an unreadable DRIVER (chmod 000) is now refused before any
   node spawn ("DRIVER not found (or not a readable file): X", exit 2). It used to be probed and ended
   "driver exited 1" NO-VERDICT, also exit 2.

@@ -886,6 +886,36 @@ and bash >= 5.1 residuals. Tier DETERMINISTIC. Evidence: `.handoff/PLAN-b72-ciha
 `.handoff/evidence/b72-cihang/`, `.handoff/evidence/b72-npm/`, `.handoff/evidence/b73-ci/CI-READ.md` (local,
 untracked).
 
+**#128 Nightly on node 27 alpha (b78): two test oracles keyed on the wrong input (Q-B78-ICV8, Q-B78-PACK,
+Q-B78-LATEST).** Class: none -- test-oracle defects, no wrong verdict, no tool change, no A4 re-pin. Scheduled nightly
+43220611758 (df7dcb2, 2026-11-12): node `latest` = v27.0.0-alpha.0.0.0 (V8 15.6.75.25, npm 12.1.0) failed 4 rows on
+ubuntu (audit-g4 A1 / A2 real node; pack.test A1 and its history twin); macOS `latest` was cancelled at the 120 min
+job timeout. Earlier reds on the same `latest`: 42817727624 (bb prerelease rows, fixed by Q-B65-NODEPRE in 5fcffb5,
+#105) and 43015590140 (the same audit-g4 rows on macOS latest, plus the ubuntu node 22 SIGTERM-row hang fixed by b72
+CI-HANG ef9cf7f, #120). (a) audit-g4 A1 / A2: the rows keyed the expected verdict on V8 major 14 exactly (`/^14\./` of
+process.versions.v8), but ic-diff gates on the code-kind allowlist, not on a V8 version. V8 src/objects/code-kind.h
+CODE_KIND_LIST is identical at 14.6.202.34 and 15.6.75.25 (READ from source: 0 BYTECODE_HANDLER .. 3 BUILTIN, 4
+REGEXP, 10 INTERPRETED_FUNCTION, 11 BASELINE, 12 MAGLEV, 13 TURBOFAN_JS, 14 WASM_STACK_ENTRY), so SAME on V8 15.6 is
+correct. A shifted numbering would still end NO-VERDICT: every run log carries thousands of `Builtin,3` and ~140
+`Eval,10` code-creation lines (MEASURED b78, --runs 2 mono vs poly with --out: node v26.8.2 3322 Builtin,3 / 140
+Eval,10; node v27.0.0-alpha.0.1.0 (V8 15.6.75.50) 3836 / 140; kinds seen on both: Builtin,3 BytecodeHandler,0 RegExp,4
+JS,10 JS,11 JS,12 Eval,10), so a shift of BUILTIN or of the JS range leaves the allowlist. Both nodes printed the same
+VERDICT DIFF (get LoadIC x 1 -> P) on that mono vs poly pair. Q-B78-ICV8 (a) "Test fix + document": the real-node rows
+expect SAME on V8 >= 14 and the refusal below 14, plus canned version rows; docs say V8 15.6 has the same numbering;
+src/ic-diff.sh and its -h known-limit line are NOT changed. (b) pack.test A1: npm 12 (npm/cli PR 9247, merged
+2026-04-16, BREAKING CHANGE) prints `pack --dry-run --json` as an object keyed by package name, not an array.
+Q-B78-PACK (a): the test accepts an array of exactly one package (npm <= 11) or an object with exactly one key equal
+to the package name (npm 12), each holding a files array; canned rows cover both good shapes and the must-fail shapes
+(two packages, the wrong key, no files). (c) Q-B78-LATEST (a): `latest` (the first entry of
+nodejs.org/dist/index.json, alpha included) is kept on purpose, the nightly is an early-warning signal and never a
+required check; only the job timeout goes 120 -> 180 min (as ci.yml, Q-B73-CITIME). Reproduced locally on
+v27.0.0-alpha.0.1.0 (V8 15.6.75.50, npm 12.2.2; downloaded with the maintainer's OK, Q-B78-DL): the same 4 red at HEAD
+3e2aa5f, all green after the fix. Rule: key a test's expectation on the range the tool's real gate accepts (the
+code-kind numbering: V8 >= 14, checked in source at 14.6 and 15.6), never on one exact version; a later V8 that shifts
+the numbering turns the nightly red, the early warning; parse a tool's JSON by its documented shapes, each with a
+must-fail row. Fixed in the b78 triage commit. Tier DETERMINISTIC. Evidence: `.handoff/evidence/b78-repro/`,
+`.handoff/RULINGS-b78.md` (local, untracked).
+
 ---
 
 ## D. Test-gate lessons
@@ -1348,6 +1378,8 @@ survives --self-test but is caught by the Q-I1 row of test/ic-diff.test.mjs (can
 M-c7-node22, M-c9-node22); that widening is the fail-open the audit warned of (Maglev read as baseline). Evidence:
 `.handoff/evidence/b56-ic-audit-closure.md`, audit 2026-11-04-ic-diff FINDINGS (local, untracked). Other I-ids: I2 / I3
 / I6 FIXED per that closure check, not mapped further here (#69).
+b78 (#128): V8 15.6 (node 27 alpha) uses the V8 14.x numbering (code-kind.h CODE_KIND_LIST identical at 14.6.202.34
+and 15.6.75.25, read from source), so ic-diff gives verdicts there; node 22 / 24 are unchanged.
 
 **#84 Q-NO-WARNINGS: NODE_NO_WARNINGS stays unstripped in allocation-diff (known limit; audit A6 residual).**
 Ruled DOCUMENT, no code change (this ruling moves no root). Q-ENV lists four names; NODE_NO_WARNINGS is

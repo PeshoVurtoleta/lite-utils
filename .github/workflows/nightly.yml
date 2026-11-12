@@ -1,8 +1,10 @@
 # nightly.yml -- lite-utils daily run on the newest node and the engines floor (.handoff/PLAN-ci.md, burst 35;
 # ruling Q-CI-2). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync), on node 'latest'
-# and node 22 (check-latest: the newest 22.x every night) x ubuntu-latest / macos-latest. A failure turns the
-# nightly red; it is never a required check for a push. GitHub runs a schedule only from the default branch
-# and pauses it after 60 days without repository activity (re-enable in the Actions tab).
+# and node 22 (check-latest: the newest 22.x every night) x ubuntu-latest / macos-latest. 'latest' is the first
+# entry of nodejs.org/dist/index.json, an alpha / prerelease when one is newest, kept on purpose (Q-B78-LATEST:
+# the nightly is an early-warning signal). A failure turns the nightly red; it is never a required check for a
+# push. GitHub runs a schedule only from the default branch and pauses it after 60 days without repository
+# activity (re-enable in the Actions tab).
 # History: as in ci.yml, the pins live in the test files (under CI=true a pinned-commit row FAILS when its commit
 # is missing); the history step only refuses a shallow clone. Hidden-death detection is node >= 24 only.
 
@@ -28,8 +30,9 @@ jobs:
   test:
     name: nightly (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    # 120: npm test alone took 57.7 min on macOS node 22 at 2016586 (run 41987982156); 60 cancelled two legs
-    timeout-minutes: 120
+    # 180 (Q-B73-CITIME, as ci.yml; Q-B78-LATEST): the macOS node latest leg was cancelled at the old 120 in run 43220611758
+    # (macOS node 22 took 1 h 51 min there); 120 itself came from 57.7 min on macOS node 22 at 2016586 (run 41987982156)
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
