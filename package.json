@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-utils",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Standalone bash V8-diagnostic scripts with fail-closed SAME / DIFF / NO-VERDICT verdicts",
   "type": "module",
   "sideEffects": false,
@@ -36,6 +36,10 @@
   "homepage": "https://github.com/PeshoVurtoleta/lite-utils#readme",
   "bugs": {
     "url": "https://github.com/PeshoVurtoleta/lite-utils/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
   },
   "keywords": [
     "v8",

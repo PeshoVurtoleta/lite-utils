@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-12
+
+First release. Five generated bash tools (allocation-diff, bytecode-budget, deopt-diff, ic-diff,
+inlining-budget-diff), each running one driver under V8 trace flags and ending in a VERDICT line: SAME / DIFF,
+WITHIN / OVER or ZERO / NONZERO (exit 0 / 1), REPORTED (exit 0), or NO-VERDICT (exit 2). Zero runtime dependencies;
+node >= 22, bash >= 3.2. npm test: 4057 tests, 4043 pass, 0 fail, 14 skip (2026-11-12, node v26.8.2, /bin/bash 3.2.57).
+
 ### Added
 
 - b76 Phase 6 (ROADMAP "Phase 6 -- docs", D-1): the package is publish-shaped and documented. `package.json` drops
@@ -1089,6 +1096,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Release 1.0.0 (D-3 lifted, Q-B78-VERSION): package.json version 0.0.0 -> 1.0.0; the README install note and the
+  llms.txt Status no longer say unpublished; pack.test pins version 1.0.0; the README Testing line carries the b78
+  npm test counts.
 - b78 nightly triage (LEDGER #128; rulings Q-B78-ICV8, Q-B78-PACK, Q-B78-LATEST): tests and CI only, no tool change.
   The audit-g4 real-node rows expect SAME on V8 >= 14 (V8 15.6, node 27 alpha, shares the 14.x code-kind numbering)
   and the refusal below 14, with canned version rows. test/pack.test.mjs reads both `npm pack --dry-run --json`

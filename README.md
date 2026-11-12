@@ -4,6 +4,10 @@
 > caches, inlining decisions, young-GC counts -- with a fail-closed SAME / DIFF / NO-VERDICT verdict.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-utils.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-utils)
+[![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
+[![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-utils?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-utils)
+[![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-utils?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-utils)
+[![npm total downloads](https://img.shields.io/npm/dt/@zakkster/lite-utils?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-utils)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
 
 ## The V8 diff kit the ecosystem was missing
@@ -16,7 +20,7 @@ answer in its own trace output, but reading two traces by eye does not scale and
 under V8 trace flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a
 `VERDICT` line and an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
 
-Install (the package is not published yet: version 0.0.0, first release 1.0.0), three ways:
+Install (version 1.0.0), three ways:
 
 ```bash
 # 1. from the npm registry
@@ -354,8 +358,8 @@ Replace the `--max` value and the node version with values you recorded on that 
 
 ## Testing
 
-`npm test` runs 3627 tests (node:test), 3613 pass / 0 fail / 14 skip in one local run (2026-11-12,
-node v26.8.2, macOS arm64, /bin/bash 3.2.57, host quiet: load1 2.26 at start; a measurement, not a guarantee).
+`npm test` runs 4057 tests (node:test), 4043 pass / 0 fail / 14 skip in one local run (2026-11-12,
+node v26.8.2, macOS arm64, /bin/bash 3.2.57, host quiet: load1 2.46 at start; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the five roots from `src/` and `lib/`).
 

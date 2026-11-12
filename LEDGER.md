@@ -1654,20 +1654,23 @@ comment records it). Roots: ad cd026337 -> cfcaa43a, bb 409a1543 -> deeee04c, dd
 deleted.
 Evidence: `.handoff/RULINGS-b75.md`, `.handoff/RULINGS-b76.md`, `.handoff/evidence/b76-fg/`.
 
-**#127 X10 (audit 2026-11-10-cross-script): bb and ibd parse the --print-bytecode stream with two rule sets (class 3; OPEN,
-triage pending: maintainer ruling Q-B77-X10; source b77 confirmation pass part B, claude-opus-5-5).** Facts only; no
-decision is recorded here. bytecode-budget's COUNT_AWK (src/bytecode-budget.sh:279-288 now; :265-274 at 6aa2cf3, the
-finding cites 265-275) counts `<count> <bad> <lengths>` for the function name; lib/v8probe.sh BYTECODE_AWK (:23-32, the
-finding cites 23-33; the same lines at 6aa2cf3) prints the lengths, or `?` on a torn stream. MEASURED by the audit
-(BSD awk, fixtures in X10; audit/2026-11-10-cross-script/FINDINGS.md:182-188, :233): the two tear forms of the b62
-evidence, a header split by newlines and `Bytecode length: ` / `50`, are caught by both (bb: bad > 0, judge NO-VERDICT;
-ibd: `?`); a blank line between a whole header and its length is NO-VERDICT in bb (`3 2 3`) and read cleanly by ibd
-(`3,50`); bb needs the length on the very next line and refuses a trailing CR, ibd accepts both; ibd checks that the
-header is whole, bb does not (bb's adjacency rule catches the same tears). A tear inside the digits (`Bytecode length:
-5` / `0`) is the separate finding X11 (#112, DECLINED, Q-B66-X11 "Document"): both parsers read 5 with no bad count and
-no `?` (bb `2 0 3,5`, ibd `3,5`). No wrong verdict was measured for X10 (class 3: bb is stricter; both fail closed on the
-two measured tear forms). Confirmation pass, part B (.handoff/evidence/b77-confirm/B/CONFIRM-B.md, xs.rc.out,
-xs.control.out): the X10 row is RED on the RC (b77, F-G B1 + B2 tree) and RED on the control 6aa2cf3, with identical
-output. The finding's own fix text: "none required; note the two rule sets in LEDGER, or move both to one lib/ parser
-(DESIGN)". No triage record existed: RULINGS-b66-cross.md routes X10 to no question and does not list it OUT.
+**#127 X10 (audit 2026-11-10-cross-script): bb and ibd parse the --print-bytecode stream with two rule sets (class 3;
+documented (Q-B77-X10 (a)); source b77 confirmation pass part B, claude-opus-5-5).** bytecode-budget's COUNT_AWK
+(src/bytecode-budget.sh:279-288 now; :265-274 at 6aa2cf3, the finding cites 265-275) counts `<count> <bad> <lengths>`
+for the function name; lib/v8probe.sh BYTECODE_AWK (:23-32, the finding cites 23-33; the same lines at 6aa2cf3) prints
+the lengths, or `?` on a torn stream. MEASURED by the audit (BSD awk, fixtures in X10;
+audit/2026-11-10-cross-script/FINDINGS.md:182-188, :233): the two tear forms of the b62 evidence, a header split by
+newlines and `Bytecode length: ` / `50`, are caught by both (bb: bad > 0, judge NO-VERDICT; ibd: `?`); a blank line
+between a whole header and its length is NO-VERDICT in bb (`3 2 3`) and read cleanly by ibd (`3,50`); bb needs the
+length on the very next line and refuses a trailing CR, ibd accepts both; ibd checks that the header is whole, bb does
+not (bb's adjacency rule catches the same tears). A tear inside the digits (`Bytecode length: 5` / `0`) is the separate
+finding X11 (#112, DECLINED, Q-B66-X11 "Document"): both parsers read 5 with no bad count and no `?` (bb `2 0 3,5`, ibd
+`3,5`). No wrong verdict was measured for X10 (class 3: bb is stricter; both fail closed on the two measured tear
+forms). Confirmation pass, part B (.handoff/evidence/b77-confirm/B/CONFIRM-B.md, xs.rc.out, xs.control.out): the X10 row
+is RED on the RC (b77, F-G B1 + B2 tree) and RED on the control 6aa2cf3, with identical output. The finding's own fix
+text: "none required; note the two rule sets in LEDGER, or move both to one lib/ parser (DESIGN)". No triage record
+existed: RULINGS-b66-cross.md routes X10 to no question and does not list it OUT. Ruled (Q-B77-X10 (a), maintainer
+2026-11-12, RULINGS-b77.md): "Document; no code change before 1.0.0" -- a documented known difference (class 3: both
+parsers fail closed on every measured tear form; bb is stricter); no README / llms.txt bullet; one shared lib/ parser
+stays a post-1.0 candidate.
 Evidence: `audit/2026-11-10-cross-script/FINDINGS.md`, `.handoff/evidence/b77-confirm/B/`.

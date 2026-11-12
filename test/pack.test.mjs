@@ -191,7 +191,7 @@ function pkgProblems(text) {
     if (o.license !== 'MIT') p.push('license: ' + JSON.stringify(o.license));
     if (!(typeof o.author === 'string' && o.author.startsWith('Zahary Shinikchiev'))) p.push('author: ' + JSON.stringify(o.author));
     if (!(Array.isArray(o.keywords) && o.keywords.length > 0)) p.push('keywords: ' + JSON.stringify(o.keywords));
-    if (o.version !== '0.0.0') p.push('version: ' + JSON.stringify(o.version) + ' (HOLD-RELEASE D-3 keeps 0.0.0)');
+    if (o.version !== '1.0.0') p.push('version: ' + JSON.stringify(o.version) + ' (the 1.0.0 release, Q-B78-VERSION)');
     return p;
 }
 // bytes > 0x7F other than U+00D7 (C3 97) / U+00B5 (C2 B5), one finding per UTF-8 sequence; and tool-call tag substrings

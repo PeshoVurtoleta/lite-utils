@@ -9,8 +9,7 @@ output. This is not a JS library: there is no import, no JS API.
 
 ## Status
 
-Unreleased. Version 0.0.0; the first release will be 1.0.0. Nothing here is
-available from npm yet.
+Version 1.0.0 (2026-11-12), the first release, on npm as @zakkster/lite-utils.
 
 Install (instructions; pick one):
 
