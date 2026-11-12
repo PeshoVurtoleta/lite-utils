@@ -31,7 +31,7 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117-#119, #121)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117-#119, #121, #126)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -1525,6 +1525,10 @@ directory name works the same way (ARGUED, same lines). The report is not writte
 `stage_check`) or is 0 bytes (ibd: ARGUED from lib/common.sh `die`). Optional post-1.0 code fix, UNVERIFIED beyond the
 12 refusal rows: `die` replaces a newline or CR in its text with `?` (two lines in lib/common.sh; all five roots
 change); no self-test or test file was run on that copy, and any test pinning a multi-line refusal would need a look.
+Same class, b77 (Q-B76-FGPATH (a)): the --node refusals print `$NODE_RES`; when it came from a PATH lookup (`command -v`),
+a CR in a PATH directory name reaches `node binary is not an executable file: <dir>/node` (MEASURED by probe P6 on all
+five roots at 861f3d3, `.handoff/evidence/b76-fg/P6.txt`; an executable node in such a directory is already refused by
+`--node (resolved)`). Not changed by F-G (#126): a resolved name, not a raw argv value.
 Evidence: `audit/2026-11-11-final/fable/cross/CROSSCHECK.md` "lib-cross-fable-2" (local), `.handoff/RULINGS-final-review.md`.
 
 **#123 ibd-fable-2 = IBD-opus-b-3: the null-control NOTE ignores a differing Watch.js (class 2, triaged DOCUMENT).**
@@ -1563,10 +1567,10 @@ coder (Q-B75-FFBBSTAGE) added bb ref / file mode's stage_check. Each root now nl
 (ad, bb, dd, ic) and the raw --out (all five) before the first refusal that echoes them; gate
 test/ref-cr-refuse.test.mjs ROW 12 / 13. Lesson: the r1 reviewer's `${POS[0]}`-only mutant survived because every
 DRIVER row put the CR in the BEFORE positional -- a check over a list needs a row per list position. Non-path raw
-echoes stay open: #126.
+echoes were closed by #126 (b77 F-G).
 Evidence: #121 (e), `.handoff/RULINGS-b74.md`, `.handoff/RULINGS-b75.md`.
 
-**#126 Non-path refusals echo a raw argv value with its CR (class 3; OPEN, ruled b75 Q-B75-NONPATH: unit F-G; source b75
+**#126 Non-path refusals echo a raw argv value with its CR (class 3; FIXED b77 F-G, ruled b75 Q-B75-NONPATH: unit F-G; source b75
 F-F coder's sweep, claude-opus-5-5).** After F-F the raw DRIVER and --out values are refused before they are printed, but some
 refusals still print a raw argv value that is not a path: `unknown option $a` (all five roots), a --fn entry that fails FN_RE
 (`got '$t'`: bb, dd, ic, ibd), `--v8-flags ... got '$f'` (all five), `--runs ... got '$RUNS'`, bb `--max` (`'$e'` /
@@ -1578,5 +1582,60 @@ spawns, so not 0 spawns), the --node path echoes `node binary is not an executab
 on PATH ...: $NODE_BIN -> $NODE_RES` and `node binary: cannot resolve the directory of $NODE_RES`, and dd `--fixtures:
 not a readable directory: $FIXTURES`; ibd's --fn check is an inline regex, not FN_RE. Mirror: #122
 (lib-cross-fable-2), #125.
-Until F-G lands it is a README.md / llms.txt Known-limits bullet (b76 Phase 6).
-Evidence: `.handoff/RULINGS-b75.md`.
+FIXED 2026-11-12 (b77 F-G, commit 747d995; rulings Q-B75-NONPATH, Q-B76-FGPATH (a), Q-B76-FGV8R (a)): the planner's
+site table found ten sites, all cold and, except S5, before the first spawn: S1 `unknown option $a` (all five roots); S2
+a --fn entry that fails FN_RE (bb, dd, ic; ibd's inline regex); S3 `--runs ... got '$RUNS'`; S4 `--v8-flags ... got
+'$f'`, the deny arms and, not in #126, bb / ibd `$f needs =N` / `needs =X`; S5 lib/v8flags.sh `must not set $f`, which
+ran after the --version / --v8-options spawns and is now covered by the S4 line before them; S6 bb `--max` (`'$e'` /
+`'$n'`); S7 bb `--node-version`; S8 the --node echoes (`node binary not found`, `not an executable file`, `cannot
+resolve the directory of`; the value also comes from `$NODE`); S9 `--fixtures: not a readable directory` (dd, bb); S10
+ibd `unknown tier` (`--tiers`; not in #126). Mechanism: each root gets one block of fork-free `nl_refuse "<option>"
+"$VALUE"` calls, one line per raw value, right after its existing newline line (so every existing newline refusal keeps
+its text), plus one new parse-loop case arm that refuses an option name holding a newline or a CR (`-*` on ad, bb, dd,
+ic; `--*` on ibd, which reads a single-dash argument as a DRIVER, refused by its G-X6 `DRIVER (resolved)` line,
+ref-cr-refuse ROW 10). Text: `<tool>: <option>: a newline or a CR is not allowed (it would forge report lines)`,
+`VERDICT NO-VERDICT`, exit 2, 0 spawns; the label names the option, never the value. No new spawn, subshell or write;
+self-test counts unchanged. Gate: test/nonpath-cr-refuse.test.mjs, 395 tests = 93 refusal rows + 93 old twins on 861f3d3
+(each fails there; all but the 5 V6 twins also show the raw CR / LF echo) + 83 controls + 5 budget rows + 54 mutants and
+54 revert checks + 10 self-test count rows (5 tools x live / 861f3d3) + 3 census / retention rows (M1 arm dropped 5, M2
+each line dropped 24, M3 block moved above NODE_RES 5, M4 first entry only 11, M5 arm newline-only 5, M6 arm narrowed to
+`--*` 4), each mutant with a revert check; also audit-x6 ROW 5 / 5p and ext-audit N11 / N28 / N28p / MD38n. Lesson of
+#125 applied: a check over a list needs a row per list position, and the first-entry-only mutants (M4) are the teeth
+(--fn `add,x<CR>`, --v8-flags position 2, --max `add=1,b<CR>=1`, --tiers `turbo,<CR>maglev`). Review: B2 + B3 r1
+REJECTED (test-only: no row put a CR in a SINGLE-dash option name, so a mutant narrowing the arm to `--*` survived;
+fixed by row U4 and mutants M6), r2 APPROVED. Also closed: a report-head forge (Q-B76-FGV8R (a)): probe P5
+(.handoff/evidence/b76-fg/P5.txt, real node v26.8.2) showed that `--v8-flags $'--stack-size=100\rx'` passed the shape
+check, the deny arms and the allowlist on 861f3d3 and was written with the raw CR into the report head `v8 flags` line
+of all five tools (node then refused it, rc 2); the new `--v8-flags` line refuses it first. Q-B76-FGPATH (a): a CR in a
+PATH DIRECTORY name still reaches the `node binary is not an executable file: <dir>/node` refusal (P6,
+.handoff/evidence/b76-fg/P6.txt: all five tools, a non-executable node in `p<CR>/` on PATH; an executable one is already
+refused by `--node (resolved)`), because that name is resolved by a PATH lookup, not typed: no code change, documented
+under #122 (README / llms.txt Known limits: "a name that git, readlink or a PATH lookup resolved"). CHANGED text: a CR
+in a raw `--node` path (or `$NODE`) now says `--node:` (was `--node (resolved):`), and so does a newline on bb (was
+`node binary: a newline is not allowed in the resolved path`, or a raw echo); the other tools' newline texts are
+unchanged; `--node (resolved)` stays for a PATH-lookup name (audit-x6 ROW 5p, ext-audit N28p); a newline in --runs says
+`--runs:`. B2 finding F1: bb's N11 `-ef` check (a PATH directory ending in a newline plus the same name without it) is
+now reachable only that way, since a raw --node or $NODE is refused first; ext-audit N9 keeps the check statically (a
+comment records it). Roots: ad cd026337 -> cfcaa43a, bb 409a1543 -> deeee04c, dd a6c13350 -> 95e12a28, ic d85d8b0e ->
+15316298, ibd fe8919f5 -> 7a5cf99b; lib unchanged. npm test: 4034 tests, 4020 pass, 0 fail, 14 skip, rc 0, 1687 s
+(.handoff/evidence/b77-npm/NPMTEST-fg.*). Tier: DETERMINISTIC. The README / llms.txt Known-limits bullet for #126 is
+deleted.
+Evidence: `.handoff/RULINGS-b75.md`, `.handoff/RULINGS-b76.md`, `.handoff/evidence/b76-fg/`.
+
+**#127 X10 (audit 2026-11-10-cross-script): bb and ibd parse the --print-bytecode stream with two rule sets (class 3; OPEN,
+triage pending: maintainer ruling Q-B77-X10; source b77 confirmation pass part B, claude-opus-5-5).** Facts only; no
+decision is recorded here. bytecode-budget's COUNT_AWK (src/bytecode-budget.sh:279-288 now; :265-274 at 6aa2cf3, the
+finding cites 265-275) counts `<count> <bad> <lengths>` for the function name; lib/v8probe.sh BYTECODE_AWK (:23-32, the
+finding cites 23-33; the same lines at 6aa2cf3) prints the lengths, or `?` on a torn stream. MEASURED by the audit
+(BSD awk, fixtures in X10; audit/2026-11-10-cross-script/FINDINGS.md:182-188, :233): the two tear forms of the b62
+evidence, a header split by newlines and `Bytecode length: ` / `50`, are caught by both (bb: bad > 0, judge NO-VERDICT;
+ibd: `?`); a blank line between a whole header and its length is NO-VERDICT in bb (`3 2 3`) and read cleanly by ibd
+(`3,50`); bb needs the length on the very next line and refuses a trailing CR, ibd accepts both; ibd checks that the
+header is whole, bb does not (bb's adjacency rule catches the same tears). A tear inside the digits (`Bytecode length:
+5` / `0`) is the separate finding X11 (#112, DECLINED, Q-B66-X11 "Document"): both parsers read 5 with no bad count and
+no `?` (bb `2 0 3,5`, ibd `3,5`). No wrong verdict was measured for X10 (class 3: bb is stricter; both fail closed on the
+two measured tear forms). Confirmation pass, part B (.handoff/evidence/b77-confirm/B/CONFIRM-B.md, xs.rc.out,
+xs.control.out): the X10 row is RED on the RC (b77, F-G B1 + B2 tree) and RED on the control 6aa2cf3, with identical
+output. The finding's own fix text: "none required; note the two rule sets in LEDGER, or move both to one lib/ parser
+(DESIGN)". No triage record existed: RULINGS-b66-cross.md routes X10 to no question and does not list it OUT.
+Evidence: `audit/2026-11-10-cross-script/FINDINGS.md`, `.handoff/evidence/b77-confirm/B/`.

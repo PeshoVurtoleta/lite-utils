@@ -367,15 +367,12 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
 
 - an inherited SHELLOPTS=noexec runs nothing and exits 0; callers must require the VERDICT line, not only the exit code
   (class 2; LEDGER #124).
-- Some refusals of a non-path option value (an unknown option, a bad `--fn` / `--v8-flags` / `--runs` / `--max` /
-  `--node-version` value, a node binary that is not found) print that raw value, so a CR or newline in it reaches
-  stderr; exit 2, no verdict change (LEDGER #126).
 - The `--v8-flags` allowlist checks a numeric value's FORM only: `--max-inlined-bytecode-size=NaN` passes, node
   then exits non-zero on every run and the tool ends `NO-VERDICT` (LEDGER #66).
 - `ic-diff` ends `NO-VERDICT` on node 22 and 24, by design (LEDGER #83).
-- A refusal can print a name that git or readlink resolved; a newline or CR in such a name, behind a symlink with a
-  clean name, reaches stderr inside that one refusal (exit 2; the last line is still `VERDICT NO-VERDICT`)
-  (LEDGER #122).
+- A refusal can print a name that git, readlink or a PATH lookup resolved; a newline or CR in such a name, behind a
+  symlink with a clean name (or in a PATH directory), reaches stderr inside that one refusal (exit 2; the last line is
+  still `VERDICT NO-VERDICT`) (LEDGER #122).
 - `NODE_NO_WARNINGS` is not stripped by `allocation-diff`; a warning-heavy driver can shift the GC count (LEDGER #84).
 - `inlining-budget-diff` leaves its `--out` directory behind after a refusal, and a rerun on a non-empty one is refused:
   use a fresh `--out` (LEDGER #76, #80).

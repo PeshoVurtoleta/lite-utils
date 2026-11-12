@@ -191,14 +191,11 @@ Each bullet names its LEDGER id.
 
 - an inherited SHELLOPTS=noexec runs nothing and exits 0; callers must require the VERDICT line, not only the exit code
   (#124)
-- #126: some refusals of a non-path option value (an unknown option, a bad --fn / --v8-flags / --runs / --max /
-  --node-version value, a node binary that is not found) print that raw value, so a CR or newline in it reaches stderr;
-  exit 2, no verdict change.
 - #66: `--v8-flags` numeric values are checked for FORM only; a value such as `=NaN` passes the check, node then fails,
   and the tool ends NO-VERDICT.
 - #83: ic-diff on node 22 and 24 ends NO-VERDICT; a NO-VERDICT, never a wrong verdict.
-- #122: a refusal may print a name that git or readlink resolved; a CR or newline in it (behind a symlink with a clean
-  name) reaches stderr inside that refusal; exit 2.
+- #122: a refusal may print a name that git, readlink or a PATH lookup resolved; a CR or newline in it (behind a
+  symlink with a clean name, or in a PATH directory) reaches stderr inside that refusal; exit 2.
 - #84: allocation-diff does not strip NODE_NO_WARNINGS (it strips four other names); it can move the GC count.
 - #76 (1), #80: inlining-budget-diff leaves its `--out` contents behind after some refusals; a rerun needs a fresh
   `--out`.

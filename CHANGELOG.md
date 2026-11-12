@@ -1113,6 +1113,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b77 F-G: allocation-diff (ad), bytecode-budget (bb), deopt-diff (dd), ic-diff and inlining-budget-diff (ibd) refuse a
+  newline or a CR in the raw `--fn`, `--runs`, `--v8-flags` and `--node` values (bb also `--max`, `--node-version` and
+  `--fixtures`; dd `--fixtures`; ibd `--tiers`) and in an unknown option NAME, before any refusal prints them (LEDGER
+  #126; rulings Q-B75-NONPATH, Q-B76-FGPATH (a), Q-B76-FGV8R (a); commit 747d995). Before, these refusals echoed the
+  raw value, so a CR reached stderr (exit 2, no verdict change; 0 spawns except the lib/v8flags.sh allowlist refusal,
+  which ran after the `--version` / `--v8-options` spawns). Now it is `<tool>: <option>: a newline or a CR is not
+  allowed (it would forge report lines)`, then `VERDICT NO-VERDICT`, exit 2, 0 spawns; the label names the option, never
+  the value. Also closed: a CR in an int-typed `--v8-flags` value (e.g. `--stack-size=100<CR>x`) passed the shape check,
+  the deny arms and the allowlist and was written into the report head `v8 flags` line (a report-line forge, G-X6 class)
+  before node refused it; it is now refused before that line is printed and before the `--version` / `--v8-options`
+  spawns (probe P5, all five tools; Q-B76-FGV8R (a)). The existing newline refusal texts are unchanged. CHANGED text: a
+  CR in a raw `--node` path (or `$NODE`) now says `--node:` (was `--node (resolved):`), and so does a newline on bb (was
+  `node binary: a newline is not allowed in the resolved path`, or a raw echo); the other tools' newline texts are
+  unchanged. A newline in `--runs` says `--runs:`; `--node (resolved)` stays for a name a PATH lookup found. A CR in a
+  PATH directory name still reaches the `not an executable file` refusal (a resolved name, documented under LEDGER #122,
+  no code change; Q-B76-FGPATH (a)). `-h` sentences updated. Tier: DETERMINISTIC. Gated in
+  `test/nonpath-cr-refuse.test.mjs` (395 tests = 93 refusal rows + 93 old twins on 861f3d3 (each fails there; all but
+  the 5 V6 twins also show the raw CR / LF echo) + 83 controls + 5 budget rows + 54 mutants and 54 revert checks + 10
+  self-test count rows (5 tools x live / 861f3d3) + 3 census / retention rows) and the new rows `audit-x6` ROW 5p and
+  `ext-audit` N28p; the N5, N11, N28, MD38n and A3 rows carry the new texts. Roots: ad cd026337 -> cfcaa43a, bb 409a1543
+  -> deeee04c, dd a6c13350 -> 95e12a28, ic d85d8b0e -> 15316298, ibd fe8919f5 -> 7a5cf99b (the A4 pin); lib unchanged.
+  npm test: 4034 tests, 4020 pass, 0 fail, 14 skip, rc 0, 1687 s (private copy with .git, /bin/bash 3.2.57, node
+  v26.8.2, quiet lock).
 - b75 F-F: allocation-diff (ad), bytecode-budget (bb), deopt-diff (dd) and ic-diff refuse a newline or a CR in a raw
   DRIVER positional, and ad, bb, dd, ic-diff and inlining-budget-diff (ibd) in the raw `--out` value, before any refusal
   prints them (finding fe-rev-1, LEDGER #125; rulings Q-B74-FERAW, Q-B75-FFSCOPE, Q-B75-FFBBSTAGE; commit 145c4bf).
