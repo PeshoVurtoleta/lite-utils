@@ -13,8 +13,11 @@
 //   ROW 4  addendum A1: --out new/../slsub/../p (new absent, slsub -> dir/sub): rc 2, 0 spawns, label `--out (resolved)`, no p created; old twin;
 //          control A1c `--out new/../sl/x` (sl -> dir) is in ROW 3: clean
 //   ROW 5  addendum A2 / A4 (d): the fake node at `<case>/n<CR>x/node`, `--node <that absolute path>`, clean private cwd, --out . : all 5 tools,
-//          rc 2, 0 spawns, 0 stdout bytes, stderr EXACTLY `<tool>: --node (resolved): a newline or a CR is not allowed (it would forge report
-//          lines)\nVERDICT NO-VERDICT\n`, nothing forged; OLD twin per tool (the dc4a10c root fails the same oracle)
+//          rc 2, 0 spawns, 0 stdout bytes, stderr EXACTLY `<tool>: --node: a newline or a CR is not allowed (it would forge report
+//          lines)\nVERDICT NO-VERDICT\n` (label `--node` since F-G, b77, ruling Q-B75-NONPATH: the raw --node value is refused
+//          before it resolves), nothing forged; OLD twin per tool (the dc4a10c root fails the same oracle)
+//   ROW 5p F-G (b77): the ROW 5 fake found by a PATH lookup (no --node, PATH = its dir first): the same oracle with the label
+//          `--node (resolved)` (the resolved-path refusal a raw --node value can no longer reach); OLD twin per tool
 //   ROW 6  retention: the mkdtemp top is removed in after() (asserted there); the live `git status --porcelain` `??` set is unchanged
 //   ROW 7  T7 (census: HEAD dc4a10c forges on all 5 tools): the DRIVER arg(s) `slsub/../q/<f>.js` (slsub -> <NL dir>/sub, q only under the
 //          NL dir, so the physical path runs through the dir `q<NL>VERDICT SAME<NL>z`), x LF / CR: rc 2, 0 spawns, 0 stdout bytes, stderr
@@ -275,8 +278,9 @@ test('ROW 9 control inlining-budget-diff: clean --before / --after dirs of the s
     assert.ok(c.spawns() >= 1, `0 fake-node spawns: the run never got past its checks\n${msg(r)}`);
 });
 
-// ROW 5 (A4 (d)): a CR in the --node path, 5 tools, live + OLD twins
-KINDS2.N5 = { sep: CR, label: '--node (resolved)', cwd: (c) => c.cwd, made: () => [], reports: (c) => [join(c.cwd, 'report.txt')] };
+// ROW 5 (A4 (d)): a CR in the --node path, 5 tools, live + OLD twins. Label `--node` since F-G (b77, ruling Q-B75-NONPATH):
+// the raw --node value is refused before it resolves (ROW 5p keeps the `--node (resolved)` refusal live)
+KINDS2.N5 = { sep: CR, label: '--node', cwd: (c) => c.cwd, made: () => [], reports: (c) => [join(c.cwd, 'report.txt')] };
 function mkCase5() {
     const c = mkCase(LF);
     const nd = join(c.dir, `n${CR}VERDICT SAME${CR}x`);
@@ -295,6 +299,23 @@ for (const tool of NAMES) {
         const c = mkCase5();
         const r = run(oldRoot(tool), tool, c, c.cwd, '.');
         assert.ok(problems(r, c, tool, 'N5').length > 0, `old root already meets the row (the row has no teeth)\n${msg(r)}`);
+    });
+}
+// ROW 5p (F-G, b77): the ROW 5 fake reached by a PATH lookup, no --node: the raw --node check sees only the name `node`, so
+// the CR reaches the resolved-path refusal (`nl_refuse "--node (resolved)"`), which a raw --node value can no longer reach
+KINDS2.N5p = { sep: CR, label: '--node (resolved)', cwd: (c) => c.cwd, made: () => [], reports: (c) => [join(c.cwd, 'report.txt')] };
+const run5p = (root, tool, c) => spawn(BASH, [root, '--out', '.', ...TOOLS[tool](c.d)],
+    { cwd: c.cwd, env: cleanEnv({ PWD: c.cwd, PATH: `${dirname(c.node)}:/usr/bin:/bin` }) }, `${tool} N5p PATH lookup`, 90000);
+for (const tool of NAMES) {
+    test(`ROW 5p N5p ${tool}: the node found on PATH in a dir with a CR: rc 2, 0 spawns, 0 stdout bytes, exact --node (resolved) die line + VERDICT NO-VERDICT, nothing forged`, { skip }, () => {
+        const c = mkCase5();
+        const r = run5p(LIVE(tool), tool, c);
+        assert.deepEqual(problems(r, c, tool, 'N5p'), [], msg(r));
+    });
+    test(`ROW 5p OLD twin N5p ${tool}: the ${OLD_SHA} root fails the row`, { skip: OLDSKIP }, () => {
+        const c = mkCase5();
+        const r = run5p(oldRoot(tool), tool, c);
+        assert.ok(problems(r, c, tool, 'N5p').length > 0, `old root already meets the row (the row has no teeth)\n${msg(r)}`);
     });
 }
 

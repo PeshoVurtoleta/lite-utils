@@ -81,8 +81,9 @@
 #                      is one more "FAIL fixture <driver>.txt: missing or not a readable file" line (exit 1), and
 #                      the rows reading it get empty text, so some of them fail too.
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --node / --fixtures take no newline,
-#   --out and the DRIVER paths no newline or CR, and --fn no empty entry (stray comma). --self-test with any other
+#   Each value option is given at most once and never empty; --fn / --runs / --v8-flags / --node / --fixtures and an
+#   option name take no newline or CR, --out and the DRIVER paths no newline or CR, and --fn no empty entry (stray
+#   comma). --self-test with any other
 #   value option or a positional argument exits "--self-test takes only --fixtures DIR"; --fixtures without
 #   --self-test exits "--fixtures goes
 #   with --self-test"; DIR with a newline exits "--fixtures: a newline is not allowed", and DIR that is not a
@@ -1270,6 +1271,7 @@ while [[ $# -gt 0 ]]; do
         --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;; --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
         --module) MODULE="$v" ;; --driver) DRIVER="$v" ;; --repo) REPO="$v" ;;
       esac ;;
+    -*$'\n'*|-*$'\r'*) nl_refuse "unknown option" "$a" ;;   # G-X6 (ruling Q-B75-NONPATH): never echo the option name
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
   esac
@@ -1280,6 +1282,7 @@ if [[ $SELFTEST == 1 ]]; then
   [[ ( -z "${GOTOPT// /}" || "$GOTOPT" == "  --fixtures " ) && ${#POS[@]} -eq 0 ]] || die "--self-test takes only --fixtures DIR"
   if [[ -n "$FIXTURES" ]]; then
     [[ "$FIXTURES" != *$'\n'* ]] || die "--fixtures: a newline is not allowed"
+    nl_refuse "--fixtures" "$FIXTURES"   # G-X6 (ruling Q-B75-NONPATH): a CR in the raw --fixtures value, before the refusal below prints it
     [[ -d "$FIXTURES" && -r "$FIXTURES" && -x "$FIXTURES" ]] || die "--fixtures: not a readable directory: $FIXTURES"
   fi
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
@@ -1288,6 +1291,11 @@ fi
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 1 || -z "$DRIVER$MODULE$REPO" ]] || die "--driver / --module / --repo go only with --before-ref/--after-ref or --before/--after"
 [[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--fn / --v8-flags / --out / --node: a newline is not allowed"
+# G-X6 (ruling Q-B75-NONPATH): the raw non-path values, before any refusal prints them (a CR in each; a newline in --runs)
+nl_refuse "--fn" "$FNLIST"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "--node" "$NODE_BIN"
 [[ -n "$FNLIST" ]] || die "need --fn LIST (see --help)"
 [[ "$FNLIST" != ,* && "$FNLIST" != *, && "$FNLIST" != *,,* ]] || die "--fn: empty entry (stray comma)"
 IFS=, read -r -a TARGETS <<<"$FNLIST"

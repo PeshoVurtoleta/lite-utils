@@ -90,8 +90,9 @@
 #   --fixtures DIR         with --self-test: also check the real-trace captures in DIR (the node-26.8.2 set)
 #   -h, --help             this text (exit 2)
 #   Each value option is given at most once (one comma list) and never empty (--v8-flags never only blanks);
-#   --fn / --max / --v8-flags take no newline, --out and each DRIVER path no newline or CR (nor the cwd they resolve
-#   against), and --fn / --max no empty entry (stray comma). --self-test takes only --fixtures. --self-test / --help
+#   --fn / --max / --node-version / --runs / --v8-flags / --node / --fixtures and an option name take no newline or
+#   CR, --out and each DRIVER path no newline or CR (nor the cwd they resolve against), and --fn / --max no empty
+#   entry (stray comma). --self-test takes only --fixtures. --self-test / --help
 #   take no =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
@@ -1231,6 +1232,7 @@ while [[ $# -gt 0 ]]; do
         --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;; --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
         --module) MODULE="$v" ;; --driver) DRIVER="$v" ;; --repo) REPO="$v" ;;
       esac ;;
+    -*$'\n'*|-*$'\r'*) nl_refuse "unknown option" "$a" ;;   # G-X6 (ruling Q-B75-NONPATH): never echo the option name
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
   esac
@@ -1240,12 +1242,21 @@ done
 if [[ $SELFTEST == 1 ]]; then
   g="${GOTOPT// --fixtures /}"
   [[ -z "${g// /}" && ${#POS[@]} -eq 0 ]] || die "--self-test takes only --fixtures DIR"
+  nl_refuse "--fixtures" "$FIXTURES"   # G-X6 (ruling Q-B75-NONPATH): the raw --fixtures value, before the refusal below prints it
   if [[ -n "$FIXTURES" ]]; then [[ -d "$FIXTURES" && -r "$FIXTURES" && -x "$FIXTURES" ]] || die "--fixtures: not a readable directory: $FIXTURES"; fi
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
 [[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 [[ "$FNLIST$MAXLIST$V8FLAGS" != *$'\n'* ]] || die "--fn / --max / --v8-flags: a newline is not allowed"
 for p in ${POS[@]+"${POS[@]}"} "$OUT"; do [[ "$p" != *$'\n'* ]] || die "DRIVER / --out: a newline is not allowed (it would forge report lines)"; done
+# G-X6 (ruling Q-B75-NONPATH): the raw non-path values, before any refusal prints them (a CR in each; a newline in
+# --node-version, --runs and --node)
+nl_refuse "--fn" "$FNLIST"
+nl_refuse "--max" "$MAXLIST"
+nl_refuse "--node-version" "$WANT_VER"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "--node" "$NODE_BIN"
 [[ $DIFFMODE == 0 || -z "$MAXLIST" ]] || die "--diff and --max are exclusive: --diff compares two DRIVERs with --fn LIST, --max gates one"
 if [[ -n "$BEFORE_REF$AFTER_REF$BEFORE_FILE$AFTER_FILE" ]]; then STAGED=1; fi
 [[ $STAGED == 0 || $DIFFMODE == 1 ]] || die "--before-ref/--after-ref and --before/--after need --diff (ref and file modes are diff modes)"

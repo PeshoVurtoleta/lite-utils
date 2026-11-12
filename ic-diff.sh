@@ -52,8 +52,9 @@
 #                      "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0) or
 #                      "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --node take no newline, --out
-#   no newline or CR, and --fn no empty entry (stray comma). --self-test takes no other argument. --self-test /
+#   Each value option is given at most once and never empty; --fn / --runs / --v8-flags / --node and an option name
+#   take no newline or CR, --out no newline or CR, and --fn no empty entry (stray comma). --self-test takes no other
+#   argument. --self-test /
 #   --help take no =value. An
 #   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write, but the
 #   --v8-flags allowlist: it exits 2 after the --version and the first --v8-options spawn, still before any disk write.
@@ -1031,6 +1032,7 @@ while [[ $# -gt 0 ]]; do
       case "$a" in
         --fn) FNLIST="$v" ;; --runs) RUNS="$v" ;; --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;;
       esac ;;
+    -*$'\n'*|-*$'\r'*) nl_refuse "unknown option" "$a" ;;   # G-X6 (ruling Q-B75-NONPATH): never echo the option name
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
   esac
@@ -1042,6 +1044,11 @@ if [[ $SELFTEST == 1 ]]; then
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
 [[ "$FNLIST$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--fn / --v8-flags / --out / --node: a newline is not allowed"
+# G-X6 (ruling Q-B75-NONPATH): the raw non-path values, before any refusal prints them (a CR in each; a newline in --runs)
+nl_refuse "--fn" "$FNLIST"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "--node" "$NODE_BIN"
 [[ -n "$FNLIST" ]] || die "need --fn LIST (see --help)"
 [[ "$FNLIST" != ,* && "$FNLIST" != *, && "$FNLIST" != *,,* ]] || die "--fn: empty entry (stray comma)"
 IFS=, read -r -a TARGETS <<<"$FNLIST"

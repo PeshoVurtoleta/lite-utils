@@ -5,7 +5,7 @@
 // (fake nodes written into a per-row temp dir; no V8 spawn, except the two --self-test rows which use the script's
 // own canned checks). Every row has its own mkdtemp sandbox, removed afterwards.
 // Root: EXT_AUDIT_ROOT, else the repo root (this file lives in test/). Tools: <root>/bytecode-budget.sh,
-// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests; + MD-46 G2 rung 1 (dd: MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15-blob / F15-build / F15-ossl / V8-ok / RETv8) = 210 tests; + MD-46 G3 rung 2 (bb: the same flip and the same 5 new rows, V8-ok / RETv8 keyed per tool) = 215 tests; + MD-46 G4 rung 3 (ic: N15 8 -> 9, MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15a / F15b / F15c, 4 V8R, V8OK, V8RET = 9 new rows) = 224 tests.
+// <root>/deopt-diff.sh and <root>/ic-diff.sh. Rows: A1 = 72 (bb 35, dd 37) + 1 retention row per tool (A4) = 74 tests; + gA2 N20-N33 (28 rows, 14 per tool) = 102 tests; + A8 N34-N36 (6 rows, 3 per tool; bb rows are controls) = 108 tests; + A9 N37 (2 rows; dd red until gA2 B4 r2) = 110 tests; + gB B-ic B3 (the ic block at the end of this file, 44 rows: 32 red on the frozen ic (plain red), 12 controls) = 154 tests; + gB B-four dd B3 (14 dd-only rows after N37: MD36a/b/n, MD37a/c, MD38, ENV, MOD(-r/-ok), EVAL(-ep/-ok), RET) = 168 tests; + gB B-four bb B3 (the same 14 rows for bb, plus MD38n for both tools = 16 rows) = 184 tests; + gB B-four ic B3 (ic block 44 -> 65: F2 re-pinned as N29, +7 walk rows, +13 class rows, +1 RET) = 205 tests; + MD-46 G2 rung 1 (dd: MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15-blob / F15-build / F15-ossl / V8-ok / RETv8) = 210 tests; + MD-46 G3 rung 2 (bb: the same flip and the same 5 new rows, V8-ok / RETv8 keyed per tool) = 215 tests; + MD-46 G4 rung 3 (ic: N15 8 -> 9, MOD-ok / EVAL-ok -> MD51-MOD / MD51-EVAL, + F15a / F15b / F15c, 4 V8R, V8OK, V8RET = 9 new rows) = 224 tests; + F-G (b77) N28p (the N28 cd through a PATH lookup, 1 row per tool): 228 tests as counted by node --test at b77.
 // A8 rows N34-N36 (dd walk guards "!= .", "-x", "-d"; their mutants survived the first 52 dd rows): dd N34 hangs on a mutant without "!= ." (the 10 s cap = red, by name: "dd N34 run timed out after 10000 ms"); N34 / N35 skip at euid 0 (modes ignored), N36 runs everywhere.
 // B4 PROMOTION: this file is the promotion of the reviewed oracle .handoff/evidence/ext-audit/b3/ext-audit.test.mjs (sha256/8
 // 2bf8d3fe) plus the B1e review FILLERS (bb N19a exact line, bare block removed, N19c ref-mode rows). EXT_AUDIT_ROOT still overrides the root.
@@ -384,8 +384,11 @@ for (const T of TOOLS) {
     });
 
     // N11: --node whose last char is a newline (real entry "node\n" = fake A beside "node" = fake B). $(basename) strips the
-    // newline, so without the -ef check B would run. bb: "node binary is not an executable file" once; dd refuses a newline
-    // in --node earlier ("a newline is not allowed"). Either way exit 2 and 0 spawns from either fake.
+    // newline, so without the -ef check B would run. dd refuses a newline in --node early ("a newline is not allowed"); bb
+    // too since F-G (b77, ruling Q-B75-NONPATH: "--node: a newline or a CR is not allowed (it would forge report lines)";
+    // before, "node binary is not an executable file" once). Either way exit 2 and 0 spawns from either fake.
+    // Since F-G the -ef check (bytecode-budget.sh ~:1351) is reachable only through a PATH directory whose name ends in a
+    // newline while the same name without the newline also exists: a raw --node or $NODE is refused first.
     test(`${k} N11 --node "nl/node<newline>": exit 2, one refusal line, 0 spawns from either fake`, { skip }, () => {
         const R = rig(T);
         try {
@@ -393,7 +396,7 @@ for (const T of TOOLS) {
             mkNode(join(R.cwd, 'nl', 'node'), 'B', R.log, T);
             const r = run(T.script, ['--fn', 'add', '--node', 'nl/node\n', ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
             assert.equal(r.status, 2, r.out);
-            const want = T.dd ? 'a newline is not allowed' : 'node binary is not an executable file';
+            const want = T.dd ? 'a newline is not allowed' : `${P} --node: a newline or a CR is not allowed (it would forge report lines)`;
             assert.equal(r.lines.filter((l) => l.includes(want)).length, 1, `exactly one "${want}" line\n${r.out}`);
             assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
         } finally { rmAll(R.S); }
@@ -699,17 +702,34 @@ for (const T of TOOLS) {
         } finally { rmAll(R.S); }
     });
 
-    // N28 [bb mutant: drop `2>/dev/null` on the node-dir cd; dd: control, it refuses a newline in --node earlier]: the real fake
-    // sits in <S>/"nl<newline>"/node; $(dirname) strips the newline, so the cd names <S>/nl, which does not exist.
-    test(`${k} N28${T.dd ? ' (control)' : ''} --node "<S>/nl<newline>/node": exit 2, one ${T.dd ? '"a newline is not allowed"' : '"cannot resolve the directory of"'} line, no raw "cd:" line, 0 spawns`, { skip }, () => {
+    // N28 (control): the real fake sits in <S>/"nl<newline>"/node, given as --node. dd refuses a newline in --node early; bb
+    // too since F-G (b77, ruling Q-B75-NONPATH; before, its $(dirname) stripped the newline and the cd named <S>/nl: the bb mutant
+    // `drop 2>/dev/null on the node-dir cd` is now N28p's, through a PATH lookup).
+    test(`${k} N28 (control) --node "<S>/nl<newline>/node": exit 2, one ${T.dd ? '"a newline is not allowed"' : '"--node: a newline or a CR is not allowed"'} line, no raw "cd:" line, 0 spawns`, { skip }, () => {
         const R = rig(T);
         try {
             const nd = `${R.S}/nl\n/node`;
             mkNode(nd, 'nl', R.log, T);
             const r = run(T.script, ['--fn', 'add', '--node', nd, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
             assert.equal(r.status, 2, r.out);
-            const want = T.dd ? 'a newline is not allowed' : 'cannot resolve the directory of';
+            const want = T.dd ? 'a newline is not allowed' : '--node: a newline or a CR is not allowed (it would forge report lines)';
             assert.equal(r.lines.filter((l) => l.startsWith(P) && l.includes(want)).length, 1, `exactly one "${want}" line\n${r.out}`);
+            assert.equal(r.lines.filter((l) => /(^|[ :])cd: /.test(l)).length, 0, `no raw "cd:" line\n${r.out}`);
+            assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
+        } finally { rmAll(R.S); }
+    });
+    // N28p (F-G, b77) [mutant, bb and dd: drop `2>/dev/null` on the node-dir cd]: N28 through a PATH lookup, no --node / NODE
+    // (a raw --node value can no longer reach the cd). PATH = "<S>/nl<newline>" first, so `command -v node` names
+    // <S>/nl<newline>/node; $(dirname) strips the newline, so the cd names <S>/nl, which does not exist.
+    test(`${k} N28p PATH entry "<S>/nl<newline>" holds the node: exit 2, one "cannot resolve the directory of" line, no raw "cd:" line, 0 spawns`, { skip }, () => {
+        const R = rig(T);
+        try {
+            mkNode(`${R.S}/nl\n/node`, 'nl', R.log, T);
+            const env = baseEnv({ PATH: `${R.S}/nl\n:/usr/bin:/bin` });
+            const r = run(T.script, ['--fn', 'add', ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env });
+            assert.equal(r.status, 2, r.out);
+            const want = `${P} node binary: cannot resolve the directory of ${R.S}/nl`;
+            assert.equal(r.lines.filter((l) => l === want).length, 1, `exactly one "${want}" line\n${r.out}`);
             assert.equal(r.lines.filter((l) => /(^|[ :])cd: /.test(l)).length, 0, `no raw "cd:" line\n${r.out}`);
             assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
         } finally { rmAll(R.S); }
@@ -903,7 +923,7 @@ for (const T of TOOLS) {
                 assert.ok(R.spawns().length >= 2, `spawns >= 2, got ${R.spawns().length}\n${r.out}`);
             } finally { rmAll(R.S); }
         });
-        // MD38: no --node / NODE; the only node is on PATH in "<S>/p/a<NL>b" (--node cannot reach this check: the "--fn / --v8-flags / --out / --node" newline gate refuses it first).
+        // MD38: no --node / NODE; the only node is on PATH in "<S>/p/a<NL>b" (--node cannot reach this check: dd's "--fn / --v8-flags / --out / --node" newline gate and, since F-G (b77), bb's raw "--node: a newline or a CR" refusal refuse it first).
         test(`${k} MD38 PATH entry "<S>/p/a<newline>b" holds the node: exit 2, "a newline is not allowed in the resolved path", 0 spawns`, { skip }, () => {
             const R = rig(T);
             try {
@@ -914,14 +934,15 @@ for (const T of TOOLS) {
                 assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
             } finally { rmAll(R.S); }
         });
-        // MD38n: --node "<S>/a<NL>b/node" (an existing fake). bb: MD-38 line (red on the frozen bb). dd: control, dd's own --node newline gate.
-        test(`${k} MD38n --node "<S>/a<newline>b/node": exit 2, ${T.dd ? '(control) the --fn / --v8-flags / --out / --node newline refusal' : '"a newline is not allowed in the resolved path"'}, 0 spawns`, { skip }, () => {
+        // MD38n: --node "<S>/a<NL>b/node" (an existing fake). bb: the raw --node refusal since F-G (b77, ruling Q-B75-NONPATH; was
+        // the MD-38 resolved-path line, red on the frozen bb; MD38 keeps that line live through PATH). dd: control, dd's own --node newline gate.
+        test(`${k} MD38n --node "<S>/a<newline>b/node": exit 2, ${T.dd ? '(control) the --fn / --v8-flags / --out / --node newline refusal' : '"--node: a newline or a CR is not allowed (it would forge report lines)"'}, 0 spawns`, { skip }, () => {
             const R = rig(T);
             try {
                 const nd = `${R.S}/a\nb/node`;
                 mkNode(nd, 'nl', R.log, T);
                 const r = run(T.script, ['--fn', 'add', '--node', nd, ...drvArgs(T, R.drv('driver.mjs'))], { cwd: R.cwd, env: R.env });
-                dieOnce(r, T.dd ? `${P} --fn / --v8-flags / --out / --node: a newline is not allowed` : `${P} node binary: a newline is not allowed in the resolved path`, 'MD38n');
+                dieOnce(r, T.dd ? `${P} --fn / --v8-flags / --out / --node: a newline is not allowed` : `${P} --node: a newline or a CR is not allowed (it would forge report lines)`, 'MD38n');
                 assert.equal(R.spawns().length, 0, R.spawns().join('\n'));
             } finally { rmAll(R.S); }
         });

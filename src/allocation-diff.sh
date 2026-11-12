@@ -65,6 +65,7 @@
 #   Each value option is given at most once and never empty; --v8-flags / --node take no newline, --out and DRIVER
 #   paths no newline or CR. --self-test takes no other argument. --zero / --self-test / --help take no =value. An
 #   unknown option exits 2 with a did-you-mean hint.
+#   --runs / --v8-flags / --node and an option name take no newline or CR either.
 #
 # DRIVER: an existing readable file (two in diff mode, one with --zero), each run as
 #   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
@@ -821,6 +822,7 @@ while [[ $# -gt 0 ]]; do
       case "$a" in
         --runs) RUNS="$v" ;; --node) NODE_BIN="$v" ;; --v8-flags) V8FLAGS="$v" ;; --out) OUT="$v" ;;
       esac ;;
+    -*$'\n'*|-*$'\r'*) nl_refuse "unknown option" "$a" ;;   # G-X6 (ruling Q-B75-NONPATH): never echo the option name
     -*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
   esac
@@ -832,6 +834,10 @@ if [[ $SELFTEST == 1 ]]; then
   if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi
 fi
 [[ "$V8FLAGS$OUT$NODE_BIN" != *$'\n'* ]] || die "--v8-flags / --out / --node: a newline is not allowed"
+# G-X6 (ruling Q-B75-NONPATH): the raw non-path values, before any refusal prints them (a CR in each; a newline in --runs)
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "--node" "$NODE_BIN"
 [[ "$RUNS" =~ ^[0-9]{1,2}$ ]] && RUNS=$((10#$RUNS)) && [[ $RUNS -ge 2 && $RUNS -le 20 ]] \
   || die "--runs must be an integer in [2, 20] (null control), got '$RUNS'"
 read -r -a V8_EXTRA <<<"$V8FLAGS" || true

@@ -330,7 +330,8 @@ test('A3 teeth: the alternation row is red on a mutant that runs AFTER before BE
 });
 
 // --runs refusals: exit 2, 0 spawns, the die line with the value echoed. Integers at the 2^30 / 2^31 / 2^32 / 2^53
-// edges, signs, -0, NaN, decimals, blanks, a trailing newline, a non-ASCII digit.
+// edges, signs, -0, NaN, decimals, blanks, a trailing newline, a non-ASCII digit. A newline is refused before the
+// range check since F-G (b77, ruling Q-B75-NONPATH), by the G-X6 line that never echoes the value.
 const RUNS_BAD = ['0', '1', '-1', '00', '01', '21', '99', '020', '100', '1073741824', '2147483647', '2147483648',
     '4294967295', '4294967296', '9007199254740991', '9007199254740992', 'NaN', '-0', '+3', '3.0', '3e0', '0x3', ' 3', '3 ',
     '3\n', '\u0663'];
@@ -347,7 +348,8 @@ function assertRefused(r, line) {
 }
 // 00 / 01 pass the 2-digit regex and are echoed AFTER the 10# normalization (got '0' / '1': a QA finding, cosmetic), so
 // they pin the reason only; every other value (020 included: the regex refuses it first) pins the value as given
-const runsLine = (v) => (/^0[0-9]$/.test(v) ? "deopt-diff: --runs must be an integer in [2, 20] (null control), got '"
+const runsLine = (v) => (/[\n\r]/.test(v) ? 'deopt-diff: --runs: a newline or a CR is not allowed (it would forge report lines)'
+    : /^0[0-9]$/.test(v) ? "deopt-diff: --runs must be an integer in [2, 20] (null control), got '"
     : `deopt-diff: --runs must be an integer in [2, 20] (null control), got '${v}'`);
 for (const v of RUNS_BAD) {
     test(`A3: --runs=${JSON.stringify(v)} refused -> exit 2, 0 spawns, its own reason`, { skip }, () => {
@@ -357,13 +359,16 @@ for (const v of RUNS_BAD) {
 }
 // teeth: a 3-digit regex lets 020 through; a refusal turned into a silent default (RUNS=2, bounded: never a 2^31-run
 // loop) lets every row through
-test('A3 teeth: --runs refusal rows are red on mutants (3-digit regex: 020; refusal -> silent RUNS=2: every value)', { skip }, () => {
+test('A3 teeth: --runs refusal rows are red on mutants (3-digit regex: 020; refusal -> silent RUNS=2: every value but a newline one; G-X6 --runs line dropped: the newline one)', { skip }, () => {
     const dir = tmp('dd-rbm-');
     try {
         const m3 = variant(dir, 'm3', [['[[ "$RUNS" =~ ^[0-9]{1,2}$ ]]', '[[ "$RUNS" =~ ^[0-9]{1,3}$ ]]']]);
         for (const v of ['020']) { const r = runsBad(m3, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError); }
         const off = variant(dir, 'off', [['  || die "--runs must be an integer in [2, 20] (null control), got \'$RUNS\'"', '  || RUNS=2']]);
-        for (const v of RUNS_BAD) { const r = runsBad(off, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the disabled check`); }
+        for (const v of RUNS_BAD.filter((x) => !/[\n\r]/.test(x))) { const r = runsBad(off, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the disabled check`); }
+        // a newline value is refused by the G-X6 line (F-G), not by the range check: its own mutant drops that line
+        const nl = variant(dir, 'nl', [['nl_refuse "--runs" "$RUNS"', ':']]);
+        for (const v of RUNS_BAD.filter((x) => /[\n\r]/.test(x))) { const r = runsBad(nl, v); assert.throws(() => assertRefused(r, runsLine(v)), assert.AssertionError, `--runs=${JSON.stringify(v)} survived the dropped G-X6 line`); }
     } finally { rmAll(dir); }
 });
 
@@ -542,7 +547,9 @@ const M_GOES = [['[[ -z "$FIXTURES" ]] || die "--fixtures goes with --self-test"
 const M_ONLY_GOTOPT = [['[[ ( -z "${GOTOPT// /}" || "$GOTOPT" == "  --fixtures " ) && ', '[[ ']];
 const M_ONLY_POS = [[' && ${#POS[@]} -eq 0 ]] || die "--self-test takes only --fixtures DIR"', ' ]] || die "--self-test takes only --fixtures DIR"']];
 const M_DIR = [['[[ -d "$FIXTURES" && -r "$FIXTURES" && -x "$FIXTURES" ]] || die', 'true || die']];
-const M_NEWLINE = [['[[ "$FIXTURES" != *$\'\\n\'* ]] || die "--fixtures: a newline', 'true || die "--fixtures: a newline']];
+// F-G (b77): the G-X6 --fixtures line right after the newline die would refuse the newline too; the mutant drops both
+const M_NEWLINE = [['[[ "$FIXTURES" != *$\'\\n\'* ]] || die "--fixtures: a newline', 'true || die "--fixtures: a newline'],
+    ['    nl_refuse "--fixtures" "$FIXTURES"', '    :']];
 const M_K2 = [['"$GOTOPT" == "  --fixtures " )', '"$GOTOPT" == *"--fixtures"* )']];   // a substring GOTOPT match
 const M_NO_X = [['-r "$FIXTURES" && -x "$FIXTURES" ]]', '-r "$FIXTURES" ]]']];
 const SELF_OK = (r) => { assert.equal(r.status, 0, r.out); assert.match(r.out, /^self-test: \d+ check\(s\) ok$/m); };
@@ -596,14 +603,14 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 // =====================================================================================================================
 // A4 parity, re-pinned in U1 (Q-IBD-4 (a), MD-54): U1 is the MD-54 ibd hardening unit, so the root moved on purpose and
 // the old 740da13b pin, its bd1f283 history row and the hunk-scoped put-back of every later change are retired. FILLERS
-// B1, U2, G5 (b62), G-XS (b67), G-X6 (b69), G-SIG-1 (b70), NULLCTL (b70, r1 + r2), G-SIG-2 (b71), CI-HANG (b72), F-A and F-B (b73) moved the root again. The live
+// B1, U2, G5 (b62), G-XS (b67), G-X6 (b69), G-SIG-1 (b70), NULLCTL (b70, r1 + r2), G-SIG-2 (b71), CI-HANG (b72), F-A and F-B (b73), F-C, F-D, F-E (b74), F-F (b75), F-G (b77) moved the root again. The live
 // root must equal its .handoff/frozen/fillers-final/ copy byte for byte, sha256/8 pinned. A rung that moves the root bumps
 // the literal and the frozen copy together.
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'fillers-final');
 // bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
-const PARITY = [['inlining-budget-diff.sh', 'fe8919f5']];
+const PARITY = [['inlining-budget-diff.sh', '7a5cf99b']];
 function assertParity(live, ref, want) {
     assert.equal(sha8(live), want, 'live sha256/8');
     assert.ok(Buffer.compare(live, ref) === 0, 'live differs from the reference copy');

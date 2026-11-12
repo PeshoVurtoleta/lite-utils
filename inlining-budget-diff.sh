@@ -124,6 +124,7 @@
 # elsewhere; an input file of this run (a DRIVER, --driver, --before or --after) that is OUT/report.txt or
 # OUT/budget.<tier>.tsv / OUT/<key>.<tier>.diff.txt ("is an input file of this run"), or a symlink / hard link there (key:
 # all and each --fn name, every listed tier; "is a symlink" / "has another hard link"); an fn or tier given twice;
+# a newline or a CR in --fn, --runs, --tiers, --v8-flags, --node or an option name;
 # a value option given twice; --self-test with any other argument; a --v8-flags of
 # only blanks; --before and --after the same file; an empty value on a value option; --runs of
 # more than 2 digits (even 003); a failed <node> -p probe; a value on -h, --help, --self-test, --only-fn, --concurrent or
@@ -1163,6 +1164,7 @@ while [[ $# -gt 0 ]]; do
         --before-ref) BEFORE_REF="$v" ;; --after-ref) AFTER_REF="$v" ;;
         --before) BEFORE_FILE="$v" ;; --after) AFTER_FILE="$v" ;;
       esac ;;
+    --*$'\n'*|--*$'\r'*) nl_refuse "unknown option" "$a" ;;   # G-X6 (ruling Q-B75-NONPATH): never echo the option name
     --*) die "unknown option $a$(hint "$a") (see --help)" ;;
     *) POS+=("$a") ;;
   esac
@@ -1176,6 +1178,12 @@ for ((i = 0; i < ${#POS[@]}; i++)); do [[ ${POS[$i]} != -* ]] || POS[$i]="./${PO
 
 [[ "$FNS$TIERS$V8FLAGS$OUT$NODE_BIN$DRIVER$BEFORE_FILE$AFTER_FILE$REPO${POS[*]-}" != *$'\n'* ]] \
   || die "--fn / --tiers / --v8-flags / --out / --node / --driver / --before / --after / --repo / driver paths: a newline is not allowed"
+# G-X6 (ruling Q-B75-NONPATH): the raw non-path values, before any refusal prints them (a CR in each; a newline in --runs)
+nl_refuse "--fn" "$FNS"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--tiers" "$TIERS"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "--node" "$NODE_BIN"
 IFS=', ' read -r -a TARGETS <<<"$FNS"
 [[ ${#TARGETS[@]} -gt 0 ]] || die "--fn is empty"
 SEEN="|"
