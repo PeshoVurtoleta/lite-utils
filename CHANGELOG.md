@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- b76 Phase 6 (ROADMAP "Phase 6 -- docs", D-1): the package is publish-shaped and documented. `package.json` drops
+  `"private": true` (Q-P6-PRIVATE; the version stays 0.0.0 until 1.0.0, D-3) and gains `files` (the five generated
+  root scripts + README.md, LICENSE, CHANGELOG.md, llms.txt; not src/, lib/, test/, build.sh, LEDGER.md, ROADMAP.md),
+  `bin` (allocation-diff, bytecode-budget, deopt-diff, ic-diff, inlining-budget-diff -> the matching root .sh;
+  Q-P6-BIN), `repository` / `homepage` / `bugs` (Q-P6-REPO) and `keywords` (Q-P6-KEYWORDS). New README.md (the
+  LiteSepforge spine: install three ways, a quick-start, one section per tool with usage, modes, verdict and exit
+  codes and tier, CLI reference, a CI recipe, design notes, Known limits incl. LEDGER #124 and #126) and
+  llms.txt. New gate `test/pack.test.mjs` (13 tests): `npm pack --dry-run --json` lists exactly the 10 shipped
+  paths in a decoy copy (A1), the ruled package.json fields and `npm pkg fix` leaves it byte-identical (A2), an
+  offline tarball install gives five `node_modules/.bin` commands whose `-h` exits 2 (A3), the shipped docs are
+  ASCII with no tool-call tag (A4), README.md and llms.txt hold the #124 sentence exactly once (A5), and no shipped
+  root sources lib/ (A6); each with a must-fail control, and A1 / A2 / A3 red on the 861f3d3 package.json (history
+  rows: SKIP locally, FAIL under CI when the commit is unreachable). npm runs as `process.execPath` + npm-cli.js
+  with a dead registry, never via PATH. Tier: DETERMINISTIC. The README flag claims are a review check this burst
+  (Q-P6-DOCGATE); README numbers come from this burst (`.handoff/evidence/b76-p6/quickstart.txt`, the closing
+  npm test) (local, untracked).
+
 - G5c inlining-budget-diff (reading-list finding Q-RL-TURBO; Q-B62-TL). A Turbolev run is no longer mislabelled as
   a Maglev one: V8 14.6 with Turbolev on prints TurboFan-tier (@TF) units under --trace-maglev-inlining, so the old
   build compared them and could say SAME or DIFF about a different tier (MEASURED on real node v26.8.2: `--tiers

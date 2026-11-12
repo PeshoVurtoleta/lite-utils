@@ -1544,7 +1544,8 @@ Q-B74-NOEXEC; source b73 F-A reviewer, claude-opus-5-5).** MEASURED on bash 3.2 
 ./ic-diff.sh --no-such-flag` -> rc 0, no output. With `noexec` set no line of the script runs, so the exit 0 reads as
 SAME by exit code with no VERDICT line, and it cannot be fixed inside the script (not even the prologue runs). Callers
 must require the VERDICT line, not only the exit code. The README /
-llms.txt Known-limits line follows in Phase 6 (they do not exist yet). Evidence: `.handoff/RULINGS-b74.md`.
+llms.txt Known-limits line landed in b76 Phase 6 (README.md and llms.txt "Known limits").
+Evidence: `.handoff/RULINGS-b74.md`.
 
 **#125 fe-rev-1: a CR in a path component that `..` removes reaches stderr in driver mode (class 3; FIXED b75 F-F, ruled b74
 Q-B74-FERAW: fix next burst; source F-E reviewer).** In driver mode dd, ic and bb run G-X6 on the RESOLVED driver name
@@ -1577,4 +1578,5 @@ spawns, so not 0 spawns), the --node path echoes `node binary is not an executab
 on PATH ...: $NODE_BIN -> $NODE_RES` and `node binary: cannot resolve the directory of $NODE_RES`, and dd `--fixtures:
 not a readable directory: $FIXTURES`; ibd's --fn check is an inline regex, not FN_RE. Mirror: #122
 (lib-cross-fable-2), #125.
+Until F-G lands it is a README.md / llms.txt Known-limits bullet (b76 Phase 6).
 Evidence: `.handoff/RULINGS-b75.md`.

@@ -1,10 +1,27 @@
 {
   "name": "@zakkster/lite-utils",
   "version": "0.0.0",
-  "private": true,
   "description": "Standalone bash V8-diagnostic scripts with fail-closed SAME / DIFF / NO-VERDICT verdicts",
   "type": "module",
   "sideEffects": false,
+  "bin": {
+    "allocation-diff": "allocation-diff.sh",
+    "bytecode-budget": "bytecode-budget.sh",
+    "deopt-diff": "deopt-diff.sh",
+    "ic-diff": "ic-diff.sh",
+    "inlining-budget-diff": "inlining-budget-diff.sh"
+  },
+  "files": [
+    "allocation-diff.sh",
+    "bytecode-budget.sh",
+    "deopt-diff.sh",
+    "ic-diff.sh",
+    "inlining-budget-diff.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "llms.txt"
+  ],
   "scripts": {
     "test": "node --test --test-timeout=3600000 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr 'test/*.test.mjs'",
     "build": "bash build.sh"
@@ -12,6 +29,26 @@
   "engines": {
     "node": ">=22"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-utils.git"
+  },
+  "homepage": "https://github.com/PeshoVurtoleta/lite-utils#readme",
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-utils/issues"
+  },
+  "keywords": [
+    "v8",
+    "node",
+    "bytecode",
+    "deopt",
+    "inline-cache",
+    "inlining",
+    "gc",
+    "diagnostics",
+    "ci",
+    "bash"
+  ],
   "license": "MIT",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>"
 }

@@ -1,0 +1,226 @@
+# @zakkster/lite-utils
+
+Five standalone bash tools that compare two JavaScript builds through V8's own
+traces -- bytecode length, deopts, inline caches, inlining decisions, young-GC
+event counts -- and end every run with a fail-closed verdict line
+(SAME / DIFF / NO-VERDICT, or WITHIN / OVER, ZERO / NONZERO, REPORTED). Each
+tool is one self-contained bash script that drives `node` and reads its trace
+output. This is not a JS library: there is no import, no JS API.
+
+## Status
+
+Unreleased. Version 0.0.0; the first release will be 1.0.0. Nothing here is
+available from npm yet.
+
+Install (instructions; pick one):
+
+- `npm i -D @zakkster/lite-utils`
+- `npm i -D git+https://github.com/PeshoVurtoleta/lite-utils.git`
+- copy ONE root script into your project and run it with `bash <script>`; a
+  root never sources another file at run time.
+
+After an npm install the commands are in `./node_modules/.bin/`:
+`allocation-diff`, `bytecode-budget`, `deopt-diff`, `ic-diff`,
+`inlining-budget-diff`.
+
+## Rules for a caller (read first)
+
+- ALWAYS require the `VERDICT <v>` line on stdout, not only the exit code.
+- Exit 2 = NO-VERDICT: the tool could not decide and failed closed. It is not
+  "no difference". Never treat 2 as success.
+- Exit 0 and 1 are verdicts; the verdict word names which (see each tool).
+- `--self-test` exit 1 means a `FAIL <label>` line was printed. It is NOT DIFF.
+- `-h` / `--help` prints the header and exits 2 (all five). Do not use it as a
+  liveness probe that expects 0.
+- An unexpected failure inside a tool exits 2 NO-VERDICT, never 1.
+- A refused argument exits 2 before any node is spawned, with these named
+  exceptions: a `--v8-flags` flag outside the allowlist is refused after one
+  `node --v8-options` read; ibd refuses some mode errors after its probes.
+- An unknown option exits 2 with a did-you-mean hint.
+
+## Tools
+
+Shared options (each tool's own `-h` is the authority for its subset):
+`--node BIN` (default `$NODE`, else `node`; resolved once to an absolute
+path), `--v8-flags STR` (runtime allowlist of V8 flags; log / trace / print /
+prof flags and node options are refused), `--out DIR` (keep the report and raw
+runs), `--runs N` (runs per side; run 1 vs the later runs is the null control),
+`--self-test`, `-h`. The tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
+NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS from every spawn.
+
+### bytecode-budget (bytecode-budget.sh)
+
+Question: how many bytes of bytecode does each NAMED function compile to?
+
+    bytecode-budget.sh [opts] --fn LIST DRIVER                                 # report
+    bytecode-budget.sh [opts] --max fn=N[,fn=N] --node-version vX.Y.Z DRIVER   # gate
+    bytecode-budget.sh [opts] --diff --fn LIST DRIVER_BEFORE DRIVER_AFTER      # diff
+    bytecode-budget.sh [opts] --diff --fn LIST --out DIR --driver FILE --before-ref REF --after-ref REF --module REL   # diff, ref mode
+    bytecode-budget.sh [opts] --diff --fn LIST --out DIR --driver FILE --before FILE --after FILE                      # diff, file mode
+
+- Report: exit 0 REPORTED, 2 NO-VERDICT.
+- Gate: `--max` limits plus `--node-version` (required; must equal
+  `<node> --version` exactly, else NO-VERDICT). Per function WITHIN / OVER;
+  exit 0 WITHIN, 1 OVER, 2 NO-VERDICT.
+- Diff: compares the length multisets of two drivers (or two staged module
+  versions in ref / file mode); exit 0 SAME, 1 DIFF, 2 NO-VERDICT. `--max` is
+  refused with `--diff`.
+- Ref / file mode needs git. In file mode the "before" file must be a frozen
+  copy, not a git-tracked file.
+- Tier: DETERMINISTIC on one node binary and one driver; any run-to-run change
+  is NO-VERDICT, never OVER or DIFF. The limit values the tool prints are that
+  binary's, a measurement of that binary, not a law. Maxima are only valid on
+  the node version they were recorded on.
+
+### deopt-diff (deopt-diff.sh)
+
+Question: did the deoptimizations of NAMED functions change (code tier, kind,
+reason, as a multiset)?
+
+    deopt-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER                                  # driver mode
+    deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before-ref REF --after-ref REF --module REL   # ref mode
+    deopt-diff.sh [opts] --fn LIST --out DIR --driver FILE --before FILE --after FILE                     # file mode
+    deopt-diff.sh --self-test [--fixtures DIR]
+
+- Exit 0 SAME, 1 DIFF, 2 NO-VERDICT. `--fn` is required.
+- A "Tier" section after the function lines is REPORTED and never moves the
+  verdict or exit code.
+- Tier: the verdict on a user driver is STATISTICAL (deopts follow tier-up
+  timing). `--self-test`, `--self-test --fixtures DIR` and the natives pair
+  (deopt.mjs vs mono.mjs) are DETERMINISTIC.
+
+### ic-diff (ic-diff.sh)
+
+Question: did the inline-cache states (kind, key, final state) of NAMED
+functions change?
+
+    ic-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER
+    ic-diff.sh --self-test
+
+- Driver mode ONLY. There is no ref mode and no file mode.
+- Exit 0 SAME, 1 DIFF, 2 NO-VERDICT.
+- On node 22 and 24 this tool always ends NO-VERDICT (by design; see Known
+  limits).
+- Tier: the verdict on a user driver is STATISTICAL; `--self-test` is
+  DETERMINISTIC.
+
+### inlining-budget-diff (inlining-budget-diff.sh)
+
+Question: did the TurboFan / Maglev inlining DECISIONS for NAMED functions
+change, plus a budget report?
+
+    ME=m0 inlining-budget-diff.sh [opts] DRIVER_BEFORE DRIVER_AFTER      # driver mode (any project)
+    inlining-budget-diff.sh [opts] --before-ref REF --after-ref REF       # lite-signal: builds from git refs
+    inlining-budget-diff.sh [opts] --before FILE --after FILE             # lite-signal: two Signal.js files
+
+- Driver mode is the general one (function names from `--fn` or `$ME`).
+  The ref and file modes are lite-signal-shaped: they expect Signal.js /
+  Watch.js and a driver importing `./Signal.js`. Do not use them on other
+  projects.
+- Options specific to it: `--fn LIST`, `--tiers LIST` (`turbo`, `maglev`),
+  `--only-fn`, `--concurrent`, `--driver FILE`, `--repo DIR`,
+  `--no-bytecode`. Output goes to `--out DIR` (default `$OUTDIR`, else a
+  timestamped dir under `$TMPDIR`); a rerun needs a fresh, new or empty
+  `--out`.
+- Verdict per tier: exit 0 SAME, 1 DIFF, 2 NO-VERDICT. The budget report is
+  REPORTED and never moves the verdict.
+- Node 22: the maglev tier is NO-VERDICT; use `--tiers turbo`.
+- Tier: the verdict is STATISTICAL, the budget report is REPORTED. There is no
+  live control in the test suite; only `--self-test` (canned trace text) is
+  deterministic.
+
+### allocation-diff (allocation-diff.sh)
+
+Question: did the number of young-generation GC EVENTS inside a marked window
+change? Counts of GC events, never bytes.
+
+    allocation-diff.sh [opts] DRIVER_BEFORE DRIVER_AFTER     # diff: SAME / DIFF
+    allocation-diff.sh [opts] --zero DRIVER                  # gate: ZERO / NONZERO
+    allocation-diff.sh --self-test
+
+- Diff mode only plus `--zero`; no ref mode and no file mode.
+- Exit 0 SAME or ZERO, 1 DIFF or NONZERO, 2 NO-VERDICT.
+- ZERO means less than one semi-space of young allocation in the
+  window, not zero bytes. An allocation TurboFan scalar-replaces is not an
+  allocation: ZERO is then the correct reading.
+- Driver contract: mark the window with
+  `fs.writeSync(1, '@@LITE-MARK start\n')` and the same for `end`, written
+  synchronously, before exit. Never use console.log or process.stdout in the
+  driver. Warm up before `start`; a cold window over-reports.
+- Tier: the script logic is DETERMINISTIC (`--self-test`); a verdict on a user
+  driver is STATISTICAL and REPORTED only.
+
+## Exit codes and the VERDICT line
+
+| tool                  | 0                  | 1                 | 2          |
+|-----------------------|--------------------|-------------------|------------|
+| bytecode-budget       | WITHIN / REPORTED / SAME | OVER / DIFF | NO-VERDICT |
+| deopt-diff            | SAME               | DIFF              | NO-VERDICT |
+| ic-diff               | SAME               | DIFF              | NO-VERDICT |
+| inlining-budget-diff  | SAME               | DIFF              | NO-VERDICT |
+| allocation-diff       | SAME / ZERO        | DIFF / NONZERO    | NO-VERDICT |
+
+Every run that reaches a verdict ends in a `VERDICT <v>` line on stdout. A refusal prints
+`<tool>: <why>` and `VERDICT NO-VERDICT` on stderr and exits 2. A SIGINT /
+SIGTERM / SIGHUP during a run ends NO-VERDICT, exit 2. `-h` exits 2.
+`--self-test` exits 0 (all checks ok) or 1 (a FAIL line); that 1 is not DIFF.
+
+## Tiers
+
+- DETERMINISTIC: same inputs give the same verdict. bytecode-budget (one node
+  binary), each tool's `--self-test`, the deopt-diff natives pair.
+- STATISTICAL: the verdict on a user driver follows warm-up, GC and tier-up
+  timing (deopt-diff, ic-diff, inlining-budget-diff, allocation-diff). Run
+  them on a quiet host. These tools report; they do not gate a build.
+- REPORTED: printed measurements that gate nothing (inlining budget report,
+  deopt-diff tier section, allocation-diff counts line).
+
+## Requirements
+
+- bash >= 3.2.
+- A POSIX awk (BSD awk and the ubuntu-latest awk are what the CI matrix uses;
+  other awks are not claimed).
+- node >= 22, with the ic-diff and inlining-budget-diff caveats above.
+- git, for ref and file modes.
+- `sha256sum` or `shasum`.
+- No runtime npm dependencies.
+
+## Known limits
+
+Each bullet names its LEDGER id.
+
+- an inherited SHELLOPTS=noexec runs nothing and exits 0; callers must require the VERDICT line, not only the exit code
+  (#124)
+- #126: some refusals of a non-path option value (an unknown option, a bad --fn / --v8-flags / --runs / --max /
+  --node-version value, a node binary that is not found) print that raw value, so a CR or newline in it reaches stderr;
+  exit 2, no verdict change.
+- #66: `--v8-flags` numeric values are checked for FORM only; a value such as `=NaN` passes the check, node then fails,
+  and the tool ends NO-VERDICT.
+- #83: ic-diff on node 22 and 24 ends NO-VERDICT; a NO-VERDICT, never a wrong verdict.
+- #122: a refusal may print a name that git or readlink resolved; a CR or newline in it (behind a symlink with a clean
+  name) reaches stderr inside that refusal; exit 2.
+- #84: allocation-diff does not strip NODE_NO_WARNINGS (it strips four other names); it can move the GC count.
+- #76 (1), #80: inlining-budget-diff leaves its `--out` contents behind after some refusals; a rerun needs a fresh
+  `--out`.
+- #123: inlining-budget-diff file mode decides its "byte-identical, null control" NOTE on Signal.js alone; a differing
+  Watch.js can print that NOTE and then DIFF. The verdict is right, the NOTE is false.
+- Driver output is trusted (#72 B1b, #92 b): a driver can write lines that look like trace or marker output.
+- a hard link to `--before` elsewhere in the repository (outside `--before`'s directory and below), or under a case-only
+  sibling name on a case-sensitive file system, can stay undetected (LEDGER #71, #88, #89)
+- Not a security boundary: the argument refusals are fail-closed hygiene, not a sandbox.
+
+## Composability
+
+One CI job can run all five. Gate only on bytecode-budget `--max` (exit 1 or 2
+fails the job). Run the other four so a nonzero exit does not abort the job,
+keep `--out` as an artifact, and fail the job if the `VERDICT` line is missing:
+
+    rc=0; ./node_modules/.bin/deopt-diff --fn add --out out/dd before.js after.js > dd.txt || rc=$?
+    grep -q '^VERDICT ' dd.txt || exit 1
+
+The statistical tools report; they do not gate. Call installed tools as
+`./node_modules/.bin/<name>`.
+
+## License
+
+MIT (c) Zahary Shinikchiev
