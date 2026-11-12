@@ -31,7 +31,7 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117-#119, #121, #126)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117-#119, #121, #126, #129)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
@@ -171,6 +171,31 @@ inside their digits. Node 22 / 24: unverified. Ruled DOCUMENT: no code change; b
 with the census (b67). What would re-open it: a new mechanism (a form that does not refuse correct lengths under tears).
 Evidence: `.handoff/RULINGS-b66-cross.md` Q-B66-X11, audit/2026-11-10-cross-script/FINDINGS.md, CROSSCHECK.md (local,
 untracked).
+
+**#129 alloc-per-op research (b80): STEADY = min, a total_allocated_bytes-only counter, an unpaired offset and an
+N-scaled refusal band DECLINED.** Research burst for the 1.1.0 tool (maintainer's prototype d4386d85, untracked). All
+numbers PRELIMINARY (one darwin-arm64 host) except one `quiet-lock run --strict` re-run (REPORTED, host QUIET). (a)
+STEADY = min of windows 1..K-1 fails open on BOTH known shapes: d4386d85 PASSED `--max 10` on a Map churn (true 45.3
+B/op amortized; windows `11.54 91.33 7.61 76.02 76.02`) and `--max 1` on a lane that boxes from window 3 (LiteBisect
+LEDGER D2 shape, its run A flags and --warm 5e6), 6 of 6 runs each; in the prototype's default shape (--expose-gc only,
+--warm 2e5) the late-box lane was NOT a reproducible control (S1 floor 1.01 / 1.90 in windows 1-2; JIT allocation
+likely, not probed), so the control rows use LiteBisect's run A shape (law 6). (b)
+`v8.getHeapStatistics().total_allocated_bytes` is undefined on node 22.23.5 and 24.22.3 (engines >= 22), charges a ~256
+KiB buffer per read, and its empty-lane floor reached 1.87 B/op; MAX over it false-FAILed a clean lane at --max 1. (c)
+Summed `getHeapSpaceStatistics()` space_used_size with a ONE-TIME offset failed open by drift inside a process; with an
+adjacent M = 0 twin per GC-fenced sub-window (v8.GCProfiler) it read within 0.0135 B/op of the oracle on node 22-27. It
+was not byte-identical across processes, and one tier-transition window read 15.7952 against a true 16. (d) A refusal
+band of 50,000 / N B/op was REJECTED in review (DESIGN): the measured bias is per sub-window (measured at --sub 1e4
+only), so the band would fail open from --n ~3.1e7 (ARGUED from the box's -0.0016 B/op) and, extrapolated, at small
+--sub. Ruled (PROPOSAL-alloc-probe.md section 6, Q-AP-*): paired S2 only, PEAK = max of windows 1..K-1, MEAN printed,
+MIN removed, JSON `steady` / `net` removed; the band and the LiteBisect sequencing (its C-late3 control asserts the old
+STEADY PASS, and its gates:local reads the LiteUtils root file) go to research rung R4. Leads for other packages (ruled
+Q-AP-LEADS (a), no change from LiteUtils): lite-gc-profiler 1.16.0 measureAllocs `maxBytesPerCall: 0` PASSED an
+unbounded Map growth (min over batches = 0), 3 of 3; lite-perf-gate's "only reliable detector of transient allocation"
+wording predates this measurement. What would re-open: a new mechanism, e.g. a fence that keeps one S1 window exact, or
+a measured bias that does not grow with the sub-window count (the N-scaled band); the band itself stays OPEN in R4
+(Q-AP-BAND). Evidence: `.handoff/research/alloc-probe/` INTAKE.md, PROGRESS.md, r0-out/, r1-out/, r2-out/ and strict/
+(the REPORTED re-run); `.handoff/PROPOSAL-alloc-probe.md` sections 1, 5, 6 (all local, untracked).
 
 ---
 
