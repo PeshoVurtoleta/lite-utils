@@ -1223,6 +1223,7 @@ NODE_BIN="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
 # stage BEFORE / AFTER
 # ---------------------------------------------------------------------------------------------
 OUT="${OUT:-${TMPDIR:-/tmp}/inl-diff-$(date +%Y%m%d-%H%M%S)-$$}"
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, ruling Q-B75-FFSCOPE)
 [[ "$OUT" != *\\* && ( "$OUT" == /* || "$PWD" != *\\* ) ]] || die "--out: a backslash is not allowed in DIR or, for a relative DIR, in the current directory (awk -v would rewrite the path): $OUT"
 for sub in raw dec bud ms stage; do
   [[ ! -L "$OUT/$sub" ]] || die "--out: $OUT/$sub is a symlink (refused: the writes would follow it)"

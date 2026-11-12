@@ -62,9 +62,9 @@
 #                      "ok <label>" or "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok"
 #                      (exit 0) or "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --v8-flags / --out / --node and DRIVER paths take no
-#   newline. --self-test takes no other argument. --zero / --self-test / --help take no =value. An unknown option
-#   exits 2 with a did-you-mean hint.
+#   Each value option is given at most once and never empty; --v8-flags / --node take no newline, --out and DRIVER
+#   paths no newline or CR. --self-test takes no other argument. --zero / --self-test / --help take no =value. An
+#   unknown option exits 2 with a did-you-mean hint.
 #
 # DRIVER: an existing readable file (two in diff mode, one with --zero), each run as
 #   `node [v8 flags] --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation
@@ -865,11 +865,12 @@ else
   [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]}; one DRIVER needs --zero (see --help)"
   SIDES=(before after)
 fi
+nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}   # the raw DRIVER values, before any refusal prints them (G-X6, ruling Q-B75-FFSCOPE)
 for ((i = 0; i < ${#POS[@]}; i++)); do
-  [[ "${POS[$i]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
   [[ -f "${POS[$i]}" && -r "${POS[$i]}" ]] || die "DRIVER (${SIDES[$i]}) not found (or not a readable file): ${POS[$i]}"
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, ruling Q-B75-FFSCOPE)
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"

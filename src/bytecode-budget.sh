@@ -90,9 +90,9 @@
 #   --fixtures DIR         with --self-test: also check the real-trace captures in DIR (the node-26.8.2 set)
 #   -h, --help             this text (exit 2)
 #   Each value option is given at most once (one comma list) and never empty (--v8-flags never only blanks);
-#   --fn / --max / --v8-flags / --out and each DRIVER path take no newline (nor the cwd they resolve against) and
-#   --fn / --max no empty entry (stray comma). --self-test takes only --fixtures. --self-test / --help take no
-#   =value; an explicit empty --opt= is refused, never filled
+#   --fn / --max / --v8-flags take no newline, --out and each DRIVER path no newline or CR (nor the cwd they resolve
+#   against), and --fn / --max no empty entry (stray comma). --self-test takes only --fixtures. --self-test / --help
+#   take no =value; an explicit empty --opt= is refused, never filled
 #   from the next argument.
 #   --diff is given at most once, takes no =value, and goes neither with --max nor with --self-test.
 #   A ref / file pair needs --diff; --driver / --module / --repo go only with a ref / file pair; the seven ref /
@@ -891,6 +891,8 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   esac
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
+nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}   # the raw DRIVER values, before any refusal prints them (G-X6, ruling Q-B75-FFSCOPE)
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, rulings Q-B75-FFSCOPE, Q-B75-FFBBSTAGE)
 if [[ $DIFFMODE == 1 && $STAGED == 1 ]]; then
   nl_refuse "the cwd" "$PWD"   # early cwd check (Q-B68-STAGECWD): stage_check prints $REPO in its refusals
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write

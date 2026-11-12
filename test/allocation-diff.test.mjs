@@ -812,9 +812,9 @@ const HELP_LINES = [
     '                     absolute path: a bare name through PATH (`command -v`; a function, alias or builtin is',
     '                     DIR/raw must be absent, or an empty, readable (and searchable) directory that is not a symlink;',
     '                     node options from a file into the measured process), and every --eval* / --print* flag, a',
-    '  Each value option is given at most once and never empty; --v8-flags / --out / --node and DRIVER paths take no',
-    '  newline. --self-test takes no other argument. --zero / --self-test / --help take no =value. An unknown option',
-    '  exits 2 with a did-you-mean hint.',
+    '  Each value option is given at most once and never empty; --v8-flags / --node take no newline, --out and DRIVER',
+    '  paths no newline or CR. --self-test takes no other argument. --zero / --self-test / --help take no =value. An',
+    '  unknown option exits 2 with a did-you-mean hint.',
     '                     non-flags). Accepted: V8 flags this node lists in --v8-options -- bool as --flag or --no-flag',
     // b37 Q-H1 (maintainer ruling "Say 'at the latest'"): the shared MD-46 refusal sentence, as wrapped in this -h
     '                     snapshot / file flags. Refused, exit 2 at the latest after one --v8-options read and before any',
@@ -1023,14 +1023,14 @@ const RF = [
     ['a newline in a DRIVER path (an existing file, before / after / --zero, a missing one), in --node, in --v8-flags -> refused',
         (script) => withRig((g) => {
             const nl = join(g.dr, `a${NL}b.js`); writeFileSync(nl, '');
-            refused(g, script, ['--node', g.node, '--zero', nl], 'DRIVER: a newline is not allowed in a path');
-            refused(g, script, ['--node', g.node, nl, g.b], 'DRIVER: a newline is not allowed in a path');
-            refused(g, script, ['--node', g.node, g.a, nl], 'DRIVER: a newline is not allowed in a path');
-            refused(g, script, ['--node', g.node, g.a, join(g.dr, `no${NL}such.js`)], 'DRIVER: a newline is not allowed in a path');
+            refused(g, script, ['--node', g.node, '--zero', nl], 'DRIVER: a newline or a CR is not allowed (it would forge report lines)');
+            refused(g, script, ['--node', g.node, nl, g.b], 'DRIVER: a newline or a CR is not allowed (it would forge report lines)');
+            refused(g, script, ['--node', g.node, g.a, nl], 'DRIVER: a newline or a CR is not allowed (it would forge report lines)');
+            refused(g, script, ['--node', g.node, g.a, join(g.dr, `no${NL}such.js`)], 'DRIVER: a newline or a CR is not allowed (it would forge report lines)');
             refused(g, script, ['--node', `${g.node}${NL}x`, '--zero', g.z], '--v8-flags / --out / --node: a newline is not allowed');
             refused(g, script, ['--node', g.node, '--v8-flags', `--expose-gc${NL}--expose-gc`, '--zero', g.z], '--v8-flags / --out / --node: a newline is not allowed');
         }),
-        [['driver-newline-check-removed', [["[[ \"${POS[$i]}\" != *$'\\n'* ]] || die", 'true || die']]],
+        [['driver-newline-check-removed', [['nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}', 'true']]],
          ['option-newline-check-out-only', [['[[ "$V8FLAGS$OUT$NODE_BIN" != *', '[[ "$OUT" != *']]]]],
     ['blank --v8-flags (a space, spaces, space-tab-space, --v8-flags= + space) -> refused, "got only blanks"',
         (script) => withRig((g) => {

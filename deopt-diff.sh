@@ -81,9 +81,10 @@
 #                      is one more "FAIL fixture <driver>.txt: missing or not a readable file" line (exit 1), and
 #                      the rows reading it get empty text, so some of them fail too.
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node / --fixtures take
-#   no newline and --fn no empty entry (stray comma). --self-test with any other value option or a positional
-#   argument exits "--self-test takes only --fixtures DIR"; --fixtures without --self-test exits "--fixtures goes
+#   Each value option is given at most once and never empty; --fn / --v8-flags / --node / --fixtures take no newline,
+#   --out and the DRIVER paths no newline or CR, and --fn no empty entry (stray comma). --self-test with any other
+#   value option or a positional argument exits "--self-test takes only --fixtures DIR"; --fixtures without
+#   --self-test exits "--fixtures goes
 #   with --self-test"; DIR with a newline exits "--fixtures: a newline is not allowed", and DIR that is not a
 #   readable, searchable directory "--fixtures: not a readable directory: DIR". --self-test / --help take no =value.
 #   A ref pair and a file pair are exclusive; --driver / --module / --repo go only with a ref / file pair; the seven
@@ -1706,13 +1707,14 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   esac
 done
 [[ "$OUT" != -* ]] || OUT="./$OUT"
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, ruling Q-B75-FFSCOPE)
 if [[ $STAGED == 1 ]]; then
   [[ -z $OUT || ( ! -e $OUT/stage && ! -L $OUT/stage ) || -d $OUT/stage ]] || die "--out: $OUT/stage exists and is not a directory"
   nl_refuse "the cwd" "$PWD"   # early cwd check (Q-B68-STAGECWD): stage_check prints $REPO in its refusals
   stage_check   # lib/stage.sh: every ref / file refusal, before any disk write (--out is required)
 else
   [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
-  [[ "${POS[0]}${POS[1]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
+  nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}   # the raw DRIVER values, before any refusal prints them (G-X6, ruling Q-B75-FFSCOPE)
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
   [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
 fi

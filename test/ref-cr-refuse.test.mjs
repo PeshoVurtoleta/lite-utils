@@ -25,12 +25,31 @@
 //          (or ibd's <o>/budget.turbo.tsv, an OUT_NAMES file): <x>/x<CR> a symlink to it, <o> created with it empty. ibd driver mode
 //          (the DRIVER positional, to report.txt and to budget.turbo.tsv), ibd file mode (--before / --after), dd driver mode (the
 //          before positional), ic (the after positional): the G-X6 refusal fires, never rep_refuse (whose text echoes the value).
-//          Same oracle as ROW 4b; label `DRIVER (resolved)` (ibd file mode: `--before / --after / --driver (resolved)`)
+//          Same oracle as ROW 4b; label `DRIVER (resolved)` (ibd file mode: `--before / --after / --driver (resolved)`; since b75 F-F
+//          dd / ic / bb positional rows: `DRIVER`, the raw check of ROW 12 fires first; the bb pin's OLD run keeps `DRIVER (resolved)`)
 //   ROW 10 OLD twin per row: the 768c388 root (b74 F-D, before F-E) fails the row WITH a CR on stderr. SKIP / CI=true as ROW 6
 //   ROW 10 bb-clean pin: bb driver mode (x<CR> before positional) and file mode (--before x<CR>): GREEN on the live AND the
 //          768c388 root (bb's G-X6 / stage_check already ran before its rep_refuse; pins that bb stays clean)
 //   ROW 11 mutants (exact once): rep_refuse moved back above G-X6 per tool (ibd: below the ref-mode line; dd / ic: back into the
-//          --out block): each turns its tool's ROW 10 rows red with a CR on stderr
+//          --out block; dd / ic since b75 F-F: + the raw DRIVER line dropped): each turns its tool's ROW 10 rows red with a CR on stderr
+//   ROW 12 b75 F-F (rulings Q-B74-FERAW, Q-B75-FFSCOPE): a CR in a RAW DRIVER positional or in the RAW --out value is refused
+//          before the first refusal that echoes it. DRIVER (dd, ic, ad, bb --diff): `<d>/d<CR>/../o/report.txt` (d<CR> a real dir,
+//          the path -ef <o>/report.txt: rep_refuse / ad's -ef die echo it), a missing `<x>/x<CR>` (the not-found die) as the before
+//          AND (r1) as the after positional, and
+//          `<d>/l<CR>/../drv.js` with l<CR> a symlink to <x>/a (the cannot-resolve die, "a symlink before '..'"; ad has it too, at
+//          its DRV_DIR loop); bb measure mode (the same three) and ad --zero (ef-report, missing). --out (ad, dd, ic, ibd): `f<CR>`
+//          an existing file (not-a-directory / ibd cannot-create) and `o<CR>` a dir whose raw/ is a symlink; dd staged (file mode)
+//          `s<CR>` with s<CR>/stage a file. Same oracle as ROW 4b (label `DRIVER` / `--out`; <o> may exist before: the case tree
+//          covers it). bb (ruling Q-B75-FFBBSTAGE): staged file mode and ref mode `--out o<CR>` with o<CR>/stage a symlink (lib/stage.sh
+//          stage_check echoed it); bb --out `f<CR>` (a file, bb --diff driver mode): label `--out` on the live root, and a pin that the
+//          4dadb5d root was already clean there (label `--out (resolved)`: nl_dir ran before bb's driver-mode --out refusals)
+//   ROW 12 OLD twin per row: the 4dadb5d root (b74 docs batch, before F-F; the bytes of .handoff/frozen/b75-ff-before) fails the
+//          row WITH a CR on stderr. SKIP / CI=true as ROW 6. Control per row: the same shape without the CR exits 2 by its old
+//          die, never by the new text
+//   ROW 13 mutants of the live roots (exact once), per tool: the new DRIVER / --out line dropped, checking a newline only, and
+//          moved below the first raw-echo die (ad / dd / ic / bb not-found, ad / ic not-a-directory, dd stage, ibd cannot-create, bb
+//          --out below stage_check), and (r1) dd / bb checking "${POS[0]}" only (the after-missing row):
+//          each turns its named ROW 12 rows red with a CR on stderr
 //   ROW 9  retention: the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged
 // Own fake node (bash): logs one SPAWN line per call, answers --version / --v8-options (tracked fixture) / -p, else prints its
 // last argument's file and exits 0. No timing assertions. Git repos under one mkdtemp top, editor env stripped.
@@ -307,9 +326,9 @@ const FE = {
     'ibd driver-pos CR budget-link': { tool: IBD, label: RES, argv: (c) => [...HEAD[IBD], crLink(c, 'budget.turbo.tsv')] },
     'ibd file-before CR report-link': { tool: IBD, label: FMODE, argv: (c) => { const l = crLink(c); return [...HEAD[IBD], '--before', l, '--after', sig(c)]; } },
     'ibd file-after CR report-link': { tool: IBD, label: FMODE, argv: (c) => { const l = crLink(c); return [...HEAD[IBD], '--before', sig(c), '--after', l]; } },
-    'dd driver-pos CR report-link': { tool: DD, label: RES, argv: (c) => [...HEAD[DD], crLink(c), c.drv] },
-    'ic driver-pos CR report-link': { tool: IC, label: RES, argv: (c) => [...HEAD[IC], c.drv, crLink(c)] },
-    'bb driver-pos CR report-link (bb-clean pin)': { tool: BB, label: RES, pin: true, argv: (c) => [...HEAD[BB], crLink(c), c.drv] },
+    'dd driver-pos CR report-link': { tool: DD, label: 'DRIVER', argv: (c) => [...HEAD[DD], crLink(c), c.drv] },
+    'ic driver-pos CR report-link': { tool: IC, label: 'DRIVER', argv: (c) => [...HEAD[IC], c.drv, crLink(c)] },
+    'bb driver-pos CR report-link (bb-clean pin)': { tool: BB, label: 'DRIVER', oldLabel: RES, pin: true, argv: (c) => [...HEAD[BB], crLink(c), c.drv] },
     'bb file-before CR report-link (bb-clean pin)': { tool: BB, label: LABEL[BB], pin: true, argv: (c) => [...HEAD[BB], '--driver', c.drv, '--before', crLink(c), '--after', c.fa] },
 };
 for (const R of Object.values(FE)) { R.row = 10; R.outPre = true; }
@@ -320,7 +339,7 @@ for (const [name, R] of Object.entries(FE)) {
     });
     if (R.pin) {
         test(`ROW 10 bb-clean pin OLD ${name}: the ${OLD_FE} root ALREADY meets the row (bb was never in the seam)`, { skip: OLDFESKIP }, () => {
-            const { r, bad } = runRow(oldRoot(R.tool, OLD_FE), `${name} (old)`, R);
+            const { r, bad } = runRow(oldRoot(R.tool, OLD_FE), `${name} (old)`, { ...R, label: R.oldLabel ?? R.label });
             assert.deepEqual(bad, [], msg(r));
         });
     } else {
@@ -333,10 +352,13 @@ for (const [name, R] of Object.entries(FE)) {
 // ROW 11 mutants: rep_refuse back at its 768c388 place, per tool
 const DD_REP = '[[ -z "$OUT" ]] || ' + REP_ARGS, IC_REP = '[[ -z "$OUT" ]] || rep_refuse "${POS[@]}"\n';
 const RAW_LS = '  [[ -z "$(ls -A "$OUT/raw" 2>/dev/null)" ]] || die "--out: $OUT/raw is not empty (give a new or empty DIR)"\n';
+// b75 F-F: the raw DRIVER line (dd / ic) fires before rep_refuse and G-X6; the dd / ic ROW 11 mutants also drop it, so they still
+// test the F-E seam
+const FF_POS = 'nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}   # the raw DRIVER values, before any refusal prints them (G-X6, ruling Q-B75-FFSCOPE)\n';
 const FE_MUT = [
     { id: 'ibd rep_refuse back above G-X6', tool: IBD, edits: [[REP_C + REP_ARGS, ''], [IBD_FULL, IBD_FULL + REP_ARGS]], rows: Object.keys(FE).filter((n) => n.startsWith('ibd ')) },
-    { id: 'dd rep_refuse back above G-X6', tool: DD, edits: [[REP_C + DD_REP, ''], [RAW_LS, RAW_LS + '  ' + REP_ARGS]], rows: ['dd driver-pos CR report-link'] },
-    { id: 'ic rep_refuse back above G-X6', tool: IC, edits: [[REP_C + IC_REP, ''], [RAW_LS, RAW_LS + '  rep_refuse "${POS[@]}"\n']], rows: ['ic driver-pos CR report-link'] },
+    { id: 'dd rep_refuse back above G-X6 (+ the F-F DRIVER line dropped)', tool: DD, edits: [[FF_POS, ''], [REP_C + DD_REP, ''], [RAW_LS, RAW_LS + '  ' + REP_ARGS]], rows: ['dd driver-pos CR report-link'] },
+    { id: 'ic rep_refuse back above G-X6 (+ the F-F DRIVER line dropped)', tool: IC, edits: [[FF_POS, ''], [REP_C + IC_REP, ''], [RAW_LS, RAW_LS + '  rep_refuse "${POS[@]}"\n']], rows: ['ic driver-pos CR report-link'] },
 ];
 for (const m of FE_MUT) {
     test(`ROW 11 mutant ${m.id}: rows ${m.rows.join(', ')} go red with a CR on stderr`, { skip }, () => {
@@ -344,6 +366,123 @@ for (const m of FE_MUT) {
         for (const n of m.rows) {
             assert.ok(FE[n], `mutant ${m.id} names an unknown row ${n}`);
             const { r, bad } = runRow(p, `${n} (${m.id})`, FE[n]);
+            assert.ok(bad.includes('a CR on stderr'), `mutant ${m.id} survives row ${n}: ${JSON.stringify(bad)}\n${msg(r)}`);
+        }
+    });
+}
+
+// ---- ROW 12 / 13: b75 F-F (rulings Q-B74-FERAW, Q-B75-FFSCOPE): the RAW DRIVER positionals (dd, ic, ad, bb --diff and measure
+// mode) and the RAW --out value (ad, dd, ic, ibd) are refused before the first refusal that echoes them ----
+const AD = 'allocation-diff';
+HEAD[AD] = [];
+const OLD_FF = '4dadb5d';   // b74 docs batch: the roots before F-F (the same bytes as .handoff/frozen/b75-ff-before)
+const haveOldFf = spawn('git', ['cat-file', '-e', `${OLD_FF}^{commit}`], { cwd: PKG }, 'git cat-file').status === 0 ? true : `commit ${OLD_FF} not available (shallow clone?)`;
+const OLDFFSKIP = skip || (haveOldFf === true || CI_STRICT ? false : haveOldFf);
+// the shapes: ch = CR (the row) or '' (the must-fail control: the same shape, no CR). Paths are built by string, never join():
+// join() would fold the `..`
+const efRep = (c, ch) => { mkdirSync(c.o); writeFileSync(join(c.o, 'report.txt'), ''); mkdirSync(join(c.dir, `d${ch}`)); return `${c.dir}/d${ch}/../o/report.txt`; };
+const miss = (c, ch) => `${c.x}/x${ch}`;
+const dotdot = (c, ch) => { symlinkSync(join(c.x, 'a'), join(c.dir, `l${ch}`)); return `${c.dir}/l${ch}/../drv.js`; };   // physical: x/drv.js; logical: <dir>/drv.js (absent)
+const outFile = (c, ch) => { c.o = join(c.dir, `f${ch}`); writeFileSync(c.o, ''); };
+const outRawLink = (c, ch) => { c.o = join(c.dir, `o${ch}`); mkdirSync(c.o); symlinkSync(c.x, join(c.o, 'raw')); };
+const outStage = (c, ch) => { c.o = join(c.dir, `s${ch}`); mkdirSync(c.o); writeFileSync(join(c.o, 'stage'), ''); };
+const BBM = 'bb-measure', HEAD_BBM = ['--fn', 'add'];
+const FF = {};
+for (const [k, tool] of [['dd', DD], ['ic', IC], ['ad', AD], ['bb', BB]]) {
+    const pos = (p, c) => (tool === IC ? [...HEAD[tool], c.drv, p] : [...HEAD[tool], p, c.drv]);   // ic: the after positional
+    FF[`${k} pos ef-report CR`] = { tool, label: 'DRIVER', argv: (c, ch) => pos(efRep(c, ch), c) };
+    FF[`${k} pos missing CR`] = { tool, label: 'DRIVER', argv: (c, ch) => [...HEAD[tool], miss(c, ch), c.drv] };   // the before positional
+    FF[`${k} pos after-missing CR`] = { tool, label: 'DRIVER', argv: (c, ch) => [...HEAD[tool], c.drv, miss(c, ch)] };   // the after positional (r1)
+    FF[`${k} pos dotdot CR`] = { tool, label: 'DRIVER', argv: (c, ch) => [...HEAD[tool], dotdot(c, ch), c.drv] };
+}
+FF[`${BBM} pos ef-report CR`] = { tool: BB, label: 'DRIVER', argv: (c, ch) => [...HEAD_BBM, efRep(c, ch)] };
+FF[`${BBM} pos missing CR`] = { tool: BB, label: 'DRIVER', argv: (c, ch) => [...HEAD_BBM, miss(c, ch)] };
+FF[`${BBM} pos dotdot CR`] = { tool: BB, label: 'DRIVER', argv: (c, ch) => [...HEAD_BBM, dotdot(c, ch)] };
+FF['ad-zero pos ef-report CR'] = { tool: AD, label: 'DRIVER', argv: (c, ch) => ['--zero', efRep(c, ch)] };
+FF['ad-zero pos missing CR'] = { tool: AD, label: 'DRIVER', argv: (c, ch) => ['--zero', miss(c, ch)] };
+for (const [k, tool] of [['ad', AD], ['dd', DD], ['ic', IC], ['ibd', IBD]]) {
+    const drv = (c) => (tool === IBD ? [...HEAD[tool], c.drv] : [...HEAD[tool], c.drv, c.fa]);
+    FF[`${k} out file CR`] = { tool, label: '--out', argv: (c, ch) => { outFile(c, ch); return drv(c); } };
+    FF[`${k} out raw-link CR`] = { tool, label: '--out', argv: (c, ch) => { outRawLink(c, ch); return drv(c); } };
+}
+FF['dd staged out stage-file CR'] = { tool: DD, label: '--out', argv: (c, ch) => { outStage(c, ch); return [...HEAD[DD], '--driver', c.drv, '--before', c.fb, '--after', c.fa]; } };
+// Q-B75-FFBBSTAGE: bb's raw --out line now fires first in driver mode too (live label `--out`); the OLD run keeps `--out (resolved)`:
+// a pin that the 4dadb5d root was already clean in driver mode (nl_dir ran before bb's driver-mode --out refusals)
+const outStageLink = (c, ch) => { c.o = join(c.dir, `o${ch}`); mkdirSync(c.o); symlinkSync(c.x, join(c.o, 'stage')); };
+FF['bb staged out stage-link CR'] = { tool: BB, label: '--out', argv: (c, ch) => { outStageLink(c, ch); return [...HEAD[BB], '--driver', c.drv, '--before', c.fb, '--after', c.fa]; } };
+FF['bb ref out stage-link CR'] = { tool: BB, label: '--out', argv: (c, ch) => { outStageLink(c, ch); return refArgs(BB, c, G.S1, G.S2); } };
+FF['bb out file CR (bb-clean pin)'] = { tool: BB, label: '--out', oldLabel: '--out (resolved)', pin: true, argv: (c, ch) => { outFile(c, ch); return [...HEAD[BB], c.drv, c.fa]; } };
+function runFF(root, name, R, ch = CR) {
+    const c = mkCase(); const argv = R.argv(c, ch); const pre = existsSync(c.o); const tree0 = tree(c);
+    const r = run(root, c, argv, name);
+    return { r, bad: problems(r, c, R.tool, tree0, pre, R.label) };
+}
+for (const [name, R] of Object.entries(FF)) {
+    test(`ROW 12 ${name}: rc 2, 0 spawns, the exact G-X6 refusal (label ${R.label}), no CR on stderr, the case tree unchanged`, { skip }, () => {
+        const { r, bad } = runFF(LIVE(R.tool), name, R);
+        assert.deepEqual(bad, [], msg(r));
+    });
+    if (R.pin) {
+        test(`ROW 12 bb-clean --out pin OLD ${name}: the ${OLD_FF} root ALREADY meets the row (nl_dir runs before bb's --out refusals)`, { skip: OLDFFSKIP }, () => {
+            const { r, bad } = runFF(oldRoot(R.tool, OLD_FF), `${name} (old)`, { ...R, label: R.oldLabel ?? R.label });
+            assert.deepEqual(bad, [], msg(r));
+        });
+        continue;
+    }
+    test(`ROW 12 OLD twin ${name}: the ${OLD_FF} root fails the row with a CR on stderr`, { skip: OLDFFSKIP }, () => {
+        const { r, bad } = runFF(oldRoot(R.tool, OLD_FF), `${name} (old)`, R);
+        assert.ok(bad.includes('a CR on stderr'), `old root has no CR on stderr (the row has no teeth): ${JSON.stringify(bad)}\n${msg(r)}`);
+    });
+    test(`ROW 12 control ${name}: the same shape without the CR is refused (rc 2) but NOT by the new text`, { skip }, () => {
+        const c = mkCase(); const argv = R.argv(c, '');
+        const r = run(LIVE(R.tool), c, argv, `${name} (control)`);
+        assert.equal(r.status, 2, msg(r));
+        assert.ok(r.stderr !== '' && !r.stderr.includes('a newline or a CR is not allowed'), msg(r));
+    });
+}
+// ROW 13 mutants of the live roots (exact once): drop the new line, move it below the first raw-echo die, check a newline only
+const FF_OUT = '[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, ruling Q-B75-FFSCOPE)\n';
+const LF_POS = ['nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}', 'for p in ${POS[@]+"${POS[@]}"}; do [[ "$p" != *$\'\\n\'* ]] || die "DRIVER: a newline or a CR is not allowed (it would forge report lines)"; done'];
+const LF_OUT = ['nl_refuse "--out" "$OUT"', '[[ "$OUT" != *$\'\\n\'* ]] || die "--out: a newline or a CR is not allowed (it would forge report lines)"'];
+const NF_B = '|| die "DRIVER (before) not found (or not a readable file): ${POS[0]}"\n';
+const AD_NF = '|| die "DRIVER (${SIDES[$i]}) not found (or not a readable file): ${POS[$i]}"\ndone\n';
+const OUT_NOTDIR = '|| die "--out: $OUT exists and is not a directory"\n';
+const FFR = (pre, lab) => Object.keys(FF).filter((n) => n.startsWith(pre) && FF[n].label === lab && !FF[n].pin);
+const FF_MUT = [];
+for (const [k, tool] of [['dd', DD], ['ic', IC], ['ad', AD], ['bb', BB]]) {
+    const rows = FFR(`${k}`, 'DRIVER');   // dd / ic / ad / ad-zero / bb / bb-measure
+    FF_MUT.push({ id: `${k} DRIVER line dropped`, tool, edit: [FF_POS, ''], rows });
+    FF_MUT.push({ id: `${k} DRIVER line checks a newline only`, tool, edit: LF_POS, rows });
+}
+for (const [k, tool] of [['dd', DD], ['bb', BB]]) {   // r1: a check of the before positional only must not pass
+    FF_MUT.push({ id: k + ' DRIVER line checks ${POS[0]} only', tool, edit: ['nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}', 'nl_refuse "DRIVER" "${POS[0]}"'], rows: [k + ' pos after-missing CR'] });
+}
+FF_MUT.push({ id: 'ad DRIVER line moved below the not-found die', tool: AD, edits: [[FF_POS, ''], [AD_NF, AD_NF + FF_POS]], rows: ['ad pos missing CR', 'ad-zero pos missing CR'] });
+FF_MUT.push({ id: 'dd DRIVER line moved below the not-found die', tool: DD, edits: [[FF_POS, ''], [NF_B, NF_B + FF_POS]], rows: ['dd pos missing CR'] });
+FF_MUT.push({ id: 'ic DRIVER line moved below the not-found die', tool: IC, edits: [[FF_POS, ''], [NF_B, NF_B + FF_POS]], rows: ['ic pos missing CR'] });
+FF_MUT.push({ id: 'bb DRIVER line moved below the --diff not-found die', tool: BB, edits: [[FF_POS, ''], [NF_B, NF_B + FF_POS]], rows: ['bb pos missing CR', `${BBM} pos missing CR`] });
+for (const [k, tool] of [['ad', AD], ['dd', DD], ['ic', IC], ['ibd', IBD]]) {
+    const rows = FFR(`${k} `, '--out');
+    FF_MUT.push({ id: `${k} --out line dropped`, tool, edit: [FF_OUT, ''], rows });
+    FF_MUT.push({ id: `${k} --out line checks a newline only`, tool, edit: LF_OUT, rows });
+}
+const BB_OUT = '[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, rulings Q-B75-FFSCOPE, Q-B75-FFBBSTAGE)\n';
+const BB_STAGE = '  stage_check   # lib/stage.sh: every ref / file refusal, before any disk write\n';
+const BB_OUTROWS = ['bb staged out stage-link CR', 'bb ref out stage-link CR'];
+FF_MUT.push({ id: 'bb --out line dropped', tool: BB, edit: [BB_OUT, ''], rows: BB_OUTROWS });
+FF_MUT.push({ id: 'bb --out line checks a newline only', tool: BB, edit: LF_OUT, rows: BB_OUTROWS });
+FF_MUT.push({ id: 'bb --out line moved below stage_check', tool: BB, edits: [[BB_OUT, ''], [BB_STAGE, BB_STAGE + '  ' + BB_OUT]], rows: BB_OUTROWS });
+FF_MUT.push({ id: 'ad --out line moved below the not-a-directory die', tool: AD, edits: [[FF_OUT, ''], [OUT_NOTDIR, OUT_NOTDIR + FF_OUT]], rows: ['ad out file CR'] });
+FF_MUT.push({ id: 'dd --out line moved below the stage die', tool: DD, edits: [[FF_OUT, ''], ['|| die "--out: $OUT/stage exists and is not a directory"\n', '|| die "--out: $OUT/stage exists and is not a directory"\n' + FF_OUT]], rows: ['dd staged out stage-file CR'] });
+FF_MUT.push({ id: 'ic --out line moved below the not-a-directory die', tool: IC, edits: [[FF_OUT, ''], [OUT_NOTDIR, OUT_NOTDIR + FF_OUT]], rows: ['ic out file CR'] });
+FF_MUT.push({ id: 'ibd --out line moved below the cannot-create die', tool: IBD, edits: [[FF_OUT, ''], ['|| die "--out: cannot create $OUT ($OUT_UP is not a writable directory)"\n', '|| die "--out: cannot create $OUT ($OUT_UP is not a writable directory)"\n' + FF_OUT]], rows: ['ibd out file CR', 'ibd out raw-link CR'] });
+for (const m of FF_MUT) {
+    test(`ROW 13 mutant ${m.id}: rows ${m.rows.join(', ')} go red with a CR on stderr`, { skip }, () => {
+        assert.ok(m.rows.length > 0, `mutant ${m.id} names no row`);
+        const p = mutRoot(m);
+        for (const n of m.rows) {
+            assert.ok(FF[n], `mutant ${m.id} names an unknown row ${n}`);
+            const { r, bad } = runFF(p, `${n} (${m.id})`, FF[n]);
             assert.ok(bad.includes('a CR on stderr'), `mutant ${m.id} survives row ${n}: ${JSON.stringify(bad)}\n${msg(r)}`);
         }
     });

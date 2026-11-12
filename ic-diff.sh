@@ -52,12 +52,13 @@
 #                      "FAIL <label>: <got>" line per check, then "self-test: <C> check(s) ok" (exit 0) or
 #                      "self-test: <n> check(s) FAILED" (exit 1)
 #   -h, --help         this text (exit 2)
-#   Each value option is given at most once and never empty; --fn / --v8-flags / --out / --node take no newline and
-#   --fn no empty entry (stray comma). --self-test takes no other argument. --self-test / --help take no =value. An
+#   Each value option is given at most once and never empty; --fn / --v8-flags / --node take no newline, --out
+#   no newline or CR, and --fn no empty entry (stray comma). --self-test takes no other argument. --self-test /
+#   --help take no =value. An
 #   unknown option exits 2 with a did-you-mean hint. Every refusal exits 2 before any spawn or disk write, but the
 #   --v8-flags allowlist: it exits 2 after the --version and the first --v8-options spawn, still before any disk write.
 #
-# DRIVER: exactly two existing readable files (no newline in the path). Each trace run is
+# DRIVER: exactly two existing readable files (no newline or CR in the path). Each trace run is
 #   `env -u NODE_OPTIONS -u NODE_COMPILE_CACHE <node> [v8 flags] --log-ic --no-concurrent-recompilation
 #   --no-node-snapshot --logfile=<abs run dir>/run.log ./<driver file name>` with cwd = the driver's directory (`./`
 #   keeps a file name starting with `-` a path), stdout + stderr to DIR/raw/<side>/run.<k>.out with --out, else
@@ -1071,10 +1072,11 @@ for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
   esac
 done
 [[ ${#POS[@]} -eq 2 ]] || die "need exactly two DRIVER files (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]} (see --help)"
-[[ "${POS[0]}${POS[1]}" != *$'\n'* ]] || die "DRIVER: a newline is not allowed in a path"
+nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}   # the raw DRIVER values, before any refusal prints them (G-X6, ruling Q-B75-FFSCOPE)
 [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER (before) not found (or not a readable file): ${POS[0]}"
 [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER (after) not found (or not a readable file): ${POS[1]}"
 [[ "$OUT" != -* ]] || OUT="./$OUT"
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"   # the raw --out value, before any refusal prints it (G-X6, ruling Q-B75-FFSCOPE)
 if [[ -n "$OUT" ]]; then
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
