@@ -1096,6 +1096,131 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- b74 F-E: deopt-diff (dd), ic-diff and inlining-budget-diff (ibd): F-C's input-file refusal (rep_refuse, which prints the
+  input value) now runs after the G-X6 newline / CR refusals, still before any node / git / mktemp spawn or write
+  (finding fd-rev-1, the F-D r1 reviewer; rulings Q-B74-FCSEAM, Q-B74-FESCOPE). Before, an input with a CR that was
+  also `-ef` OUT/report.txt (or an ibd OUT_NAMES file) was refused with the rep_refuse text and put a CR on stderr
+  (exit 2, 0 spawns, no verdict change). bb already had this order; 2 rows now pin it. Inputs with no CR are all
+  still refused, but when one is `-ef` an OUT file and another refusal also applies (a symlink / unwritable /
+  hard-linked report.txt; (dd / ic) an --out raw/ that cannot be created, a node path or a driver dir refusal; a
+  newline / CR in the cwd, `--node`, a resolved DRIVER / --before / --after name or `--out`), that refusal now prints
+  its own message first. -h and self-tests unchanged. Tier: DETERMINISTIC. Gated in test/ref-cr-refuse.test.mjs (77 ->
+  96 tests: 6 rows ibd DRIVER -> report.txt / budget.turbo.tsv, ibd --before, ibd --after, dd DRIVER, ic DRIVER, with
+  old twins on 768c388; 2 bb-clean pins (live + 768c388); 3 move-back mutants). A4 ibd pin 476d640a -> ae0544f9.
+  Roots: deopt-diff 3e405c1a -> e841a841, ic-diff 4d5d3214 -> 3a866749, inlining-budget-diff 476d640a ->
+  ae0544f9. Review: r1 APPROVED.
+- b74 F-D: bytecode-budget (bb), deopt-diff (dd) and inlining-budget-diff (ibd) refuse a newline or a CR in a ref /
+  file value, exit 2 before any spawn or write (ruling Q-XF-CR (a); findings IBD-opus-b-2, DD-opus-a-2,
+  lib-cross-fable-1). The text is the G-X6 line `<label>: a newline or a CR is not allowed (it would forge report
+  lines)`; the value is never echoed. bb / dd (lib/stage.sh) check `--before-ref`, `--after-ref`, `--before`,
+  `--after`, `--module`, `--driver` and `--repo`. Before, only a newline was refused: a CR in a resolvable ref or a
+  committed `--module` dir reached node and `--out`, and a CR in `--repo` / a missing `--driver` / `--before` /
+  `--after` was echoed to stderr. ibd (G-X6 preflight, placed before F-C's rep_refuse) checks `--before-ref`,
+  `--after-ref`, `--driver` and `--repo`; before, a ref with a newline or a CR reached node and `--out`. -h: bb says
+  "the seven ref / file values take no newline or CR", dd "ref / file values take no newline or CR"; ibd -h
+  unchanged; self-tests unchanged. Tier: DETERMINISTIC. Gated in the new test/ref-cr-refuse.test.mjs (77 tests: gated
+  rows with rc 2, 0 node spawns, 0 stdout bytes, stderr exactly the G-X6 line + `VERDICT NO-VERDICT`, no CR on
+  stderr, tree unchanged; old twins on `git show 035e939:<root>`; controls; mutant rows incl. fixC (a) / (b) / (c) and
+  drop-one-value x 7 bb / 7 dd / 4 ibd). Review: r1 REJECTED (1 LITERAL: ibd's F-C rep_refuse printed a `--driver`
+  with a CR before the new refusal ran; the line moved above it, row 4b), r2 APPROVED. A4 ibd pin 6bb459f3 ->
+  476d640a. Roots: bytecode-budget e399e975 -> 5c24c28b, deopt-diff 7030e57e -> 3e405c1a, inlining-budget-diff
+  6bb459f3 -> 476d640a; lib/stage.sh 2f1525c9 -> 928e62cf. Commit 768c388. npm test (private copy, /bin/bash 3.2, quiet
+  lock, host PRELIMINARY at start, load1 4.13 vs baseline 2.21): 3468 tests, 3454 pass, 0 fail, 14 skip, rc 0, 1674 s.
+- b74 F-C: bytecode-budget (bb), deopt-diff (dd), ic-diff and inlining-budget-diff (ibd) refuse an input file that is
+  OUT/report.txt (findings dd-fable-1, DD-opus-a-1, ibd-cross-opus-1; commit 035e939). Before, an input (a DRIVER,
+  `--driver`, `--before` or `--after`, any name, same file by `-ef`) that IS OUT/report.txt was truncated by the report;
+  ibd also wrote OUT/budget.<tier>.tsv and OUT/<all | fn>.<tier>.diff.txt in place, through a symlink, a hard link or
+  over an input file: exit 0 SAME with the victim destroyed. Now lib/common.sh rep_refuse (pure builtins, no fork) dies
+  `--out: OUT/<name> is an input file of this run (<x>): the run would overwrite it`, exit 2, before any spawn or
+  write, with `VERDICT NO-VERDICT`; ibd fills OUT_NAMES per tier and also refuses a symlink (`is a symlink`) or an
+  extra hard link (`has another hard link`) at those names. bb / dd / ic assign OUT_NAMES="" on their defaults line, so
+  an inherited value is ignored. allocation-diff is unchanged (its own check and wording; it only gains the unused
+  shared rep_refuse). -h: one new refusal per tool (bb / dd / ic in the --out DIR text, ibd in "Also refused"); every
+  other line byte-identical; self-tests unchanged (ad 83, bb 69, dd 107, ic 83, ibd 92). Tier: DETERMINISTIC. Gated
+  in the new test/out-input-refuse.test.mjs (60 tests: 25 live rows with rc 2, 0 node spawns, 0 stdout bytes, input
+  sha256 and the --out tree unchanged; 25 old twins on `git show c1618a5:<root>`, SKIP locally / FAIL under CI=true
+  if the commit is unreachable; 4 controls; 6 env OUT_NAMES rows). Review: r1 REJECTED (3 LITERAL: inherited
+  OUT_NAMES; no --before / --after row; bb write ordering ungated), r2 APPROVED. Sibling rows moved: shlib I6f, ibd-u2
+  F5 (anchor narrowed), audit-sig PSUB ic anchor (ends at `REPORT=/dev/null`), deopt-diff-boundary A4 ibd pin
+  706adc81 -> 6bb459f3. npm test (private copy with .git + frozen fillers-final, private TMPDIR, /bin/bash 3.2, quiet
+  lock, host PRELIMINARY at start, load1 3.65 vs baseline 2.21): 3391 tests, 3376 pass, 1 fail, 14 skip, rc 1, 1590 s;
+  the fail was audit-sig PSUB ic (its anchor pinned the defaults line the fix extended), fixed, file re-ran 143 / 143
+  (quiet lock, QUIET).
+- b73 F-B: inlining-budget-diff: the default scope is every decision line of the compile units that involve a named
+  `--fn` (a unit that compiles it, or has a decision line naming it); node's own functions (normalizeString, node:path;
+  they reach Maglev or not with the driver's path length, which differs between the two sides) no longer turn
+  byte-identical programs into a DIFF (finding ibd-fable-1; ruling Q-X-IBD-SCOPE (a); commit c1618a5). Under
+  `--concurrent` every line is unit "*" (no attribution), so a DIFF in which no differing line names a `--fn` is
+  NO-VERDICT, exit 2 (the block can only turn DIFF into NO-VERDICT; an awk failure gives NO-VERDICT). Cost: a real
+  change seen only through an unattributed line under `--concurrent` is now NO-VERDICT; `--only-fn` or dropping
+  `--concurrent` gives a verdict. -h: the default-scope bullet only; the other four roots' -h / --help byte-identical;
+  self-test 92 unchanged. Tier: DETERMINISTIC. Gated in the new test/ibd-scope.test.mjs (fake node, canned maglev
+  traces: G1-G7 rows, 9 mutant rows, ef9cf7f history rows where G1 and G4a are red; G5 real node, opt-in
+  LITEUTILS_IBD_LIVE=1). Review: r1 REJECTED (2 LITERAL test-only: multi-fn and INLINE / SKIP mutants survived), r2
+  APPROVED. deopt-diff-boundary A4 ibd pin 76c31db5 -> 706adc81. npm test (private copy with .git + frozen
+  fillers-final, private TMPDIR, /bin/bash 3.2, quiet lock, host QUIET at start, load1 1.91): 3331 tests, 3317 pass,
+  0 fail, 14 skip (b72's 12 + the 2 opt-in G5 rows), rc 0, 1597 s.
+- b73 F-A: two class-1 findings (commit ffff1f7; rulings Q-B73-CITIME, Q-B73-FACOMMIT). ic-fable-1, all five tools: an
+  inherited BASHOPTS=nocasematch (bash >= 4.1) no longer makes `[[ == ]]` ignore letter case. ic-diff read two IC
+  multisets that differ only in a key's case (`value` vs `Value`) as SAME, exit 0; it now says DIFF, exit 1.
+  lib/prologue.sh runs `shopt -u nocasematch` right after `set -euo pipefail`, before any string compare (bash 3.2 was
+  never affected). IBD-opus-b-1: inlining-budget-diff ref mode stages each side by its FULL commit sha (it handed
+  `git rev-parse --short` back to git; a tag or branch named like the abbreviation staged the wrong commit: a wrong
+  SAME). Heads print `<ref> @ <sha 12>` (was <sha 7>), the form bb and dd already print (lib/modes.sh). -h / --help of
+  all five roots byte-identical; self-tests unchanged. Tier: DETERMINISTIC. Gated in test/ic-diff.test.mjs NOCASE
+  (bash >= 4.1; counted SKIP without one, FAIL under CI_STRICT on linux; ef9cf7f twin reads SAME exit 0) and
+  test/ibd-u2.test.mjs FULLSHA (tags named like every prefix 4..40 of the before sha; ef9cf7f twin stages the after
+  commit and reads SAME). Review: r1 APPROVED. deopt-diff-boundary A4 ibd pin 5b9f3c26 -> 76c31db5. npm test (private
+  copy with .git + frozen fillers-final, private TMPDIR, /bin/bash 3.2, quiet lock, host PRELIMINARY at start, load1
+  2.69, one other node at 107%): 3300 tests, 3286 pass, 2 fail, 12 skip, 1648 s; the 2 fails were the A4 pin and its
+  teeth row (root moved on purpose); after the re-pin test/deopt-diff-boundary.test.mjs: 110 tests, 110 pass, 0 fail
+  (140 s, host QUIET, load1 2.02).
+- b73 CI time (Q-B73-CITIME; commit ffff1f7): workflow job timeout 120 -> 180 min (`ci.yml` timeout-minutes; three of
+  the four macOS legs ran 108-118 min wall (node 26: 63 min) against 120 in run 43049200147,
+  8 / 8 legs green, 3288 tests, 0 fail each).
+- b72 CI-HANG: every ubuntu leg hung on 085c54d (run 42965376108); macOS (bash 3.2) was green (findings lib-opus-c-1,
+  ic-fable-2; rulings Q-B72-REPRO, Q-B72-G1FLAKE; commit ef9cf7f). `_sig` (lib/prologue.sh) ran a bare `wait` after
+  `trap '' INT TERM HUP`; on bash 5 that also waits for a live `< <( )` writer (not a job, never killed), so the tool
+  hung and ignored every later signal. `_sig` now SIGKILLs each pid of `$SIG_PID $(jobs -pr)` once (deduped), then
+  waits by pid; no operand-less wait is left, and a signal between the `&` and drv_wait's `SIG_PID=$!` is covered.
+  Residual: bash's SIGCHLD handler may reap a listed job between the listing and its kill. -h, --help and --self-test
+  of every root byte-identical; self-tests unchanged. Harness: test/spawn-cap.mjs gains psGroup / armGroup /
+  capSync opts.group, so a hung signal row ends as a NAMED timeout with a ps dump of its group instead of a 3600 s
+  file kill. Tier: DETERMINISTIC. Gated in test/spawn-cap.test.mjs (G1-G4, S6), test/audit-sig.test.mjs (T, PSUB
+  bash >= 5 CI_STRICT on linux, W; aed6684 twins time out) and audit-g2 A3. Review: r1 REJECTED (2 LITERAL: kill after
+  reap of a duplicate pid; G3 had no teeth), r2 APPROVED. deopt-diff-boundary A4 ibd pin 06927a13 -> 5b9f3c26. npm
+  test (private copy with .git + frozen fillers-final, private TMPDIR, /bin/bash 3.2, quiet lock, host QUIET at
+  start, load1 1.77): 3288 tests, 3276 pass, 0 fail, 12 skip, rc 0, 1669 s (run 1, PRELIMINARY, had 1 fail: the
+  host-dependent audit-g1 BB-opus-1 twin, Q-B72-G1FLAKE). CI proof of the fix: run 43049200147 (push of ef9cf7f), 8 / 8
+  legs green; ubuntu bash 5.3.9, uutils env 0.10.0 execs (that lead is closed).
+- b71 test-leak (Q-B71-TMPLEAK; commit aed6684): test/inlining-budget-diff.test.mjs ran each mutant's `--self-test`
+  with the caller's TMPDIR, so the probe-no-rm mutant left 7 inlining-budget-diff.XXXXXX files in the shared TMPDIR
+  per `npm test` (245 found, 35 runs since b62); the tools themselves did not leak. Every mutant run there now goes
+  through mutSelfTest with a private TMPDIR, and a row fails if the leak lands outside the mutant's own dir. Tier:
+  DETERMINISTIC.
+- b71 G-SIG-2: allocation-diff (ad) run_side, bytecode-budget's per-fn probe runs and inlining-budget-diff's bytecode
+  probes no longer run the driver inside `$( )` (commit aed6684; rulings Q-B70-ADPIPE, Q-B71-TRAPS). Before, a SIGINT /
+  SIGTERM / SIGHUP waited for the in-flight run and a killed probe could leave one bytecode-budget.XXXXXX /
+  inlining-budget-diff.XXXXXX. All three are now main-shell jobs `( cd .. && exec env .. ) >FILE 2>&1 <&0 & drv_wait`;
+  the tee | tr | awk parse reads FILE in a `$( )` that runs no driver. bb / ibd hand back PROBE_OUT (byte-equal to the
+  old `$( )` value); bb reuses BB_TMP and its chained EXIT trap, ibd gains IBD_TMP + a chained EXIT trap, both turning
+  `set -e` off first (r1: a failing rm in the trap exited rc 1, a DIFF code). The die-in-`$( )` census guards go 6 ->
+  1 (lib/common.sh refuse_live). ad's driver stdout is now the regular file $T/run.out (Q-B70-ADPIPE: bb / dd / ibd /
+  ad all write driver output to a regular file), with dd's 64 KiB append check: a full TMPDIR is NO-VERDICT `(append
+  exited N)`, order awk > tr > tee > append > driver. -h: bb, ibd and ad say a signal now SIGKILLs the run and the temp
+  goes with the EXIT trap; ad's pipe text becomes the regular-file text, its console.log drop is labelled a pipe-era
+  measurement. Residual: a signal inside `$(mktemp)`, or a SIGKILL of the tool. Unchanged: stdin rule (`<&0`), spawn
+  and mktemp counts, self-tests (ad 83, bb 69 (--fixtures 93), dd 107 (124), ic 83, ibd 92); golden vs 085c54d: 106 /
+  112 files byte-identical, only ad / bb / ibd -h and --help differ. REPORTED, not gated (coder probes, bash 3.2,
+  PRELIMINARY host): ad / bb / ibd exit 2 8-13 ms after the signal in the run / probe phase; 085c54d waits ~30 s. Tier:
+  DETERMINISTIC. Gated in test/audit-sig.test.mjs (90 -> 119 tests; second old twin `git show 085c54d:<root>`,
+  CI_STRICT; A1 kill rows <= 10 s, A2 retention with trap-rm mutant teeth, STDIN per-site mutants, A4 ad append
+  fail-closed under ulimit -f 32, RMFAIL). Sibling rows moved: allocation-diff E1 / E4 / E5 / R1, audit-g1 redir-in-cd
+  / noapp-probe, bytecode-budget-awk TEE / TR_PLAIN, bytecode-budget-diff-boundary A1-gate-raw-name / M-two-loops,
+  ext-audit-inl probe tr / MUT_PROBE, inlining-budget-diff probe mutants + -h pin; deopt-diff-boundary A4 ibd pin
+  5875cc34 -> 06927a13. Review: r1 REJECTED (2 LITERAL: the trap order; the TMPLEAK row bypassed the runner it
+  guards), r2 APPROVED. npm test (private copy with .git + frozen fillers-final, /bin/bash 3.2, quiet lock, host
+  PRELIMINARY load1 1.93): 3256 tests, 3244 pass, 0 fail, 12 skip, rc 0, 1754 s.
 - b70 G-SIG-1: a SIGINT / SIGTERM / SIGHUP while a tool waits for its driver now ends at once (cross-script audit L1 /
   L5; Q-B66-SIG, Q-B67-STDIN; LEDGER #117). Before, bytecode-budget (bb), deopt-diff (dd) and inlining-budget-diff (ibd)
   died by the signal inside `$( )` or printed `unexpected error (exit 143)` (bash 3.2; `(exit 0)` on bash 5, LEDGER
@@ -1104,9 +1229,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exactly one `VERDICT NO-VERDICT` line (stderr, and the last two lines of `--out DIR/report.txt`), the driver run is
   killed (SIGKILL on its recorded pid), and the temp files are removed. allocation-diff, bb's per-fn probe runs and
   ibd's bytecode probes run the driver inside `$( )`, so a signal there waits for the in-flight run first and then
-  prints the same lines (G-SIG-2 keeps that residual). ic-diff's message gains the signal name (`ic-diff: interrupted
-  (SIGTERM)`, was `ic-diff: interrupted`). L1: an abort that exits 2 without a `die` (for example `sh -c "exit 2"` after
-  the prologue) used to stay silent because the EXIT trap tested `rc -eq 2`; it now prints `<tool>: unexpected error
+  prints the same lines (G-SIG-2 keeps that residual) (closed b71, G-SIG-2). ic-diff's message gains the signal
+  name (`ic-diff: interrupted (SIGTERM)`, was `ic-diff: interrupted`). L1: an abort that exits 2 without a `die` (for
+  example `sh -c "exit 2"` after the prologue) used to stay silent because the EXIT trap tested `rc -eq 2`; it now
+  prints `<tool>: unexpected error
   (exit 2)` and `VERDICT NO-VERDICT`, because `die` sets a DIED flag and the trap tests that flag instead (6 die-in-`$(
   )` sites in the census: common.sh refuse_live; bb RB / RA / RL probe lines; ibd b= / a= probe lines, each `|| {
   DIED=1; exit 2; }`). A signal after FINAL=1 changes nothing. Unchanged by design: bb's base_list keeps `</dev/null`,

@@ -31,16 +31,16 @@ carry their tier: all CI timings below are REPORTED (hosted CI, one run each, as
 5. **Resolve once, to one absolute path.** Node is resolved once; a dash-led argument is a name, not an
    option; a logical `..` after a symlink is refused. *(#4, #21, #26, #27, #28)*
 6. **Test the tests: every new gate must fail on the old code.** A row that passes on a timeout, a mutant that
-   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117, #118)*
+   survives, or a control that is not reproducible is a defect in the test, never "re-run it". *(#36, #47-#53, #56, #94, #99, #100, #105, #108, #110, #117-#119, #121)*
 7. **Oracles must be portable across userlands.** BSD vs uutils coreutils, macOS awk (cuts at NUL) vs NUL-clean awk:
    accept every form or probe the host. *(#32, #39, #54, #99, #105)*
 8. **`spawnSync` blocks the event loop, so a timer cannot fire.** Never judge a child timed out by a timer that
    could not have run; check the exit first. Size caps to the slowest CI leg, and `--test-timeout` to the slowest
-   FILE. *(#40, #42, #43, #100)*
+   FILE. *(#40, #42, #43, #100, #120)*
 9. **A history pin must be reachable from a ref, and a CI view must include `.git`.** Otherwise it passes locally
    and dies (or silently skips) in CI. *(#11, #38, #55, #94)*
 10. **Never kill by pattern, never share a scratch dir, never run a test on the live tree.** Lanes work in private
-    `mktemp -d` dirs, kill only their own PIDs, and test in an overlay. *(#57-#61, #93)*
+    `mktemp -d` dirs, kill only their own PIDs, and test in an overlay. *(#57-#61, #93, #119)*
 11. **A literal REJECT gets one in-burst fix round; a design REJECT stops the unit.** Rejected diffs are parked
     against the overlay base, never reset to HEAD. *(#25, #62, #63, #100)*
 
@@ -521,7 +521,7 @@ on every bash, bash 5 UNPROVEN until the next ubuntu CI run of audit-sig. A die 
 so the 6 census sites (lib/common.sh refuse_live; bb RB / RA / RL probe lines; ibd b= / a= probe lines) each carry `|| {
 DIED=1; exit 2; }`. Measured (coder, bash 3.2): dd / ic / bb (base_list) / ibd (run_trace) exit 1-8 ms after SIGTERM /
 SIGINT / SIGHUP, driver pid dead, 1 VERDICT line; ad, bb's probe runs and ibd's bytecode probes wait for the in-flight
-driver (inside `$( )`, G-SIG-2). Q-B67-STDIN: `<&0` keeps the caller's stdin at every run site except bb's base_list,
+driver (inside `$( )`, G-SIG-2; closed b71, #119). Q-B67-STDIN: `<&0` keeps the caller's stdin at every run site except bb's base_list,
 which stays `</dev/null` (its stdin today). (b) r1 doc-truth catch (REJECTED, 1 LITERAL): the -h claim "after the
 verdict line a signal changes nothing" was false: `say "VERDICT .."` runs one command before FINAL=1, so a signal there
 gives a second VERDICT NO-VERDICT, rc 2. Rule (law 6 spirit): a contract sentence about "after X" must name the exact
@@ -546,7 +546,7 @@ named by review (NITs, not fixed): a signal during die or the EXIT trap gives tw
 chained temp rm (microsecond window, rc 2); the census guard maps any non-zero status of that `$( )` to a silent 2 (only
 0 / 2 reachable today); `_sig`'s bare `wait` has no deterministic tooth on bb / dd / ic; on bash >= 5.1 `wait` may also
 wait for a `< <( )` producer (UNVERIFIED, no bash 5 here); a signal between `&` and `SIG_PID=$!` waits the run out
-(accepted by the spec); the bb --self-test temp dir is still left behind on SIGINT. (f) Evidence:
+(accepted by the spec); the bb --self-test temp dir is still left behind on SIGINT. b72 (#120) closed two of these: `_sig`'s bare `wait` is gone (audit-sig T / PSUB / W give it teeth) and the bash >= 5.1 `< <( )` wait was REAL on bash 5.3.9 (CI run 43049200147) and is fixed; the rest stay open. (f) Evidence:
 `.handoff/PLAN-b67-gsig.md`, `.handoff/evidence/b70-gsig/`, `.handoff/evidence/b70-npm/` (local, untracked).
 
 ---
@@ -573,6 +573,115 @@ new row red on the pre-NULLCTL roots. r2 APPROVED. Count pins moved in audit-g5,
 bytecode-budget-stage-boundary (bb 59 -> 60 without git; #114 again). The ibd rows use a POSIX-sh fake node (law 7).
 Tier DETERMINISTIC. (d) Evidence: `.handoff/RULINGS-b70.md`, `.handoff/PLAN-b70-nullctl.md`,
 `.handoff/evidence/b70-nullctl/CENSUS.md` (local, untracked).
+
+---
+
+**#119 G-SIG-2 (b71): the last driver runs inside `$( )` (Q-B66-SIG, Q-B70-ADPIPE, Q-B71-TMPLEAK, Q-B71-TRAPS; closes
+#92 (e), #117's residual; commit aed6684).** (a) Defect class and mechanism: allocation-diff's run_side,
+bytecode-budget's per-fn probe runs and inlining-budget-diff's bytecode probes still ran the driver inside `$( )`, so a
+SIGTERM / SIGINT / SIGHUP waited for the in-flight run (085c54d: ~30 s, coder probe) and a killed probe could leave one
+`bytecode-budget.XXXXXX` / `inlining-budget-diff.XXXXXX`. All three are now main-shell jobs `( cd .. && exec env ..
+) >FILE 2>&1 <&0 & drv_wait`; the `tee | tr | awk` parse reads FILE in a `$( )` that runs no driver. bb / ibd hand back
+PROBE_OUT (byte-equal to the old `$( )` value); bb reuses BB_TMP and its chained EXIT trap, ibd gains IBD_TMP and a
+chained EXIT trap. The die-in-`$( )` census guards go 6 -> 1 (lib/common.sh refuse_live). Q-B70-ADPIPE: ad's driver
+stdout is now the regular file `$T/run.out` (bb / dd / ibd / ad all write driver output to a regular file), with dd's
+64 KiB append check: a full TMPDIR is NO-VERDICT `(append exited N)`, order awk > tr > tee > append > driver; the
+pipe-era console.log drop no longer applies to ad (-h keeps the old measurement, labelled pipe-era). -h of bb, ibd and
+ad say a signal now SIGKILLs the run and the temp goes with the EXIT trap. Residuals (-h): a signal inside
+`$(mktemp)`, a SIGKILL of the tool. Coder probes (bash 3.2, PRELIMINARY host, REPORTED): ad / bb / ibd exit 2 8-13 ms
+after the signal in the run / probe phase. Golden vs 085c54d: 106 / 112 files byte-identical, only ad / bb / ibd -h and
+--help stdout differ; self-tests unchanged (ad 83, bb 69 (--fixtures 93), dd 107 (124), ic 83, ibd 92); spawn and
+mktemp counts unchanged. Roots: allocation-diff.sh 129a90bb -> 29d6e484, bytecode-budget.sh eff64188 -> 0b9c9157,
+deopt-diff.sh 03f90d3d -> fc04657d, ic-diff.sh a7334599 -> f4a6f429, inlining-budget-diff.sh 5875cc34 -> 06927a13 (dd /
+ic by the prologue comment only); lib/prologue.sh 6a5ea148 -> 29b5811f. (b) Review r1 REJECTED (2 LITERAL), r2
+APPROVED: (1) bb's / ibd's chained EXIT trap ran `rm -f` before `set +e`, so a failing rm under set -e exited the trap
+rc 1 (a DIFF code, fail-open) instead of 2; both traps now turn set -e off FIRST (audit-sig RMFAIL rows, red on the
+pre-fix roots). The same rm-before-`set +e` shape in 6 PRE-EXISTING traps (allocation-diff :348 / :920, deopt-diff :577
+/ :1408, ic-diff :332 / :881) was ruled its own unit, not this round (Q-B71-TRAPS). (2) The TMPLEAK row bypassed the
+runner it guards (see (c)). (c) TMPLEAK lesson (law 10 applied to tests; Q-B71-TMPLEAK): test/inlining-budget-diff.test.mjs
+ran each mutant's `--self-test` with the caller's TMPDIR (cleanEnv() never sets it), so the `probe-no-rm` mutant left 7
+`inlining-budget-diff.XXXXXX` files in the shared TMPDIR per npm test: 245 found (35 runs since b62, 7 per run, sizes
+32768 / 65536 / 65583 / 67120 / 67125), removed with the maintainer's OK (Q-B71-TMPDEL). The tools themselves did not
+leak (TERM / HUP / KILL mid-probe on 085c54d left 0 files). Rule: a mutant runner whose mutant drops a temp `rm` gives
+the child a PRIVATE TMPDIR, or the suite leaks into the shared one; the leak was found by a residue census of the
+shared TMPDIR, not by any gate. Now every mutant run there goes through mutSelfTest with a private TMPDIR, and a row
+fails if the leak lands outside the mutant's own dir. (d) Gate: test/audit-sig.test.mjs, 90 -> 119 tests, DETERMINISTIC,
+second old twin `git show 085c54d:<root>` (CI_STRICT): A1 kill rows (ad run, bb probe diff + file mode, ibd probe, x 3
+signals, exit <= 10 s, twin overrun row), A2 retention with bb / ibd trap-rm mutant teeth, STDIN per-site ` <&0 &`
+mutants (ad, bb / ibd probe sites), A4 ad append fail-closed under `ulimit -f 32` with a no-append mutant, RMFAIL.
+Sibling rows moved (#114): allocation-diff E1 / E4 / E5 / R1, audit-g1 redir-in-cd / noapp-probe, bytecode-budget-awk
+TEE / TR_PLAIN, bytecode-budget-diff-boundary A1-gate-raw-name / M-two-loops, ext-audit-inl probe tr / MUT_PROBE,
+inlining-budget-diff probe mutants and the -h pin, deopt-diff-boundary A4 ibd parity pin 5875cc34 -> 06927a13. npm test
+(private copy with .git + frozen fillers-final, /bin/bash 3.2, quiet lock, host PRELIMINARY load1 1.93): 3256 tests,
+3244 pass, 0 fail, 12 skip, rc 0, 1754 s. Evidence: `.handoff/PLAN-b70-gsig2.md`, `.handoff/RULINGS-b71.md`,
+`.handoff/evidence/b71-tmpdir/FINDINGS.md`, `.handoff/evidence/b71-gsig2/`, `.handoff/evidence/b71-npm/` (local,
+untracked).
+
+---
+
+**#121 final review fixes (b73 / b74): F-A, F-B, F-C, F-D, F-E (audit 2026-11-11-final; rulings Q-B73-FACOMMIT,
+Q-X-IBD-SCOPE, Q-XF-CR, Q-B74-FCSEAM, Q-B74-FESCOPE).** (a) F-A (ffff1f7; findings ic-fable-1, IBD-opus-b-1; both class 1). ic-fable-1: an inherited
+`BASHOPTS=nocasematch` (bash >= 4.1) made `[[ == ]]` ignore letter case, so ic-diff read two IC multisets that differ
+only in a key's case (`value` vs `Value`) as SAME, exit 0. lib/prologue.sh now runs `shopt -u nocasematch` right after
+`set -euo pipefail`, before any string compare, in all five roots; bash 3.2 was never affected (it ignores BASHOPTS).
+IBD-opus-b-1: ibd ref mode kept `git rev-parse --short` and handed it back to git; a tag or branch named like that
+abbreviation wins over an abbreviated object name, so the wrong commit was staged and the run read a wrong SAME.
+lib/modes.sh resolves the full sha and stages from it; the head now prints `<ref> @ <sha 12>` (was <sha 7>), the form
+bb and dd already print. Gate: ic-diff.test NOCASE (bash >= 4.1; counted SKIP without one, FAIL under CI_STRICT on
+linux; the ef9cf7f twin reads SAME) and ibd-u2.test FULLSHA (tags named like every prefix 4..40 of the before sha;
+12-hex heads; the `--short` and re-abbreviate-before-show mutants red). Review claude-opus-5-5 APPROVED r1; mutants
+nocaseglob, shopt after the compare, `shopt -s`, `${sha:0:7}` in show, head `${sha:0:7}` and full, `--short=12` all
+caught. npm test (private copy, /bin/bash 3.2, host PRELIMINARY, load1 2.69): 3300 tests, 3286 pass, 2 fail, 12 skip,
+1648 s; the 2 fails were the A4 parity pin and its teeth row (root moved on purpose); re-pin 5b9f3c26 -> 76c31db5, then
+test/deopt-diff-boundary.test.mjs 110 / 110 (host QUIET, load1 2.02). Q-B73-FACOMMIT: F-A landed alone (its approved ibd
+root staged from the overlay copy) because F-B had already rebuilt the same live root. CI proof of b72 (run 43049200147,
+ef9cf7f): 8 / 8 legs green (see #120). (b) F-B (c1618a5; finding ibd-fable-1, class 1; Q-X-IBD-SCOPE (a)). The default
+scope was the whole trace, so node's own functions entered it or not with the driver's path length, which differs
+between the two sides (`stage/before/` vs `stage/after/`): `normalizeString` (node:path) reaches Maglev once node
+resolves a path of >= 45 characters, and byte-identical programs read DIFF. Now the default scope is every decision
+line of the compile units that involve a named `--fn` (a unit that compiles it, or has a decision line naming it):
+SCOPE_AWK gains hit() and a marking pass (`pass=1 FILE pass=2 FILE`). Under `--concurrent` every line is unit `*` (no
+attribution), so a DIFF in which no differing line names a `--fn` is NO-VERDICT, exit 2. Cost (stated in -h): a real
+change seen only through an unattributed line under `--concurrent` is NO-VERDICT; `--only-fn` or dropping
+`--concurrent` gives a verdict. Gate: test/ibd-scope.test.mjs (fake node, canned traces; G1-G4b, G6 / G6c, G7 / G7s, 9
+mutant rows, ef9cf7f history rows, G5 real node opt-in `LITEUTILS_IBD_LIVE=1`). Review r1 REJECTED (2 LITERAL,
+test-only, GATE TEETH: multi-fn and INLINE / SKIP fail-open mutants survived); fix round G6 / G6c / G7 / G7s + 4 mutant
+rows; r2 APPROVED. npm test (host QUIET, load1 1.91): 3331 tests, 3317 pass, 0 fail, 14 skip (b72's 12 + the 2 opt-in
+G5 rows), rc 0, 1597 s. A4 pin 76c31db5 -> 706adc81. (c) F-C (035e939; findings dd-fable-1, DD-opus-a-1,
+ibd-cross-opus-1; class 3). bb, dd, ic and ibd truncated an input file (a driver, `--driver`, `--before`, `--after`)
+that IS `OUT/report.txt` (ad already refused); ibd also wrote `OUT/budget.<tier>.tsv` and `OUT/<all | fn>.<tier>.diff.txt`
+in place, through a symlink, a hard link or over an input file: exit 0 SAME with the victim destroyed. Fix: lib/common.sh
+`rep_refuse` (pure builtins, `-ef` over `report.txt ${OUT_NAMES-}` x every input value), dies `--out: OUT/<name> is an
+input file of this run (<x>): the run would overwrite it`, exit 2 before any spawn or write; ibd fills OUT_NAMES per
+tier and refuses a symlink / an extra hard link at each name first. Review r1 REJECTED (3 LITERAL), r2 APPROVED: (1) an
+inherited-env read: `env OUT_NAMES='*'` refused a valid run, so bb / dd / ic now assign `OUT_NAMES=""` on their
+defaults line; (2) no `--before` / `--after` row, so mutant M12 survived; (3) bb's write ordering was ungated, so mutant
+M11 survived. M11, M12, M13 / M14 (the OUT_NAMES reverts) each turn rows red. Gate: test/out-input-refuse.test.mjs, 60
+tests (25 live rows, 25 old twins on `git show c1618a5:<root>`, 4 controls, 6 ROW 8 rows). npm test (host PRELIMINARY,
+load1 3.65 vs baseline 2.21): 3391 tests, 3376 pass, 1 fail, 14 skip, rc 1, 1590 s; the fail was audit-sig PSUB ic (see
+#114: the stop-gate suite caught a sibling anchor). A4 pin 706adc81 -> 6bb459f3. Roots after F-C: allocation-diff
+953026e3, bytecode-budget e399e975, deopt-diff 7030e57e, ic-diff 4d5d3214, inlining-budget-diff 6bb459f3; lib/common.sh
+9573fe7a -> 3237d5b1. Tier DETERMINISTIC. (d) F-D (768c388, APPROVED r2; findings
+IBD-opus-b-2, DD-opus-a-2, lib-cross-fable-1; Q-XF-CR (a) "Refuse in all values"). Before: a CR in a resolvable ref or
+a committed `--module` dir reached node and `--out`; a CR in `--repo`, a missing `--driver` / `--before` / `--after`
+was echoed to stderr; an ibd ref with a newline or CR reached node and `--out`. Fix: lib/stage.sh's newline-only loop
+became one `nl_refuse` over the seven bb / dd values (`--before-ref`, `--after-ref`, `--before`, `--after`, `--module`,
+`--driver`, `--repo`); ibd: one `nl_refuse` over `--before-ref`, `--after-ref`, `--driver`, `--repo` in the G-X6
+preflight; bb / dd -h say "no newline or CR". Review (claude-opus-5-5) r1 REJECTED, LITERAL, FAIL-OPEN class "a refusal
+that echoes the value fires before the value's own CR refusal": the fix spec (fixC) predates F-C's rep_refuse, so in
+ibd a `--driver` with a CR that is `-ef OUT/report.txt` was printed by rep_refuse first; the CR line moved above it
+(row 4b); r2 APPROVED. Rule: a fix spec written against an older snapshot can be ordered wrong against a fix that landed
+after the snapshot; re-derive refusal ORDER on the live tree (fixC vs F-C). The same seam for ibd POS /
+`--before` / `--after`, dd POS and ic POS is closed by (e), unit F-E (Q-B74-FCSEAM, Q-B74-FESCOPE, `.handoff/RULINGS-b74.md`). Gate:
+test/ref-cr-refuse.test.mjs, 77 tests, old twins on 035e939, mutant rows. (e) F-E (working tree, APPROVED r1, not yet
+committed; finding fd-rev-1 from the F-D r1 reviewer; Q-B74-FCSEAM, Q-B74-FESCOPE). In ibd, dd and ic, F-C's
+rep_refuse (it prints the input value) ran before the G-X6 newline / CR refusals, so an input with a CR that was `-ef
+OUT/report.txt` (or an ibd OUT_NAMES file) put a CR on stderr. The call moved below G-X6 (dd / ic: out of the `--out`
+block as `[[ -z "$OUT" ]] || rep_refuse ...`), still before any node / git / mktemp spawn or write (review decided: in
+this suite "spawn" = node, git, mktemp; bb already ran sha8 before rep_refuse). The refusal ORDER changed for non-CR
+inputs (all still refused). bb already had the right order (pinned by 2 bb-clean pins, live + 768c388). Gate: ref-cr-refuse 96 tests (6 rows +
+768c388 twins, 2 bb pins, 3 move-back mutants). Evidence: the three commit messages, `.handoff/RULINGS-b73.md`,
+`.handoff/RULINGS-final-review.md`, `.handoff/evidence/b73-npm/`, `.handoff/evidence/b74-npm/` (local, untracked).
 
 ---
 
@@ -613,7 +722,7 @@ timeout mark is trusted only after the exit status is checked. Evidence: CI run 
 
 **#44 V8-TIMEOUT (burst 39).** A5 M5 passed on a hung driver, and A4 could run 280 min against the 120 min job cap
 (a worst-case bound, 40 x the old 420 s cap; INFERRED, not measured). Fix: timeout fails by name;
-60 s cap per spawn. Evidence: CHANGELOG "V8-TIMEOUT" line 477.
+60 s cap per spawn. Evidence: CHANGELOG "V8-TIMEOUT" line 477. b73 (#120 (e)): the 120 min job cap was raised to 180 min (Q-B73-CITIME, ffff1f7; three of the four macOS legs ran 108-118 min in run 43049200147).
 
 **#45 CI-EPIPE (burst 40).** ubuntu node 24 + 26 went RED on `v8flags.test.mjs:356` "A5 M5": spawn error EPIPE. A
 `spawnSync` stdin write races the child's exit, and `spawnOk` failed on any `r.error`. Ruling Q-EP1: EPIPE is benign
@@ -739,6 +848,43 @@ dies by the file timeout, not row by row. Not covered by the policy: test/byteco
 ~:665 waits at most 60 s (3000 x 20 ms) for a checkpoint inside a --self-test before its SIGINT; same risk class on a
 slow leg (FILLERS). Measured numbers are REPORTED (hosted CI, 2 runs, 16 leg-runs). Evidence:
 .handoff/evidence/b68-ci/ (SLOW-ROWS-16.txt, perfile.mjs, gh-run-*.log; local, untracked).
+
+---
+
+**#120 CI-HANG (b72): an operand-less `wait` in `_sig` hung every ubuntu leg (Q-B72-REPRO, Q-B72-G1FLAKE; findings
+lib-opus-c-1, ic-fable-2; commit ef9cf7f).** (a) Symptom: CI run 42965376108 (085c54d) was RED on every ubuntu leg
+(node 22 FAILED at the 3600 s per-file bound; node 24 / 26 / 26.8.2 CANCELLED at the job timeout); macOS (bash 3.2) was
+green. Mechanism, reproduced by two independent final-review lanes (lib-opus-c-1, claude-opus-5-5; ic-fable-2, Fable
+5.2): `_sig` (lib/prologue.sh) ran a bare `wait` after `trap '' INT TERM HUP`. On bash 5 a bare wait also waits for a
+live `< <( )` writer, which is not a job, is never killed and is never drained inside the trap: the tool hangs, ignores
+every later INT / TERM / HUP, and only SIGKILL ends it. bash 3.2's bare wait ignores process substitutions. The
+reviewer's reproduction (deopt-diff file mode, a 30000-file repo, SIGTERM during is_tracked's `git ls-files -z`) is RED
+on aed6684 and GREEN on the fix under bash 5.3.20 (exit 2 `interrupted (SIGTERM)` after 100 ms). (b) Fix: `_sig`
+SIGKILLs each pid of `$SIG_PID $(jobs -pr)` once, before any reap (deduped: during drv_wait both name the driver and
+bash's SIGCHLD handler reaps it inside the kill pass, so a second kill would hit a freed pid; review r1), then waits by
+pid on that list. No operand-less wait is left; `jobs -pr` also covers a signal between the `&` and drv_wait's
+`SIG_PID=$!` (the old `_sig` skipped its kill there and waited the run out). Residual: bash's SIGCHLD handler may reap
+a listed job between the listing and its kill. -h, --help and --self-test of every root byte-identical (15 vectors);
+self-tests ad 83, bb 69, dd 107, ic 83, ibd 92. (c) Harness (Q-B72-REPRO "CI only + ps dump": no local ubuntu, no
+container): test/spawn-cap.mjs gains psGroup, armGroup (detached child, at cap a `ps` dump of the pgid, group signal,
+SIGKILL after a grace; law 8 re-check after a blocked loop) and capSync `opts.group`, so a hung signal row ends as a
+NAMED timeout with a ps dump instead of a 3600 s file kill (audit-g2 sigtermRun, the deopt-diff- / bytecode-budget-
+stage-boundary escalations, ic-diff.test, ext-audit). Rows: spawn-cap.test G1-G4 + law-8 control, S6 runner census;
+audit-sig T (no operand-less wait; 6 on aed6684), PSUB (lib-opus-c-1's gate; bash >= 5, CI_STRICT on linux; aed6684
+twins = named timeout), W (SIGTERM between `&` and drv_wait, 5 roots; aed6684 twins time out on bash 3.2 and 5.3.20);
+audit-g2 A3 tooth. (d) Review r1 REJECTED (2 LITERAL: a kill after the reap of a duplicate pid; G3 had no teeth on the
+group kill), r2 APPROVED. Q-B72-G1FLAKE: the b72 run 1 (r1 tree, PRELIMINARY host) failed only the pre-existing,
+host-dependent audit-g1 "A1 real BB-opus-1 twin" (statuses 2,2,1 under load; passed alone at load1 1.94); ruled re-run
+the full suite once as the stop gate (FILLER 1: make the twin load-proof). npm test (private copy with .git, private
+TMPDIR, /bin/bash 3.2, quiet lock, host QUIET at start, load1 1.77): 3288 tests, 3276 pass, 0 fail, 12 skip, rc 0, 1669
+s. (e) CI proof (b73, run 43049200147, ef9cf7f): 8 / 8 legs green, 3288 tests, 0 fail on each; ubuntu runs bash 5.3.9
+with uutils env 0.10.0, the env exec probe reads `comm=sleep children=[]` (env execs: the uutils-env lead is closed),
+the PSUB rows ran and the aed6684 twins reach their named timeout, so the old `_sig` hung on bash 5.3.9 too. Three of the four macOS legs ran 108-118 min wall (node 26: 63 min) against the 120 min job timeout: raised to 180 min (Q-B73-CITIME, ffff1f7). Roots: allocation-diff
+29d6e484 -> fbed0e8b, bytecode-budget 0b9c9157 -> c01fce6b, deopt-diff fc04657d -> 178bb508, ic-diff f4a6f429 ->
+850606e0, inlining-budget-diff 06927a13 -> 5b9f3c26; lib/prologue.sh 29b5811f -> 24527638. Closes #117 (e)'s bare-`wait`
+and bash >= 5.1 residuals. Tier DETERMINISTIC. Evidence: `.handoff/PLAN-b72-cihang.md`, `.handoff/RULINGS-b72.md`,
+`.handoff/evidence/b72-cihang/`, `.handoff/evidence/b72-npm/`, `.handoff/evidence/b73-ci/CI-READ.md` (local,
+untracked).
 
 ---
 
@@ -961,7 +1107,7 @@ ibd, and test/ibd-u2.test.mjs F8 / F14 and the ibd self-test refusal() helper ha
 Rule: a targeted test list must include every file that runs the changed root (test/ibd-u2.test.mjs, and the
 test/deopt-diff-boundary.test.mjs parity pin of the ibd root), not only the new gate. The old self-test last line (`all
 checks passed`) was also re-anchored in test/inlining-budget-diff.test.mjs, test/bytecode-budget.test.mjs and
-test/bytecode-budget-stage-boundary.test.mjs. See #113.
+test/bytecode-budget-stage-boundary.test.mjs. See #113. Instance b74 (#121 (c), F-C): a fix that extends a shared source line breaks the sibling test whose injection anchor pinned the whole line: test/audit-sig.test.mjs PSUB_ANCHOR (ic-diff) matched the whole ic defaults line that the OUT_NAMES fix extended; only the stop-gate full npm test caught it (audit-sig PSUB ic red). The anchor now ends at `REPORT=/dev/null` (unique at a line start in the live, aed6684 and c1618a5 roots); likewise ibd-u2 F5's anchor matched 3 lines until narrowed. Rule: an anchor pins the shortest unique prefix, never a whole line that a later fix may extend.
 
 ---
 
@@ -1186,7 +1332,7 @@ Evidence: `.handoff/evidence/u1/REVIEW-u3-b1-r1.md`, `REVIEW-u3-b2-r1.md`, `.han
 /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/bench/inlining-budget-diff.sh needs the new ibd root,
 and /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignal/test/94-inlining-budget-diff.test.mjs:14 holds
 `const CHECKS = 43;` (this tool's `--self-test` has moved to 54 since U1, CHANGELOG "U1"). Not edited from here
-(another package). Open until the maintainer syncs it.
+(another package). Open until the maintainer syncs it. b74 clause: the vendored copy now lags further: F-A changed the heads to `<ref> @ <sha 12>` and F-B / F-C / F-D / F-E changed the root (root sha8 ae0544f9 after F-E, uncommitted; self-test still 92); still the maintainer's sync.
 
 **#83 Q-I1: ic-diff on node 22 and 24 ends NO-VERDICT (known limit, class 2; audit I1; b66 IC24).** Ruled DOCUMENT
 (RULINGS-b56-audit-closure Q-I1): the code-kind numbering table (src/ic-diff.sh:193, 195, 215-216) is V8 14.x only, so
@@ -1241,7 +1387,7 @@ description at offset 0 and can overwrite earlier output: READ, not run (-h). (d
 functions at startup only: an internal compiled after the driver imports something (e.g. node:fs) is missed (by
 reading; -h). The list on node 26.8.2 has 24 names; of about 40 common names only `get` and `set` collide (MEASURED,
 reviewer r1). (e) A killed run can leave one `bytecode-budget.XXXXXX` (no EXIT trap inside the `$( )` subshell; by
-reading; -h). b70 (#117, G-SIG-1): base_list's temp is now removed on a signal; the probe `$( )` runs stay a G-SIG-2 residual. (f) With the default SIGXFSZ a file-size limit kills the shell: base_list's append ends the run with rc
+reading; -h). b70 (#117, G-SIG-1): base_list's temp is now removed on a signal; the probe `$( )` runs stay a G-SIG-2 residual. CLOSED b71 (#119): the probe runs are main-shell jobs; residual: a signal inside `$(mktemp)` or a SIGKILL of the tool. (f) With the default SIGXFSZ a file-size limit kills the shell: base_list's append ends the run with rc
 153 and one temp file left, exit outside -h's 0 / 1 / 2 (MEASURED; fails closed, hostile setup). (g) Open FILLERS from
 the r1b NITs (the PWD case MEASURED by reviewer r1b; the two wording items READ, not measured): a deleted cwd with no
 PWD in the environment gives "PWD: unbound variable", generic `unexpected error`, exit 2 (fix `"${PWD-}"`); src line
@@ -1335,7 +1481,7 @@ inlining-budget-diff carry the same lib/prologue.sh:9 trap and no INT/TERM trap,
 traps INT TERM (`die "interrupted"`, src/ic-diff.sh:851, :869) and prints `ic-diff: interrupted` instead (READ). A
 prologue signal-trap fix is for the cross-script reviewer (Phase 7), Q-B65-SIGTERM. SUPERSEDED b70 (#117, G-SIG-1): a
 SIGTERM now prints `<tool>: interrupted (SIG<X>)`, rc 2, one VERDICT NO-VERDICT, on every bash, bash 5 UNPROVEN until the next
-ubuntu CI run of audit-sig (bb, dd, ic, ibd measured on bash 3.2; ad after its in-flight driver run, G-SIG-2); the SIGTERM
+ubuntu CI run of audit-sig (bb, dd, ic, ibd measured on bash 3.2; ad after its in-flight driver run, G-SIG-2; closed b71 (#119)); the SIGTERM
 `(exit 0)` text is gone. (b) CLOSED b67 (G-XS, X8): bb's
 refusal text "(as `node --version` prints it)" was false for prerelease nodes (v27.0.0-alpha.0.0.0 is refused); the text
 now names a release version and -h says "Release versions only" (Q-B65-NODEPRE). (c) PROVEN on ubuntu (b67, CI run
@@ -1363,3 +1509,51 @@ are not run (UNPROVEN).
 **#111 b66 open limits.** UNPROVEN until the next CI run on the node 22 / 24 legs: the off-14 branches of audit-g4
 A1 / A2 real (rc 2 NO-VERDICT 'code kind outside the allowlist') and of their old twins ('no IC log'); only V8 14.6
 (node 26.8.2) ran them. See #83, #110.
+
+**#122 lib-cross-fable-2: a refusal prints a name that git or readlink RESOLVED (class 3, known limit; Q-XF-LINK (a)
+"Document now": no code change before 1.0.0).** A refusal line may print a name that git or readlink resolved (the
+repository root, a symlink's target). A newline or a CR in such a name, behind a symlink with a clean name, reaches
+stderr inside that one refusal (exit 2; the last line is still VERDICT NO-VERDICT; no report line is written). G-X6
+(#116) covers the names the REPORT prints and the values as typed. Mechanism (RUN by the audit lane on all of ibd / bb /
+dd; unchanged on its three fix variants): every argument and `$PWD` are clean, so `nl_refuse "the cwd" "$PWD"` and every
+value check pass; the printed names are resolved later, by `git rev-parse --show-toplevel` (lib/stage.sh, lib/modes.sh)
+and `resolve_links` (lib/common.sh), and `die` prints its text raw. Shapes: `--repo link` (a clean-named symlink to a
+directory whose name holds a CR) with an unknown `--before-ref`: `... is not a commit in <top>/q<CR>VERDICT SAME<CR>z...`
+(bb, dd; ibd from `cd link`); file mode `--before` a tracked symlink: `is a git-tracked working-tree file (<top>/q<CR>
+VERDICT SAME<CR>z.../Signal.js)`. A reader or tool that splits stderr on CR sees a `VERDICT SAME` line. A newline in the
+directory name works the same way (ARGUED, same lines). The report is not written in these rows (bb, dd: refused in
+`stage_check`) or is 0 bytes (ibd: ARGUED from lib/common.sh `die`). Optional post-1.0 code fix, UNVERIFIED beyond the
+12 refusal rows: `die` replaces a newline or CR in its text with `?` (two lines in lib/common.sh; all five roots
+change); no self-test or test file was run on that copy, and any test pinning a multi-line refusal would need a look.
+Evidence: `audit/2026-11-11-final/fable/cross/CROSSCHECK.md` "lib-cross-fable-2" (local), `.handoff/RULINGS-final-review.md`.
+
+**#123 ibd-fable-2 = IBD-opus-b-3: the null-control NOTE ignores a differing Watch.js (class 2, triaged DOCUMENT).**
+In ibd file mode the NOTE `before and after are byte-identical: this run is a null control (expect SAME)` is decided on
+Signal.js alone, but the stage dir also holds Watch.js (staged beside each side, lib/modes.sh), so two sides with the
+same Signal.js and a different Watch.js (a one-line helper vs a 120-statement helper, re-exported by an identical
+Signal.js) print the NOTE and then `VERDICT DIFF`, exit 1. RUN (opus cross lane, snap, file mode; header: both sides
+`sha256/8 8a298b04`). The verdict is right; the one NOTE line is false (the header also prints only Signal.js's
+sha256/8). Reach: ibd file mode RUN; ibd ref mode ARGUED (lib/modes.sh stages the ref's Watch.js, same NOTE line,
+src/inlining-budget-diff.sh); deopt-diff and bytecode-budget ARGUED out of reach (their NOTE comes from STAGE_SAME over
+the one staged module). A NOTE-text limit, not a verdict change: DIFF is still reported. Not fixed (triaged DOCUMENT, final-review triage, no Q-id; the
+audit lane's candidate fix kept DIFF and dropped the NOTE, and optionally would print the Watch.js sha256/8).
+Evidence: `audit/2026-11-11-final/opus/cross/CROSSCHECK.md` "ibd-fable-2" (local).
+
+**#124 SHELLOPTS=noexec: an inherited `SHELLOPTS=noexec` makes every root run nothing and exit 0 (class 2, known limit;
+Q-B74-NOEXEC; source b73 F-A reviewer, claude-opus-5-5).** MEASURED on bash 3.2 and bash 5.3.20: `SHELLOPTS=noexec bash
+./ic-diff.sh --no-such-flag` -> rc 0, no output. With `noexec` set no line of the script runs, so the exit 0 reads as
+SAME by exit code with no VERDICT line, and it cannot be fixed inside the script (not even the prologue runs). Callers
+must require the VERDICT line, not only the exit code. The README /
+llms.txt Known-limits line follows in Phase 6 (they do not exist yet). Evidence: `.handoff/RULINGS-b74.md`.
+
+**#125 fe-rev-1: a CR in a path component that `..` removes reaches stderr in driver mode (class 3; OPEN, ruled b74
+Q-B74-FERAW: fix next burst; source F-E reviewer).** In driver mode dd, ic and bb run G-X6 on the RESOLVED driver name
+(DESC_B / DESC_A; bb DRV_DIR / DRV_BASE), but some refusals print the RAW positional (rep_refuse; also the older
+`DRIVER (before) not found ...: ${POS[0]}` raw-echo refusals), so a CR in a component that `..` removes is printed.
+Repro: `ic-diff.sh --fn m0 --out o b.js $'d\r/../o/report.txt'` (`d<CR>/` a directory) -> rc 2, stderr
+`(d^M/../o/report.txt)` with 1 CR; same on deopt-diff and `bytecode-budget --diff`. ibd and staged mode are safe (they
+nl_refuse the raw values). Not caused by F-E (768c388 behaves the same); exit 2, no verdict change. Any fix changes a
+message (print the resolved name) or adds a refusal (nl_refuse the raw POS). Mirror case: #122 (lib-cross-fable-2).
+Ruled 2026-11-12 (Q-B74-FERAW): unit F-F, next burst -- dd, ic and bb (driver mode) nl_refuse the RAW positional
+values before any refusal can print them (as ibd and staged mode already do), + rows per tool.
+Evidence: #121 (e), `.handoff/RULINGS-b74.md`.

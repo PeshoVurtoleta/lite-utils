@@ -173,7 +173,8 @@ function rootOf(tool, which, d) {
 
 // the caps of one tool run (ledger law 8: size to the slowest CI leg). ic real took 27-93 s on hosted macOS node 22 / 24 and
 // past 120 s twice (run 42458559718), against 2-26 s elsewhere; every other tool row stays under 8 s. All-hang bound of the 16
-// tool runs: 2 x 600 s + 14 x 120 s = 48 min, inside the 3600 s per-file limit and the 120 min job cap. SIGKILL because
+// tool runs: 2 x 600 s + 14 x 120 s = 48 min, inside the 3600 s per-file limit and the 180 min job cap
+// (Q-B73-CITIME; was 120). SIGKILL because
 // SIGTERM cannot bound a hung foreground step: ic-diff traps TERM and bash runs the trap only after that step ends (with the
 // pipes spawnSync has closed by then, which is why run 42458559718 read "killed by SIGPIPE"). LEDGER #73.
 const TOOL_CAP = 120000;
