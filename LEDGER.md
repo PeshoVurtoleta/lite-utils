@@ -220,6 +220,29 @@ burst b81b. What would re-open (b): a twin whose fixed cost is constant inside a
 `.handoff/research/alloc-probe/` INTAKE.md (R4 addendum), PROGRESS.md (R4, S4), r4-band.mjs, r4-report.mjs, r4-out/grid
 and r4-out/strict; `.handoff/PROPOSAL-alloc-probe.md` section 7 (all local, untracked).
 
+**#131 alloc-per-op research b81b: the plain sandwich DECLINED as the band rule; three measurement traps (TRAP).**
+Research rung b81b for the 1.1.0 tool; one darwin-arm64 host, node 22.23.5 / 24.22.3 / 26.3.1 / 26.8.2 / 27-alpha;
+corners grid 225 procs + rung 2b 45 procs, `quiet-lock run` NOT strict, host noisy: every number PRELIMINARY. (a)
+DECLINED: the sandwich of #130 (accept a sub-window only when its two twins are equal) as the refusal rule -- at --sub
+1e3 --n 1e5 on 27-alpha one box window read 6,160 B below its mode from a 7,760 B old-space DECREASE in the measured
+bracket with equal twins. Ruled instead (Q-AP-BAND (a)): also re-run any triple in which ANY per-space used delta is
+negative (used size cannot shrink without GC work); 0 windows below the lane's modal bias at every probed cell, band lo =
+32 / sub, hi = 524288 / N + 0.001 x peak, --sub 1000..10000, --n 1e5..1e8, N / sub <= 1e4. (b) TRAP: a retried
+sub-window calls the lane again, so a lane whose cost depends on its own call count changes cost under retries (the
+`late` lane read +16,000 B and +3,201,632 B in a window where its truth was 0); the bytes are real, the oracle's truth
+model was wrong. (c) TRAP: at --sub 1, 22.23.5's 16 B box lane read 9.84..10.32 B/op in judged windows (fail-open); at
+--sub >= 1000 it is exact -- the --sub lower bound guards correctness, not just runtime. (d) TRAP: a fixed 64 MB GC-fence must-fail control recorded 0
+GCs on 24.22.3 after 1e8-op lanes and after ~300 KB-per-op lanes; a fixed-size fence is not a universal control once
+the heap has grown. Also found (no trap): constructor, class-field and literal objects read the same 32 B/op steady
+and the default warm-up covers them; S2 counts new_large_object_space (300,056 B/op for a flattened 300,001-char
+string; 22.23.5 VOIDs every such window). Lesson: a refusal rule keyed on twin agreement cannot see an event in the
+measured bracket; also refuse on a per-space check (no used-size shrink in any bracket -- a shrink is GC work the
+fence does not record) and let the band's hi absorb one-time increases (E21). What would re-open (a): a
+measured-bracket decrease with equal twins shown impossible on every CI node. Ruled b81b (PROPOSAL-alloc-probe.md
+section 11 "Rulings b81b"): Q-AP-BAND (a); rung 2b scope 2b-6 / 2b-6c / OR-5, OR-1..OR-4 deferred. Evidence:
+`.handoff/research/alloc-probe/` INTAKE.md (b81b addendum), PROGRESS.md (b81b), r5-band.mjs, r5-shape.mjs,
+r5-report.mjs, r5-out/corners and r5-out/shape; `.handoff/PROPOSAL-alloc-probe.md` section 11 (all local, untracked).
+
 ---
 
 ## B. Defects found and fixed
