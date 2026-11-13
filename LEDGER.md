@@ -197,6 +197,29 @@ a measured bias that does not grow with the sub-window count (the N-scaled band)
 (Q-AP-BAND). Evidence: `.handoff/research/alloc-probe/` INTAKE.md, PROGRESS.md, r0-out/, r1-out/, r2-out/ and strict/
 (the REPORTED re-run); `.handoff/PROPOSAL-alloc-probe.md` sections 1, 5, 6 (all local, untracked).
 
+**#130 alloc-per-op research R4 (b81): a window-level twin refusal DECLINED; an outlier report blind at N / sub = 1
+(TRAP).** Research rung R4 for the 1.1.0 tool; one darwin-arm64 host, node 22.23.5 / 24.22.3 / 26.3.1 / 26.8.2 /
+27-alpha; grid PRELIMINARY (225 procs), deciding cells in one `quiet-lock run --strict` hold (150 procs, REPORTED). (a)
+The paired-S2 error is three terms, not one per sub-window: a lane-SHAPE term (a 16 B box whose value comes from the
+driver's index reads -16 B per sub-window as the mode, at every probed --sub and --n (some windows' mode is 0); the same box from a counter reads 0),
+a positive size term (~0.04 % of the bytes), and rare per-WINDOW old-space events: in the measured bracket they read
+high (max +241,520 B), in the M = 0 twin low (-260,368 B strict, -443,312 B grid), and N does not shrink them per window.
+(b) DECLINED: refusing a window whenever a twin is off its mode -- it voids 21 % of windows (230 / 1,080 at --sub 1e4, PRELIMINARY grid,
+--n >= 1e6), because the twin's fixed cost alternates inside a window. Candidate instead (not ruled): a SANDWICH (twin,
+measured, twin; accept only equal twins, else re-run, else VOID) -- strict: 0 of 1,260 windows more than 8 KB below the
+mode, 232 retries; a retry calls the lane again, so a call-count-keyed lane (LiteBisect's late3) shifts. (c) TRAP: the
+R4 report flagged an outlier as "window error minus the per-sub-window mode error", which is identically 0 when the
+window has ONE sub-window (N / sub = 1), so it never saw the largest clean-twin window: -2.038 B/op (PRELIMINARY, grid only), a 203,816 B old-space
+DECREASE in the measured bracket with a clean twin (--sub 1e5 --n 1e5, 26.3.1); the sandwich cannot refuse that class.
+Found by the b81 reviewer reading the raw JSON, not by the report. Lesson: an outlier test that subtracts a statistic of
+the same sample is blind where the sample has one element; check the raw extremes too. Q-AP-BAND stays OPEN: the
+maintainer deferred it to rung b81b (band3 at --sub 1e5 / --n 1e5 / --n 1e8, plus a retry on any negative per-space
+delta). Ruled b81 (PROPOSAL-alloc-probe.md section 7 "Rulings b81"): Q-AP-LB (a) field-keyed C-late3, Q-AP-ABORDER
+(a) interleaved per lane, Q-AP-PCBUILD (a) record only, Q-AP-PCCI (a) not in 1.1.0; rung 2b (Orinoco) runs as its own
+burst b81b. What would re-open (b): a twin whose fixed cost is constant inside a window (measured). Evidence:
+`.handoff/research/alloc-probe/` INTAKE.md (R4 addendum), PROGRESS.md (R4, S4), r4-band.mjs, r4-report.mjs, r4-out/grid
+and r4-out/strict; `.handoff/PROPOSAL-alloc-probe.md` section 7 (all local, untracked).
+
 ---
 
 ## B. Defects found and fixed
