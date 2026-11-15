@@ -1210,6 +1210,38 @@ test/deopt-diff-boundary.test.mjs parity pin of the ibd root), not only the new 
 checks passed`) was also re-anchored in test/inlining-budget-diff.test.mjs, test/bytecode-budget.test.mjs and
 test/bytecode-budget-stage-boundary.test.mjs. See #113. Instance b74 (#121 (c), F-C): a fix that extends a shared source line breaks the sibling test whose injection anchor pinned the whole line: test/audit-sig.test.mjs PSUB_ANCHOR (ic-diff) matched the whole ic defaults line that the OUT_NAMES fix extended; only the stop-gate full npm test caught it (audit-sig PSUB ic red). The anchor now ends at `REPORT=/dev/null` (unique at a line start in the live, aed6684 and c1618a5 roots); likewise ibd-u2 F5's anchor matched 3 lines until narrowed. Rule: an anchor pins the shortest unique prefix, never a whole line that a later fix may extend.
 
+**#132 alloc-per-op TASK 0 probes (b83): two must-fail-control traps, and spec rows masked by an earlier refusal
+(TRAP).** TASK 0 (G0) for the 1.1.0 tool; one darwin-arm64 host, node 22.23.5 / 24.22.3 / 26.3.1 / 26.8.2 / 27-alpha
+(the three downloaded builds sha256-checked against nodejs.org SHASUMS256.txt, pointer compression 0 on all five);
+T0a 15 + T0b 60 + T0c 105 + T0d 45 procs, `quiet-lock run` NOT strict, host noisy (per-job load1 up to 14.53 vs
+baseline 2.21): every number PRELIMINARY. Band, retries and fence held (A1 0 flagged windows of 1,260, worst hi ratio 0.28;
+A3 retries in windows 0-2 max 5 of 6, 100/100; A4 F1 / F2 / Fnull 45/45). (a) TRAP: a must-fail control that
+depends on the data loses its teeth where the data is benign. The A1 mutant "lo x 0.25 must flag a box window",
+checked per leg and per cell, flagged 0 windows on 27-alpha at --n 1e6 --sub 1e4, whose box bias read -1.92 B per
+sub-window instead of the usual -16 (in band, closer to the truth), so that leg's lo constant read NO VERDICT. Ruled
+Q-B83-LOTEETH (a): pool the control per cell across legs; each leg keeps its own lo PASS / FAIL; a synthetic
+-0.0040 row stays the data-independent must-fail. (b) TRAP: a fixed self-check limit stricter than the band it
+guards. A probe's "empty lane < 8 B/op" check voided a fence record at N 200 / sub 1, where one E21 one-time
+old-space write (2,712 B, equal twins) read 13.56 B/op against a band hi of 2,621 B/op. Ruled Q-B83-SELFN (a): the
+limit is max(8, 524288 / N + 0.001 x peak), box >= 8 kept. (c) Caught by SPEC review before any code (re-review r2
+/ r3): refusal rows masked by an earlier check -- A/B rows refused by the new required --tol before the same-path
+check they target; threshold rows exiting at a missing bench path; --tol value rows doubled into the duplicate-flag
+refusal; an in-process needEnv listing row masked by needEnv's own gc check; and a NaN fence count passing
+`recorded < forced` (fixed: `!(recorded >= forced)`). (d) Found and fixed (fail-open): the CI report's row guard did
+not check `truth`, so a missing field gave a NaN error that counted in band (a mutant deleting `truth` read PASS);
+now a full row-shape guard, NO VERDICT on a malformed row. Also REPORTED (no trap): the main-thread S2 never sees
+Worker allocation (W-alloc main <= 0.0036 B/op while the Worker's own S2 read 16 B/op); W-post reads about 0 B/op on
+22.23.5 and 27-alpha; the 'worker' event, diagnostics_channel 'worker_threads' and report.workers detect a live
+Worker on 5/5 nodes; ruled Q-B82-WDETECT (c), document only. Lesson: a must-fail control that reads the sample it
+guards has no teeth where that sample is benign: keep a data-independent synthetic must-fail, and pool the data
+control (per cell across legs) so one benign leg cannot void it; and a self-check must never be stricter than the
+band it guards; a refusal row must be reachable with every other input valid and must name its own check. What
+would re-open (a) / (b): a CI run in which the pooled control flags 0 box windows in some cell, or an empty-lane
+reading above the band hi. Evidence: `.handoff/research/alloc-probe/` PROGRESS.md ("b83 G0"), r6-band.mjs, r6-report.mjs,
+r6-workers.mjs, r6-out/ (band, lb, fence, workers, smoke, a6-local-report-r2.txt), ci-draft/; `.handoff/b83/`
+review-r2.md, review-r3.md, review-g0.md, RULINGS-b83.md (all local, untracked); research/alloc-probe/ and
+.github/workflows/alloc-probe.yml (the dispatch probe, Q-B82-LINUX (a)).
+
 ---
 
 ## E. Process lessons
