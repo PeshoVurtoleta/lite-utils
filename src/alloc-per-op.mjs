@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // alloc-per-op.mjs -- steady-state on-heap bytes per op of a synchronous lane (main isolate), LiteUtils.
-// Engine (G1): paired S2 brackets (space_used_size of the four SPACES around one drive), the band4 sandwich
-// (twin z1, measured r, twin z2; accept iff z1 === z2 and no per-space delta < 0; a GC VOIDs), PEAK = max of
-// windows 1..K-1, and the Q-AP-BAND (a) refusal band. Importing this file has no side effects.
+// Engine (G1): paired S2 brackets (space_used_size of the four SPACES, plus the four XSPACES added into the old /
+// large slots, around one drive), the band4 sandwich (twin z1, measured r, twin z2; accept iff z1 === z2 and no
+// per-space delta < 0 or NaN; a GC VOIDs), PEAK = max of windows 1..K-1, and the Q-AP-BAND (a) refusal band.
+// Importing this file has no side effects.
 // MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>
 import v8 from 'node:v8';
 
 // :CONSTANTS
-// FROZEN by SPEC S-A36 (CI run 43691163080, 8/8 legs, ci-report VERDICT PASS). A change is a re-pin (SPEC C-5).
+// Numeric constants FROZEN by SPEC S-A36 (CI run 43691163080, 8/8 legs, ci-report VERDICT PASS). A change is a
+// re-pin (SPEC C-5). Read set (XSPACES) and driver changed by S-A38 / S-A39; A4 8-leg re-run pending (C-5).
 export const BAND_LO_B = 32;
 export const BAND_HI_FIXED_B = 524288;
 export const BAND_HI_REL = 0.001;
@@ -15,10 +17,25 @@ export const RETRY_MAX = 3;
 export const POS_MIN_BPO = 8;
 export const ISOLATE = 'main';
 export const SPACES = Object.freeze(['new_space', 'old_space', 'large_object_space', 'new_large_object_space']);
+// XSPACES (S-A38): V8 also allocates lane objects outside SPACES (BytecodeArray, Code, RegExpData: code / trusted).
+// bracketS2 reads each into its own slot and adds its growth into old_space (code_space, trusted_space) or
+// large_object_space (their LO spaces). read_only_space and the shared_* spaces are not read.
+export const XSPACES = Object.freeze(['code_space', 'trusted_space', 'code_large_object_space', 'trusted_large_object_space']);
 
 // :needEnv
-// Cold. Refuses an unverified host before any lane call: no gc, no fence, no S2 reader, or a SPACES name missing
-// from the listing (a missing space never reads 0). `listing` defaults to a fresh v8.getHeapSpaceStatistics().
+// Cold. Refuses an unverified host before any lane call: no gc, no fence, no S2 reader, or a SPACES or XSPACES name
+// missing from the listing (all 8 are read; a missing space never reads 0). The refusal names every missing space,
+// SPACES first. `listing` defaults to a fresh v8.getHeapSpaceStatistics().
+function spacesMissing(list, names, missing) {
+    for (let j = 0; j < names.length; j++) {
+        let found = false;
+        for (let k = 0; k < list.length; k++) {
+            const sp = list[k];
+            if (sp !== null && typeof sp === 'object' && sp.space_name === names[j]) { found = true; break; }
+        }
+        if (!found) missing.push(names[j]);
+    }
+}
 export function needEnv(listing) {
     if (typeof globalThis.gc !== 'function') {
         throw new Error('alloc-per-op: globalThis.gc is missing; run node with --expose-gc');
@@ -32,14 +49,8 @@ export function needEnv(listing) {
     const list = listing === undefined ? v8.getHeapSpaceStatistics() : listing;
     if (!Array.isArray(list)) throw new TypeError('alloc-per-op: heap space listing is not an array');
     const missing = [];
-    for (let j = 0; j < SPACES.length; j++) {
-        let found = false;
-        for (let k = 0; k < list.length; k++) {
-            const sp = list[k];
-            if (sp !== null && typeof sp === 'object' && sp.space_name === SPACES[j]) { found = true; break; }
-        }
-        if (!found) missing.push(SPACES[j]);
-    }
+    spacesMissing(list, SPACES, missing);
+    spacesMissing(list, XSPACES, missing);
     if (missing.length !== 0) {
         throw new Error('alloc-per-op: heap space(s) missing: ' + missing.join(', ') +
             ' (refused; a missing space never reads 0)');
@@ -48,20 +59,32 @@ export function needEnv(listing) {
 
 // :makeDriver
 // A driver with a UNIQUE source, so V8's eval cache cannot hand two lanes one feedback vector (monomorphic fn(i)).
-// DRIVER_SEQ is a live ESM binding: +1 per driver built.
+// DRIVER_SEQ is a live ESM binding: +1 per driver built. The lane argument is z + i (S-A39), z = DRV_B[0].
 export let DRIVER_SEQ = 0;
+// DRV_B[0] is always 0. The driver adds it to i: a memory load the compiler cannot fold, so the peeled first
+// iteration of the loop never sees the lane argument as the constant 0 (TurboFan loop peeling).
+const DRV_B = new Int32Array(1);
 export function makeDriver() {
-    return new Function('fn', 'n', 'for (let i = 0; i < n; i++) fn(i);\n// alloc-per-op driver ' + (++DRIVER_SEQ));
+    return new Function('B', 'return function (fn, n) { for (let i = 0, z = B[0]; i < n; i++) fn(z + i); };\n// alloc-per-op driver ' + (++DRIVER_SEQ))(DRV_B);
 }
 
 // :bracketS2
-// HOT. Method copied from research r5-band.mjs sub() (NAMES -> SPACES): minor sync gc, GCProfiler fence, S2 read,
-// drive, S2 read. Nothing but drive(fn, m) runs between the reads; no test branch (tests inject a whole bracket).
-// Returns the fence's GC count (a Smi); per-space deltas go to D (Float64Array(4)).
-const S2_A = new Float64Array(4), S2_B = new Float64Array(4);
+// HOT. Method copied from research r5-band.mjs sub() (NAMES -> SPACES + XSPACES): minor sync gc, GCProfiler fence,
+// S2 read, drive, S2 read. Nothing but drive(fn, m) runs between the reads; no test branch (tests inject a whole
+// bracket). Returns the fence's GC count (a Smi); per-space deltas go to D (Float64Array(4)).
+// readS sets all 8 slots to NaN, then slot j = SPACES[j] and slot 4 + j = XSPACES[j]: a name absent from the listing
+// stays NaN, never 0. After the second read each XSPACES delta is added into its own D slot (XSLOT: code_space and
+// trusted_space -> old_space, their LO spaces -> large_object_space), per slot: a shrink, or a negative / NaN target,
+// makes that slot NaN (sandwich counts NaN as negative and re-runs), so a shrink is never netted against growth (S-A38).
+const S2_A = new Float64Array(8), S2_B = new Float64Array(8);
+const XSLOT = Object.freeze([1, 1, 2, 2]);
 function readS(dst) {
-    dst[0] = dst[1] = dst[2] = dst[3] = 0;
-    for (const sp of v8.getHeapSpaceStatistics()) { const j = SPACES.indexOf(sp.space_name); if (j >= 0) dst[j] = sp.space_used_size; }
+    dst[0] = dst[1] = dst[2] = dst[3] = dst[4] = dst[5] = dst[6] = dst[7] = NaN;
+    for (const sp of v8.getHeapSpaceStatistics()) {
+        let j = SPACES.indexOf(sp.space_name);
+        if (j < 0) { j = XSPACES.indexOf(sp.space_name); if (j >= 0) j += 4; }
+        if (j >= 0) dst[j] = sp.space_used_size;
+    }
 }
 export function bracketS2(fn, drive, m, D) {
     gc({ type: 'minor', execution: 'sync' });
@@ -72,6 +95,10 @@ export function bracketS2(fn, drive, m, D) {
     readS(S2_B);
     const g = p.stop().statistics.length;
     for (let j = 0; j < 4; j++) D[j] = S2_B[j] - S2_A[j];
+    for (let j = 4; j < 8; j++) {
+        const t = XSLOT[j - 4];
+        D[t] = (S2_B[j] >= S2_A[j] && D[t] >= 0) ? D[t] + (S2_B[j] - S2_A[j]) : NaN;
+    }
     return g;
 }
 
@@ -118,8 +145,12 @@ export function windowOf(fn, drive, n, sub, bracket) {
 
 // :measureLane
 // Cold driver of one lane. Order: needEnv; allowlist a plain function (AsyncFunction / generator kinds refused
-// before any call); argument bounds; fn(0) once (a thenable is refused, its rejection handled); then a fresh
-// driver, `warm` ops, and per window gc() + windowOf. A VOID window is null, never 0.
+// before any call); argument bounds; fn(0) once (a thenable is refused, its rejection handled; then any other value
+// but undefined is refused, S-A40); then a fresh driver, `warm` ops, and per window gc() + windowOf. A VOID window
+// is null, never 0. The lane must STORE what it allocates (into a sink it owns): an allocation the lane drops --
+// returned, or discarded in its body (must-fail example `(i) => { add(A, B); }` reads 0 B/op) -- may be elided by
+// V8 and is not measured. Only fn(0)'s return value is checked, so a value or thenable returned by a later call is
+// not seen (APO-fable-6).
 const SMI_SAFE = 0x3FFFFFFF;
 // n / sub <= SUBS_MAX: G2's bound (SPEC G2 TASK 1); keeps a window's retry count (WIN_ST, Int32Array) far from 2^31.
 const SUBS_MAX = 10000;
@@ -160,6 +191,10 @@ export function measureLane(fn, n, windows, warm, sub, bracket = bracketS2) {
     if (isThenable(r0)) {
         try { r0.then(null, () => {}); } catch { /* the refusal below is the answer */ }
         throw new TypeError('alloc-per-op: the lane returned a thenable (an async lane); refused, a lane must be synchronous');
+    }
+    if (r0 !== undefined) {
+        throw new TypeError('alloc-per-op: the lane returned a value (' + typeof r0 + '); refused: the driver discards what a lane ' +
+            'returns, so V8 may elide that allocation. Store the result in a sink and return undefined');
     }
     const drive = makeDriver();
     drive(fn, warm);
@@ -208,7 +243,9 @@ export function measureFloor(n, windows, warm, sub) {
 
 // :bandOf
 // The one source of the refusal band (SPEC C-4): lo = BAND_LO_B / sub, hiFixed = BAND_HI_FIXED_B / n, hiRel.
+// n and sub must be integers >= 1, else RangeError (S-A42: a negative, fractional, zero or non-number cell has no band).
 export function bandOf(n, sub) {
+    if (!(Number.isInteger(n) && n >= 1 && Number.isInteger(sub) && sub >= 1)) throw new RangeError('alloc-per-op: bandOf: n and sub must be integers >= 1');
     return { lo: BAND_LO_B / sub, hiFixed: BAND_HI_FIXED_B / n, hiRel: BAND_HI_REL };
 }
 
@@ -248,9 +285,13 @@ export function fenceCheck(Profiler = v8.GCProfiler) {
 
 // :selfCheck
 // Cold. Measures the positive control (a 16 B box lane), the negative control (the empty lane), then the fence, at the
-// caller's cell; ignores --max / --tol. ok iff no VOID and every window finite in BOTH rows (window 0 included, C-11),
-// box peak >= POS_MIN_BPO, empty peak in [-lo, hiFixed + hiRel x peak], fence recorded >= forced. A non-finite
-// number anywhere is a miss (null is not zero). On a miss the reason STARTS with 'positive', 'negative' or 'fence'.
+// caller's cell; ignores --max / --tol. bandOf runs AFTER both measureLane calls, so measureLane's refusal (it names
+// the argument) is the one reported. ok iff no VOID and every window finite in BOTH rows (window 0 included, C-11),
+// box peak >= POS_MIN_BPO, empty peak in [-lo, hiFixed + hiRel x peak], fence recorded >= forced, and ctl.Profiler is
+// the live v8.GCProfiler (the one bracketS2 uses; a caller that replaced v8.GCProfiler passes Profiler: v8.GCProfiler).
+// A non-finite number anywhere is a miss (null is not zero). Each control is judged on its own (S-A43): misses =
+// { positive, negative, fence }, each '' or that control's reason, which STARTS with its name; reason = the first
+// non-empty miss in that order; ok iff reason === ''.
 const SC_KEYS = Object.freeze(['positive', 'negative', 'Profiler']);
 function scCheckCtl(ctl) {
     if (ctl === null || typeof ctl !== 'object' || Array.isArray(ctl) ||
@@ -283,39 +324,39 @@ function scRowMiss(row) {
 export function selfCheck(n, windows, warm, sub, ctl = CONTROLS) {
     needEnv();
     scCheckCtl(ctl);
-    const band = bandOf(n, sub);
     const box = measureLane(ctl.positive, n, windows, warm, sub);
     const empty = measureLane(ctl.negative, n, windows, warm, sub);
+    const band = bandOf(n, sub);
     const fence = fenceCheck(ctl.Profiler);
-    let reason = '';
-    let m = scRowMiss(box);
-    if (m !== '') reason = 'positive: ' + m;
+    let pos = scRowMiss(box);
+    if (pos !== '') pos = 'positive: ' + pos;
     else if (!(box.peak >= POS_MIN_BPO)) {
-        reason = 'positive: box peak ' + box.peak + ' B/op < POS_MIN_BPO ' + POS_MIN_BPO + ' (the harness does not see a box)';
+        pos = 'positive: box peak ' + box.peak + ' B/op < POS_MIN_BPO ' + POS_MIN_BPO + ' (the harness does not see a box)';
     }
-    if (reason === '') {
-        m = scRowMiss(empty);
-        if (m !== '') reason = 'negative: ' + m;
-        else {
-            const hi = band.hiFixed + band.hiRel * empty.peak;
-            if (!(empty.peak >= -band.lo && empty.peak <= hi)) {
-                reason = 'negative: empty peak ' + empty.peak + ' B/op outside [' + (-band.lo) + ', ' + hi + ']';
-            }
+    let neg = scRowMiss(empty);
+    if (neg !== '') neg = 'negative: ' + neg;
+    else {
+        const hi = band.hiFixed + band.hiRel * empty.peak;
+        if (!(empty.peak >= -band.lo && empty.peak <= hi)) {
+            neg = 'negative: empty peak ' + empty.peak + ' B/op outside [' + (-band.lo) + ', ' + hi + ']';
         }
     }
-    if (reason === '') {
-        const rec = fence === null || typeof fence !== 'object' ? undefined : fence.recorded;
-        if (typeof rec !== 'number' || !Number.isFinite(rec) || !(rec >= fence.forced)) {
-            reason = 'fence: recorded ' + rec + ' < forced ' + (fence && fence.forced) + ' (the GC fence does not see a forced GC)';
-        }
+    let fen = '';
+    const rec = fence === null || typeof fence !== 'object' ? undefined : fence.recorded;
+    if (typeof rec !== 'number' || !Number.isFinite(rec) || !(rec >= fence.forced)) {
+        fen = 'fence: recorded ' + rec + ' < forced ' + (fence && fence.forced) + ' (the GC fence does not see a forced GC)';
+    } else if (ctl.Profiler !== v8.GCProfiler) {
+        fen = 'fence: the checked Profiler is not the live v8.GCProfiler that bracketS2 uses (the fence that ran is not the fence used)';
     }
-    return { ok: reason === '', reason, box, empty, fence, band };
+    const reason = pos !== '' ? pos : neg !== '' ? neg : fen;
+    return { ok: reason === '', reason, misses: { positive: pos, negative: neg, fence: fen }, box, empty, fence, band };
 }
 
 // :CONTROLS
 // selfCheck's default controls. Built cold at import (two lane functions and the box lane's 2-slot array); nothing
 // is measured or driven here. positive: a 16 B HeapNumber box per op (a double stored into a PACKED_ELEMENTS array);
-// negative: the empty lane.
+// negative: the empty lane. Profiler: v8.GCProfiler as at import; selfCheck misses the fence if v8.GCProfiler was
+// replaced since (S-A42).
 function makeBoxLane() {
     const objs = [null, null];
     return (i) => { objs[i & 1] = i + 0.5; };
@@ -327,9 +368,11 @@ export const CONTROLS = Object.freeze({
 });
 
 // :SELF_TEST_LANES
-// G1 TASK 6 table, in order. Each row: its cell (n, sub, windows, warm), the gate threshold max, the accepted verdicts
+// G1 TASK 6 table + the S-A41 rows old / nlo, in order. Each row: its cell (n, sub, windows, warm), the gate threshold max, the accepted verdicts
 // want, and make(cfg) -> a fresh lane built only when called (C1's 1e5-entry Map never exists at import). cfg is
 // the row itself. Truths: f64 store 0 B/op, box 16 B/op (12 B pointer-compressed), C1 ~73.4 B/op peak window, C2 16.
+// old and nlo are controls of the old_space and new_large_object_space reads (S-A41): each must read FAIL in at least
+// 1 CI leg per cell (pooled, #132 (a)); old ~ one Symbol per op, nlo ~160 B/op nominal (800 KB / 5000 calls).
 function makeF64Lane() {
     const f64 = new Float64Array(2);
     return (i) => { f64[i & 1] = i + 0.5; };
@@ -352,6 +395,16 @@ function makeLate3Lane(cfg) {
     let cnt = 0;
     return (i) => { cnt++; if (cnt > START) objs[cnt & 1] = cnt + 0.5; else f64[cnt & 1] = cnt + 0.5; };
 }
+// old: one Symbol per op (V8 allocates a Symbol in old_space), held in the lane's sink.
+function makeSymbolLane() {
+    let s = null;
+    return (i) => { s = Symbol(); };
+}
+// nlo: one new Array(100000) (800 KB, new_large_object_space) every 5000 calls, held in the lane's sink.
+function makeBigArrayLane() {
+    let s = null, c = 0;
+    return (i) => { if (++c % 5000 === 0) s = new Array(100000); };
+}
 function stRow(name, n, max, want, make) {
     return Object.freeze({ name, n, sub: 1e4, windows: 5, warm: 2e5, max, want: Object.freeze(want), make });
 }
@@ -361,6 +414,8 @@ export const SELF_TEST_LANES = Object.freeze([
     stRow('C1', 1e5, 10, ['FAIL', 'NO VERDICT'], makeMapChurnLane),
     stRow('C2', 1e6, 1, ['FAIL', 'NO VERDICT'], makeLate3Lane),
     stRow('refusal', 1e6, 0, ['NO VERDICT'], makeF64Lane),
+    stRow('old', 1e5, 4, ['FAIL', 'NO VERDICT'], makeSymbolLane),
+    stRow('nlo', 1e5, 10, ['FAIL', 'NO VERDICT'], makeBigArrayLane),
 ]);
 
 // :runSelfTestLanes

@@ -1242,6 +1242,32 @@ r6-workers.mjs, r6-out/ (band, lb, fence, workers, smoke, a6-local-report-r2.txt
 review-r2.md, review-r3.md, review-g0.md, RULINGS-b83.md (all local, untracked); research/alloc-probe/ and
 .github/workflows/alloc-probe.yml (the dispatch probe, Q-B82-LINUX (a)).
 
+**#133 alloc-per-op engine audit (b88): four measurement traps, and a control row gated behind an earlier control
+(TRAP).** Two-model audit (opus claude-opus-5-5, fable claude-fable-5-2, each cross-checked by the other) of the G1
+engine at add1189 (Q-M-SPEED); every finding CONFIRMED across models; fix unit S-A38..S-A45. (a) Return-value elision:
+a lane that returns what it allocates can be optimized so the allocation never happens and reads 0 B/op PASS. Rule
+(Q-XO-RET (a)): refuse a lane whose fn(0) !== undefined, on the cold path; only fn(0) is checked, so a value dropped in
+the body (`(i) => { add(A, B); }`) still reads 0 B/op, which is documented. (b) Peeled-iteration constant folding: the
+driver's first iteration has a constant index, so index-derived allocation folds away. Rule (Q-APO-DRIVER (a)): the
+base is loaded from a module Int32Array inside the driver (`z = B[0]`). Gate E5b: an 8-box index-fed lane reads 127.9872
+B/op on the old build against the 128 B/op budget (plan-A1.md E5 (b)). (c) Unread spaces: code_space / trusted_space
+(and their large-object spaces) were not in the read set, so allocation there was invisible. Rule (Q-XO-SPACES (a),
+Q-APO-XSPACES): count them per slot into the old / large slots; a shrink in any slot re-runs the attempt, never netted.
+Reviewer r1 found the cross-slot no-netting guard (`&& D[t] >= 0`) unpinned (mutant `fold-no-target-check` survived all
+67 rows); E2f now pins it (review-A.md). (d) Refuse-and-re-run selection bias: refusing a shrinking bracket and
+re-running reads a periodic lane as 0 B/op PASS (the snapshot read 160.07 B/op FAIL; the refuse variant read 0
+PASS, opus/cross CROSSCHECK.md), which is why "refuse" lost to "count". (e) A must-fail control row gated behind an
+earlier control: CI run 44252735142 (add1189, node 22, ubuntu + macos) VOIDed the positive control's window, and
+selfCheck judged positive first, so the negative / fence rows never reached their check (#132 family). Rule: each
+control is judged on its own, `misses {positive, negative, fence}`; a row keys on its own control's miss and asserts
+nothing about the others (E7). Run 44272150406 (3641eba) was 8/8 green. (f) b87 lesson: an oracle token that also
+appears elsewhere in the output checks nothing: the G2 usage A1 token '1000' occurs five more times outside its
+claimed line, so deleting that line left the row green (b87 review-g2b3.md); pick a token unique to the claimed line.
+Lesson: a driver, a read set and a control order are measurement basis, so each change is a re-pin (C-5) and each
+control must be reachable alone. What would re-open: a lane read 0 B/op whose truth is above the band, or a control
+row green with its claimed check deleted. Evidence (local): `.handoff/RULINGS-engine-audit.md`,
+`.handoff/b88/plan-A1.md`, `.handoff/b88/review-A.md`, `audit/2026-11-18-alloc-per-op-engine/` (opus, fable, cross).
+
 ---
 
 ## E. Process lessons
