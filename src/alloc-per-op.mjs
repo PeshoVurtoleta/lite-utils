@@ -378,3 +378,497 @@ export function runSelfTestLanes() {
     }
     return rows;
 }
+// :parseArgs
+// G2 CLI (cold; nothing below runs inside a window). Allowlist parse; every refusal throws an Error whose message is
+// the refusal text (main prefixes 'alloc-per-op: '). Never touches the file system, never spawns.
+import { spawnSync } from 'node:child_process';
+import { realpathSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { isAbsolute } from 'node:path';
+
+const SELF = fileURLToPath(import.meta.url);
+const OPTS = ['--n', '--windows', '--warm', '--sub', '--lane', '--max', '--tol', '--json', '--self-test', '--help'];
+const VALUED = new Set(['--n', '--windows', '--warm', '--sub', '--lane', '--max', '--tol']);
+const SELF_TEST_OK = new Set(['--self-test', '--json']);
+
+function lev(a, b) {
+    const d = [];
+    for (let i = 0; i <= a.length; i++) d[i] = [i];
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+            d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        }
+    }
+    return d[a.length][b.length];
+}
+
+function unknownOpt(name) {
+    const probe = name.startsWith('--') ? name : '-' + name;
+    let best = OPTS[0], bd = Infinity;
+    for (const c of OPTS) { const d = lev(probe, c); if (d < bd) { bd = d; best = c; } }
+    return 'unknown option ' + name + (bd <= 3 ? ' (did you mean ' + best + '?)' : '');
+}
+
+function intIn(name, s, lo, hi) {
+    const v = /^[0-9]+$/.test(s) ? Number(s) : NaN;
+    if (!(v >= lo) || !(v <= hi)) {
+        throw new Error(name + ' must be an integer in [' + lo + ', ' + hi + '], got ' + JSON.stringify(s));
+    }
+    return v;
+}
+
+function numIn(name, s) {
+    const v = /^[0-9]+(\.[0-9]+)?$/.test(s) ? Number(s) : NaN;
+    if (!Number.isFinite(v)) throw new Error(name + ' must be a finite non-negative number, got ' + JSON.stringify(s));
+    return v;
+}
+
+// `at` (optional array) receives the argv index of each BENCH, for the re-spawn's realpath substitution.
+function parseCore(argv, at) {
+    const o = { n: 1000000, windows: 5, warm: 200000, sub: 10000, lanes: [], max: null, tol: null, json: false,
+        selfTest: false, help: false, benches: [] };
+    const seen = new Set();
+    for (let k = 0; k < argv.length; k++) {
+        const a = argv[k];
+        if (a.startsWith('--')) {
+            const eq = a.indexOf('=');
+            const name = eq < 0 ? a : a.slice(0, eq);
+            if (!OPTS.includes(name)) throw new Error(unknownOpt(name));
+            if (name !== '--lane' && seen.has(name)) throw new Error(name + ' given twice');
+            seen.add(name);
+            let val = null;
+            if (VALUED.has(name)) {
+                if (eq >= 0) val = a.slice(eq + 1);
+                else { if (k + 1 >= argv.length) throw new Error(name + ' needs a value'); val = argv[++k]; }
+                if (val === '') throw new Error(name + ' value is empty');
+            } else if (eq >= 0) throw new Error(name + ' takes no value');
+            if (name === '--n') o.n = intIn('--n', val, 100000, 100000000);
+            else if (name === '--windows') o.windows = intIn('--windows', val, 3, 50);
+            else if (name === '--warm') o.warm = intIn('--warm', val, 0, 100000000);
+            else if (name === '--sub') o.sub = intIn('--sub', val, 1000, 10000);
+            else if (name === '--lane') o.lanes.push(val);
+            else if (name === '--max') o.max = numIn('--max', val);
+            else if (name === '--tol') o.tol = numIn('--tol', val);
+            else if (name === '--json') o.json = true;
+            else if (name === '--self-test') o.selfTest = true;
+            else if (name === '--help') o.help = true;
+        } else if (a === '-h') o.help = true;
+        else if (a.startsWith('-') && a !== '-') throw new Error(unknownOpt(a));
+        else { if (at) at.push(k); o.benches.push(a); }
+    }
+    if (o.help) return o;
+    if (o.selfTest) {
+        if (o.benches.length !== 0) throw new Error('--self-test takes only --json');
+        for (const s of seen) if (!SELF_TEST_OK.has(s)) throw new Error('--self-test takes only --json');
+        return o;
+    }
+    if (o.n % o.sub !== 0) throw new Error('--sub ' + o.sub + ' must divide --n ' + o.n);
+    const q = o.n / o.sub;
+    if (!(q <= 10000)) throw new Error('--n / --sub = ' + q + ' exceeds 10000');
+    if (o.benches.length < 1 || o.benches.length > 2) throw new Error('give one BENCH, or two for A/B');
+    if (o.max !== null && o.benches.length === 2) throw new Error('--max is for one BENCH; A/B uses --tol');
+    if (o.tol !== null && o.benches.length !== 2) throw new Error('--tol is for A/B (two BENCH files)');
+    if (o.tol === null && o.benches.length === 2) throw new Error('--tol is required in A/B mode');
+    const band = bandOf(o.n, o.sub);
+    if (o.max !== null && !(o.max >= band.lo)) {
+        throw new Error('--max ' + o.max + ' is below the refusal band; the smallest accepted value is ' + band.lo +
+            ' B/op at --n ' + o.n + ' --sub ' + o.sub);
+    }
+    if (o.tol !== null && !(o.tol >= band.lo + band.hiFixed)) {
+        throw new Error('--tol ' + o.tol + ' is below the refusal band; the smallest accepted value is ' +
+            (band.lo + band.hiFixed) + ' B/op at --n ' + o.n + ' --sub ' + o.sub);
+    }
+    return o;
+}
+
+/** Parse argv (without node and script). Throws an Error carrying the refusal text on any usage error. */
+export function parseArgs(argv) {
+    return parseCore(argv, null);
+}
+
+// :preflight
+// Parent, before any spawn (the child repeats it): the v8 APIs through the default `v8` object, the four SPACES
+// names (law 3), then each BENCH resolved ONCE to an absolute realpath that must be a regular file; two BENCH on one
+// realpath are refused (C-18). Returns the realpaths in BENCH order; throws the refusal text otherwise.
+function preflight(benches) {
+    if (typeof v8.getHeapSpaceStatistics !== 'function') {
+        throw new Error('NO VERDICT: v8.getHeapSpaceStatistics is missing on this node');
+    }
+    if (typeof v8.GCProfiler !== 'function') throw new Error('NO VERDICT: v8.GCProfiler is missing on this node');
+    const list = v8.getHeapSpaceStatistics();
+    for (let j = 0; j < SPACES.length; j++) {
+        let found = false;
+        if (Array.isArray(list)) {
+            for (let k = 0; k < list.length; k++) {
+                const sp = list[k];
+                if (sp !== null && typeof sp === 'object' && sp.space_name === SPACES[j]) { found = true; break; }
+            }
+        }
+        if (!found) throw new Error('NO VERDICT: heap space ' + SPACES[j] + ' is missing on this node');
+    }
+    const reals = [];
+    for (let k = 0; k < benches.length; k++) {
+        const p = benches[k];
+        let real;
+        try { real = realpathSync(p); } catch { throw new Error('BENCH ' + p + ' cannot be resolved'); }
+        let file = false;
+        try { file = statSync(real).isFile(); } catch { throw new Error('BENCH ' + p + ' cannot be resolved'); }
+        if (!file) throw new Error('BENCH ' + p + ' is not a regular file');
+        if (!isAbsolute(real)) throw new Error('BENCH ' + p + ' cannot be resolved');
+        reals.push(real);
+    }
+    if (reals.length === 2 && reals[0] === reals[1]) {
+        throw new Error('both BENCH resolve to one file (' + reals[0] + '); an A/A check needs a copied bench');
+    }
+    return reals;
+}
+
+// :respawn
+// Re-run SELF once with --expose-gc, keeping the caller's node flags, each BENCH replaced by its realpath. Only
+// 0 / 1 / 2 pass back; a signal, a spawn error or any other status is NO VERDICT (exit 2).
+function respawn(argv, at, reals) {
+    const args = argv.slice();
+    for (let k = 0; k < at.length; k++) args[at[k]] = reals[k];
+    const r = spawnSync(process.execPath, [...process.execArgv, '--expose-gc', SELF, ...args],
+        { stdio: 'inherit', env: { ...process.env, ALLOC_PER_OP_CHILD: '1' } });
+    if (r.error) {
+        process.stderr.write('alloc-per-op: NO VERDICT: child ended by ' + (r.error.message || r.error) + '\n');
+        return 2;
+    }
+    if (r.status === null) {
+        process.stderr.write('alloc-per-op: NO VERDICT: child ended by ' + (r.signal || 'an unknown cause') + '\n');
+        return 2;
+    }
+    if (r.status !== 0 && r.status !== 1 && r.status !== 2) {
+        process.stderr.write('alloc-per-op: NO VERDICT: child exited with status ' + r.status + '\n');
+        return 2;
+    }
+    return r.status;
+}
+
+// :usage
+// G2 TASK 7. Usage goes to STDOUT; main exits 2 after it. The ranges and defaults mirror parseCore.
+const USAGE = [
+    'alloc-per-op.mjs -- steady-state on-heap bytes per op of a synchronous lane (main isolate only)',
+    'usage: node alloc-per-op.mjs [options] [--max B] BENCH          one bench: table, or a gate with --max',
+    '       node alloc-per-op.mjs [options] --tol B BENCH_A BENCH_B  A/B: two BENCH files',
+    '       node alloc-per-op.mjs --self-test [--json]               selfCheck + the self-test lanes',
+    '       node alloc-per-op.mjs -h | --help                        this text (exit 2)',
+    'BENCH: an ES module exporting `lanes`, a plain object of synchronous functions lane(i); an optional',
+    '  exported setup() is awaited once before the first lane.',
+    'options (integers in plain digits; option checks run before any spawn):',
+    '  --n N        ops per window, 100000..100000000 (default 1000000)',
+    '  --windows K  windows per lane, 3..50 (default 5); PEAK = max of windows 1..K-1',
+    '  --warm W     warm-up ops before window 0, 0..100000000 (default 200000)',
+    '  --sub S      ops per sub-window, 1000..10000 (default 10000); N % S == 0 and N / S <= 10000.',
+    '               --sub below 1000 under-reads on node v22, hence the floor of 1000.',
+    '  --lane NAME  measure only this lane; repeatable (default: every lane)',
+    '  --max B      one BENCH only: gate on peak B/op, PASS / FAIL / NO VERDICT',
+    '  --tol B      A/B only, and REQUIRED there (no default): SAME / DIFF / NO VERDICT on peak B/op',
+    '  --json       one JSON line, last on stdout',
+    'Refusal band (lo = 32 / S, hi = 524288 / N + 0.001 x peak): a --max below lo, or a --tol below',
+    '  lo + 524288 / N, is refused before any spawn, naming the smallest accepted value.',
+    'A/B: the same file twice is refused; an A/A check needs a copied bench.',
+    'Scope: on-heap bytes of the main isolate only, summed over the four SPACES new_space, old_space,',
+    '  large_object_space and new_large_object_space. off-heap ArrayBuffer memory and Worker threads',
+    '  are not counted.',
+    'A rejected sub-window is retried: a retried sub-window calls the lane again, so a lane with side',
+    '  effects sees extra calls.',
+    'A threshold holds only for the build it was measured on (pointer compression, arch, node / v8).',
+    'Exit: 0 PASS / SAME / table; 1 FAIL / DIFF / ONLY-A / ONLY-B; 2 NO VERDICT or refused (a child',
+    '  status outside 0 / 1 / 2 becomes 2). --self-test: 0 all rows ok, 1 a row miss, 2 a selfCheck miss.',
+    'Exit guard: best effort; process.reallyExit or a later \'exit\' listener in a bench can override the code.',
+].join('\n') + '\n';
+function usage() {
+    process.stdout.write(USAGE);
+}
+
+// :loadBench
+// Child, cold. Import one BENCH (an absolute realpath from the parent); it must export `lanes`, a plain object of
+// functions (empty / non-function refused), and may export setup(), awaited once. Every failure throws an Error naming
+// the path (and the lane or setup), which main maps to NO VERDICT exit 2 (C-19).
+import { pathToFileURL } from 'node:url';
+
+function errText(e) {
+    const m = e !== null && typeof e === 'object' && typeof e.message === 'string' ? e.message : String(e);
+    return m.startsWith('alloc-per-op: ') ? m.slice(14) : m;
+}
+
+async function loadBench(p) {
+    let mod;
+    try { mod = await import(pathToFileURL(p).href); } catch (e) { throw new Error('BENCH ' + p + ': import threw: ' + errText(e)); }
+    const fns = new Map();
+    try {
+        const lanes = mod.lanes;
+        const proto = lanes !== null && typeof lanes === 'object' ? Object.getPrototypeOf(lanes) : undefined;
+        if (lanes === null || typeof lanes !== 'object' || Array.isArray(lanes) ||
+            (proto !== Object.prototype && proto !== null)) {
+            throw new Error('BENCH ' + p + ': must export `lanes`, a plain object of functions');
+        }
+        const names = Object.keys(lanes);
+        if (names.length === 0) throw new Error('BENCH ' + p + ': `lanes` is empty');
+        for (const k of names) {
+            const f = lanes[k];
+            if (typeof f !== 'function') throw new Error('BENCH ' + p + ': lane ' + k + ' is not a function');
+            fns.set(k, f);
+        }
+    } catch (e) {
+        throw new Error(errText(e).startsWith('BENCH ') ? errText(e) : 'BENCH ' + p + ': reading `lanes` threw: ' + errText(e));
+    }
+    const setup = mod.setup;
+    if (setup !== undefined) {
+        if (typeof setup !== 'function') throw new Error('BENCH ' + p + ': `setup` must be a function');
+        try { await setup(); } catch (e) { throw new Error('BENCH ' + p + ': setup() threw: ' + errText(e)); }
+    }
+    return { path: p, fns };
+}
+
+// :selectLanes
+// The union of both benches' lanes in union order (A's order, then B's lanes A lacks: AUD-4); --lane filters it and
+// keeps union order. A --lane in neither bench throws, listing the union.
+function selectLanes(benches, wanted) {
+    const union = [];
+    for (const b of benches) for (const k of b.fns.keys()) if (!union.includes(k)) union.push(k);
+    if (wanted.length === 0) return union;
+    for (const w of wanted) {
+        if (!union.includes(w)) {
+            throw new Error('no lane named ' + w + ' in ' + (benches.length === 2 ? 'either BENCH' : 'BENCH') +
+                ' (lanes: ' + union.join(', ') + ')');
+        }
+    }
+    return union.filter((k) => wanted.includes(k));
+}
+
+// :run
+// Child, cold (C-12 / C-14 / C-15): load the benches, select the lanes, selfCheck at the caller's cell (floor =
+// selfCheck().empty.peak), measure A then B per lane, fenceCheck after the last lane, settle, print. Returns the exit
+// code; a lane / setup / import throw propagates (main maps it to exit 2). No code here runs inside a window.
+const SIGNAL = 'space-used-paired';
+const SCOPE = 'on-heap allocation of the main isolate (new, old and large-object spaces); off-heap ArrayBuffer ' +
+    'backing stores and Worker isolates are not counted (for external memory see lite-perf-gate\'s arrayBuffers signal)';
+const settle = () => new Promise((r) => setTimeout(r, 100));
+
+function laneVerdictNV(row) { return row.voids !== 0 || !Number.isFinite(row.peak); }
+
+async function run(o, reals) {
+    const benches = [];
+    for (const p of reals) benches.push(await loadBench(p));
+    const sel = selectLanes(benches, o.lanes);
+    const band = bandOf(o.n, o.sub);
+    const sc = selfCheck(o.n, o.windows, o.warm, o.sub);
+    const out = { node: process.version, v8: process.versions.v8, platform: process.platform, arch: process.arch,
+        pointer_compression: buildInfo(process.config && process.config.variables), isolate: ISOLATE, signal: SIGNAL,
+        scope: SCOPE, n: o.n, windows: o.windows, warm: o.warm, sub: o.sub, span: (o.windows - 1) * o.n, band,
+        floor: sc.empty ? sc.empty.peak : null, benches: benches.map((b) => ({ path: b.path, rows: [] })) };
+    const reasons = [];
+    if (!sc.ok) {
+        reasons.push('selfCheck: ' + sc.reason + ' (no lane measured)');
+        if (benches.length === 1 && o.max !== null) out.gate = { max: o.max, verdict: 'NO VERDICT', lanes: [] };
+        if (benches.length === 2) out.ab = { tol: o.tol, verdict: 'NO VERDICT', lanes: [] };
+        await settle();
+        report(o, out, reasons, false);
+        return 2;
+    }
+    const rowOf = [new Map(), new Map()];
+    for (const name of sel) {
+        for (let b = 0; b < benches.length; b++) {
+            const fn = benches[b].fns.get(name);
+            if (fn === undefined) continue;
+            let m;
+            try { m = measureLane(fn, o.n, o.windows, o.warm, o.sub); } catch (e) {
+                throw new Error('BENCH ' + benches[b].path + ': lane ' + name + ' failed: ' + errText(e));
+            }
+            const row = { lane: name, windows: m.windows, peak: m.peak, mean: m.mean, voids: m.voids, retries: m.retries };
+            out.benches[b].rows.push(row);
+            rowOf[b].set(name, row);
+            if (m.voids !== 0) {
+                reasons.push('VOID: lane ' + name + (benches.length === 2 ? (b === 0 ? ' (A)' : ' (B)') : '') +
+                    ', ' + m.voids + ' VOID window(s), first window ' + m.voidAt);
+            }
+        }
+    }
+    const fence = fenceCheck();
+    const fenceOk = typeof fence.recorded === 'number' && fence.recorded >= fence.forced;
+    if (!fenceOk) reasons.push('fence (after): recorded ' + fence.recorded + ' < forced ' + fence.forced);
+    let nv = !fenceOk || sel.length === 0 || reasons.length !== 0;
+    if (sel.length === 0) reasons.push('zero lanes selected');
+    let bad = false;
+    if (benches.length === 1 && o.max !== null) {
+        const lanes = [];
+        for (const row of out.benches[0].rows) {
+            const hi = Number.isFinite(row.peak) ? band.hiFixed + band.hiRel * row.peak : null;
+            const verdict = laneVerdictNV(row) ? 'NO VERDICT' : gateVerdict(row.peak, o.max, band);
+            lanes.push({ lane: row.lane, peak: row.peak, lo: band.lo, hi, verdict });
+            if (verdict === 'NO VERDICT') nv = true;
+            if (verdict === 'FAIL') bad = true;
+        }
+        out.gate = { max: o.max, verdict: nv ? 'NO VERDICT' : bad ? 'FAIL' : 'PASS', lanes };
+    }
+    if (benches.length === 2) {
+        const lanes = [];
+        for (const name of sel) {
+            const ra = rowOf[0].get(name), rb = rowOf[1].get(name);
+            if (ra === undefined || rb === undefined) {
+                const one = ra === undefined ? rb : ra;
+                lanes.push({ lane: name, a: ra === undefined ? null : ra.peak, b: rb === undefined ? null : rb.peak,
+                    delta: null, E: null, verdict: ra === undefined ? 'ONLY-B' : 'ONLY-A' });
+                if (laneVerdictNV(one)) nv = true;
+                bad = true;
+                continue;
+            }
+            const fin = Number.isFinite(ra.peak) && Number.isFinite(rb.peak);
+            const verdict = laneVerdictNV(ra) || laneVerdictNV(rb) ? 'NO VERDICT' : abVerdict(ra.peak, rb.peak, o.tol, band);
+            lanes.push({ lane: name, a: ra.peak, b: rb.peak, delta: fin ? rb.peak - ra.peak : null,
+                E: fin ? band.lo + band.hiFixed + band.hiRel * Math.max(ra.peak, rb.peak) : null, verdict });
+            if (verdict === 'NO VERDICT') nv = true;
+            if (verdict === 'DIFF') bad = true;
+        }
+        out.ab = { tol: o.tol, verdict: nv ? 'NO VERDICT' : bad ? 'DIFF' : 'SAME', lanes };
+    }
+    // Settle before printing (d4386d85): an async error from a lane or setup then exits 2 before any verdict prints.
+    await settle();
+    report(o, out, reasons, true);
+    return nv ? 2 : bad ? 1 : 0;
+}
+
+// --self-test (C-20 / C-21): selfCheck at the G1 TASK 6 default cell; a miss stops before runSelfTestLanes. The last
+// stdout line is {"selfCheck":{"ok","reason"},"rows":[...]}. Exit 0 iff ok and every row ok, 1 on a row miss, 2 on a miss.
+async function runSelfTest(o) {
+    const sc = selfCheck(1000000, 5, 200000, 10000);
+    const rows = sc.ok ? runSelfTestLanes() : [];
+    await settle();
+    if (!sc.ok) process.stderr.write('alloc-per-op: NO VERDICT: selfCheck: ' + sc.reason + '\n');
+    if (!o.json) {
+        const L = ['alloc-per-op --self-test | node ' + process.version + ' | v8 ' + process.versions.v8 + ' | ' +
+            process.platform + '-' + process.arch,
+            'selfCheck (--n 1000000 --sub 10000 --windows 5 --warm 200000): ' + (sc.ok ? 'ok' : 'MISS: ' + sc.reason)];
+        for (const r of rows) {
+            L.push('  ' + r.name.padEnd(10) + ' peak ' + num(r.peak).padStart(10) + '  ' + r.verdict.padEnd(10) +
+                ' want ' + r.want.join(' | ') + '  ' + (r.ok ? 'ok' : 'MISS'));
+        }
+        process.stdout.write(L.join('\n') + '\n');
+    }
+    process.stdout.write(JSON.stringify({ selfCheck: { ok: sc.ok, reason: sc.reason }, rows }) + '\n');
+    if (!sc.ok) return 2;
+    for (const r of rows) if (r.ok !== true) return 1;
+    return 0;
+}
+
+// :report
+// Cold. The reasons go to stderr; with --json only the JSON line (exactly the BRIEF key set) is printed, else the text
+// report. `verdicts` false (a selfCheck miss, C-15) prints no verdict line.
+function num(x) { return typeof x === 'number' && Number.isFinite(x) ? x.toFixed(4) : 'null'; }
+function short(x) { return typeof x === 'number' && Number.isFinite(x) ? String(Number(x.toPrecision(6))) : 'null'; }
+
+function report(o, out, reasons, verdicts) {
+    for (const r of reasons) process.stderr.write('alloc-per-op: NO VERDICT: ' + r + '\n');
+    if (o.json) { process.stdout.write(JSON.stringify(out) + '\n'); return; }
+    const pc = out.pointer_compression;
+    const L = ['alloc-per-op | node ' + out.node + ' | v8 ' + out.v8 + ' | ' + out.platform + '-' + out.arch +
+        ' | pointer_compression ' + (pc === 1 || pc === true ? '1' : pc === 0 || pc === false ? '0' : 'unknown') +
+        ' | isolate ' + out.isolate + ' | signal ' + out.signal,
+        'n=' + out.n + ' windows=' + out.windows + ' warm=' + out.warm + ' sub=' + out.sub +
+        ' | span (K-1) x N = ' + out.span + ' ops',
+        'scope: ' + out.scope,
+        'band: lo ' + out.band.lo + ' B/op, hi ' + out.band.hiFixed + ' + ' + out.band.hiRel +
+        ' x peak B/op (at --n ' + out.n + ' --sub ' + out.sub + '); a statistic within the band is NO VERDICT',
+        'floor (empty lane peak, printed, never subtracted) = ' + num(out.floor) + ' B/op'];
+    for (const b of out.benches) {
+        L.push('', b.path);
+        L.push('  ' + 'lane'.padEnd(24) + 'peak'.padStart(12) + 'mean'.padStart(12) + 'voids'.padStart(7) +
+            'retries'.padStart(9) + '   windows 0..' + (out.windows - 1) + ' (B/op; VOID = null)');
+        for (const r of b.rows) {
+            L.push('  ' + r.lane.padEnd(24) + num(r.peak).padStart(12) + num(r.mean).padStart(12) +
+                String(r.voids).padStart(7) + String(r.retries).padStart(9) + '   ' + r.windows.map(num).join(' '));
+        }
+        if (b.rows.length === 0) L.push('  (no lane measured)');
+    }
+    for (const r of reasons) L.push('NO VERDICT: ' + r);
+    if (verdicts && out.gate) {
+        let why = '';
+        for (const g of out.gate.lanes) {
+            const row = out.benches[0].rows.find((x) => x.lane === g.lane);
+            if (g.verdict === 'NO VERDICT' && why === '' && g.hi !== null && row && row.voids === 0) {
+                why = ' (within band -' + short(g.lo) + '/+' + short(g.hi) + ': lane ' + g.lane + ')';
+            }
+        }
+        if (out.gate.verdict !== 'NO VERDICT') why = '';
+        else if (reasons.length !== 0) why = ' (' + reasons[0] + ')';
+        L.push('', 'gate --max ' + out.gate.max + ' (peak B/op): ' + out.gate.verdict + why);
+        for (const g of out.gate.lanes) {
+            const row = out.benches[0].rows.find((x) => x.lane === g.lane);
+            const band = g.verdict !== 'NO VERDICT' ? '' : row && row.voids !== 0 ? ' (VOID)' : g.hi === null ? '' :
+                ' (within band -' + short(g.lo) + '/+' + short(g.hi) + ')';
+            L.push('  ' + g.lane.padEnd(24) + num(g.peak).padStart(12) + '  ' + g.verdict + band);
+        }
+    }
+    if (verdicts && out.ab) {
+        L.push('', 'A/B --tol ' + out.ab.tol + ' (peak B/op): ' + out.ab.verdict);
+        L.push('  ' + 'lane'.padEnd(24) + 'A'.padStart(12) + 'B'.padStart(12) + 'delta'.padStart(12) + 'E'.padStart(12));
+        for (const c of out.ab.lanes) {
+            L.push('  ' + c.lane.padEnd(24) + num(c.a).padStart(12) + num(c.b).padStart(12) + num(c.delta).padStart(12) +
+                num(c.E).padStart(12) + '  ' + c.verdict);
+        }
+    }
+    process.stdout.write(L.join('\n') + '\n');
+}
+
+// :buildInfo
+// The build's pointer-compression flag as recorded (null when absent or vars is not an object: null is not zero).
+export function buildInfo(vars) {
+    if (vars === null || typeof vars !== 'object') return null;
+    return Object.hasOwn(vars, 'v8_enable_pointer_compression') ? vars.v8_enable_pointer_compression : null;
+}
+
+// :main
+// parseArgs -> -h -> preflight -> (no gc: re-spawn once, or exit 2 in a child) -> the run. Returns the exit code.
+const RUN_STATE = { settled: false, code: 2 };
+function exitGuard(code) {
+    if (!RUN_STATE.settled) {
+        process.stderr.write('alloc-per-op: NO VERDICT: the process exited before the run settled (exit code ' + code + ')\n');
+        process.exitCode = 2;
+    } else if (code !== RUN_STATE.code) {
+        process.stderr.write('alloc-per-op: NO VERDICT: exit code ' + code + ' replaced the run\'s exit ' + RUN_STATE.code +
+            ' after the run settled\n');
+        process.exitCode = 2;
+    }
+}
+async function main(argv) {
+    const at = [];
+    let o, reals;
+    try { o = parseCore(argv, at); } catch (e) { process.stderr.write('alloc-per-op: ' + e.message + '\n'); return 2; }
+    if (o.help) { usage(); return 2; }
+    try { reals = preflight(o.benches); } catch (e) { process.stderr.write('alloc-per-op: ' + e.message + '\n'); return 2; }
+    if (typeof globalThis.gc !== 'function') {
+        if (process.env.ALLOC_PER_OP_CHILD === '1') {
+            process.stderr.write('alloc-per-op: NO VERDICT: gc() still missing after --expose-gc\n');
+            return 2;
+        }
+        return respawn(argv, at, reals);
+    }
+    // The run (C-12, C-14, C-15, C-19, C-20). The exit guard (TASK 7): any exit before the run settled -- a lane or
+    // setup() calling process.exit(0) included -- ends with 2, and so does an exit code that differs from the run's.
+    process.on('exit', exitGuard);
+    let code;
+    try { code = o.selfTest ? await runSelfTest(o) : await run(o, reals); } catch (e) {
+        process.stderr.write('alloc-per-op: NO VERDICT: ' + errText(e) + '\n');
+        code = 2;
+    }
+    RUN_STATE.settled = true;
+    RUN_STATE.code = code;
+    return code;
+}
+
+// :direct
+// Run only when executed directly, so importing this file has no side effects. An async error escaping a lane or
+// setup must not turn into exit 1 (= FAIL / DIFF): it is NO VERDICT, exit 2 (C-19).
+let direct = false;
+try { direct = !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(SELF); } catch { direct = false; }
+if (direct) {
+    const die = (e) => { process.stderr.write('alloc-per-op: NO VERDICT: uncaught: ' + ((e && e.stack) || e) + '\n'); process.exit(2); };
+    process.on('uncaughtException', die);
+    process.on('unhandledRejection', die);
+}
+if (direct) main(process.argv.slice(2)).then((c) => { process.exitCode = c; },
+    (e) => { process.stderr.write('alloc-per-op: NO VERDICT: ' + (e && e.stack) + '\n'); process.exitCode = 2; });
