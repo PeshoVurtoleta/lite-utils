@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
 import {
     mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, cpSync, rmSync, existsSync, statSync, symlinkSync, chmodSync,
+    renameSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -21,18 +22,23 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 const SHELLS = ['bash', '/bin/bash'];
 const NAME = 'inlining-budget-diff.sh';
 const GEN = readdirSync(join(ROOT, 'src')).filter((f) => f.endsWith('.sh')).sort();   // the build roster, read from src/
+// The .mjs allowlist, typed from SPEC-alloc-per-op.md 4.G3 TASK 4 (never read from build.sh or src/): build.sh copies
+// each src/<name>.mjs verbatim to the root.
+const MJS = ['alloc-per-op.mjs'];
+const MJS_NAME = MJS[0];
+const MJS_SRC = `src/${MJS_NAME}`;
 
 const tmps = [];
 function mk(prefix) { const d = mkdtempSync(join(tmpdir(), prefix)); tmps.push(d); return d; }
 function cleanup() { for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true }); }
 
-// A copy of the repo's build inputs and generated outputs: build.sh, src/, lib/, root *.sh.
+// A copy of the repo's build inputs and generated outputs: build.sh, src/, lib/, root *.sh and *.mjs.
 function repoCopy() {
     const d = mk('bld-copy-');
     cpSync(join(ROOT, 'build.sh'), join(d, 'build.sh'));
     cpSync(join(ROOT, 'src'), join(d, 'src'), { recursive: true });
     cpSync(join(ROOT, 'lib'), join(d, 'lib'), { recursive: true });
-    for (const f of readdirSync(ROOT)) if (f.endsWith('.sh')) cpSync(join(ROOT, f), join(d, f));
+    for (const f of readdirSync(ROOT)) if (f.endsWith('.sh') || f.endsWith('.mjs')) cpSync(join(ROOT, f), join(d, f));
     return d;
 }
 function build(dir, out, shell = 'bash') {
@@ -40,12 +46,13 @@ function build(dir, out, shell = 'bash') {
     if (out !== undefined) args.push(out);
     return capSync(shell, args, { cwd: dir, encoding: 'utf8' }, 60000, `${shell} build.sh`);
 }
-function rootShFiles(dir) { return readdirSync(dir).filter((f) => f.endsWith('.sh') && f !== 'build.sh').sort(); }
+// the root tools: *.sh minus build.sh, plus *.mjs (the drift set check)
+function rootTools(dir) { return readdirSync(dir).filter((f) => (f.endsWith('.sh') && f !== 'build.sh') || f.endsWith('.mjs')).sort(); }
 function tmpLeft(dir) { return readdirSync(dir).filter((f) => /^\..*\.tmp\./.test(f)); }
 
 // Drift report: every problem between a built dir and the committed root files of `repo`.
 //   differs:<f>  built file not byte-equal to root file; missing-root:<f> built but not committed;
-//   stray:<f>    root *.sh (minus build.sh) that the build does not produce.
+//   stray:<f>    root *.sh (minus build.sh) or *.mjs that the build does not produce; mode:<f> exec bits differ.
 function drift(builtDir, repo) {
     const built = readdirSync(builtDir).filter((f) => !f.startsWith('.')).sort();
     const probs = [];
@@ -55,7 +62,7 @@ function drift(builtDir, repo) {
         else if (!readFileSync(join(builtDir, f)).equals(readFileSync(rp))) probs.push('differs:' + f);
         else if ((statSync(join(builtDir, f)).mode & 0o111) !== (statSync(rp).mode & 0o111)) probs.push('mode:' + f);
     }
-    for (const f of rootShFiles(repo)) if (!built.includes(f)) probs.push('stray:' + f);
+    for (const f of rootTools(repo)) if (!built.includes(f)) probs.push('stray:' + f);
     return probs;
 }
 function editOnce(path, from, to) {
@@ -75,6 +82,7 @@ for (const shell of SHELLS) {
             assert.equal(r.status, 0, r.stdout + r.stderr);
             assert.deepEqual(drift(out, ROOT), []);
             assert.ok(readdirSync(out).includes(NAME));
+            assert.ok(readdirSync(out).includes(MJS_NAME));
         } finally { cleanup(); }
     });
 }
@@ -152,12 +160,14 @@ for (const [label, mutate, named] of CASES) {
         try {
             const copy = repoCopy();
             const before = readFileSync(join(copy, NAME));
+            const beforeMjs = readFileSync(join(copy, MJS_NAME));   // a missing root .mjs fails here (never SKIP)
             mutate(copy);
             const r = build(copy);                       // default OUTDIR = copy root
             assert.equal(r.status, 2, r.stdout + r.stderr);
             assert.match(r.stderr, /^build\.sh: /m);
             assert.ok(r.stderr.includes(named), `stderr must name ${named}: ${r.stderr}`);
             assert.ok(readFileSync(join(copy, NAME)).equals(before), 'root script changed by an aborted build');
+            assert.ok(readFileSync(join(copy, MJS_NAME)).equals(beforeMjs), 'root .mjs changed by an aborted build');
             assert.deepEqual(tmpLeft(copy), []);
         } finally { cleanup(); }
     });
@@ -174,14 +184,14 @@ test('A5: 5 builds into one OUTDIR are byte-identical; aborts leave exactly 1 fi
             const cur = readFileSync(join(out, NAME));
             if (first === null) first = cur; else assert.ok(cur.equals(first), `build ${i} differs`);
         }
-        assert.deepEqual(readdirSync(out).sort(), GEN);
+        assert.deepEqual(readdirSync(out).sort(), [...GEN, ...MJS].sort());   // G3 A1: 5 .sh + 1 .mjs, 0 temps
         for (const [label, mutate] of CASES) {
             const copy = repoCopy();
             mutate(copy);
             const r = build(copy, out);
             assert.equal(r.status, 2, `${label}: ${r.stdout}${r.stderr}`);
         }
-        assert.deepEqual(readdirSync(out).sort(), GEN);  // exactly the built set => 0 .tmp leftovers
+        assert.deepEqual(readdirSync(out).sort(), [...GEN, ...MJS].sort());  // exactly the built set => 0 .tmp leftovers
         assert.ok(readFileSync(join(out, NAME)).equals(first));
         assert.deepEqual(tmpLeft(out), []);
     } finally { cleanup(); }
@@ -205,6 +215,167 @@ test('A5: build from cwd / by absolute path into a new nested OUTDIR equals the 
         const r = capSync('bash', [join(ROOT, 'build.sh'), out], { cwd: '/', encoding: 'utf8' }, 60000, 'bash build.sh (cwd /)');
         assert.equal(r.status, 0, r.stdout + r.stderr);
         assert.deepEqual(drift(out, ROOT), []);
+    } finally { cleanup(); }
+});
+
+// ---- G3 (b88 B1): the .mjs step. ORACLE: .handoff/SPEC-alloc-per-op.md 4.G3 TASKS 2 / 4 and ASSERTIONS 1-4 (CURRENT
+// C-25 / C-31 change none of them). A .mjs is copied byte for byte (never through the .sh expander), checked, made
+// executable and moved only by the one final move loop, all or nothing with the .sh outputs. Must-fail controls:
+// the HEAD build.sh (no .mjs step) turns the A5 set row, the verbatim rows, the drift baseline and every MJS_CASES
+// row red (.handoff/b88/b1/revert.txt); each named build.sh mutant is in .handoff/b88/b1/mutants.txt.
+const MJS_LINE1 = '#!/usr/bin/env node';
+
+test('G3 A2 verbatim: the live build copies src .mjs byte for byte, executable', { skip }, () => {
+    try {
+        const out = mk('bld-out-');
+        const r = build(ROOT, out);
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.ok(readFileSync(join(out, MJS_NAME)).equals(readFileSync(join(ROOT, MJS_SRC))), 'built .mjs differs from src');
+        assert.equal(statSync(join(out, MJS_NAME)).mode & 0o777, 0o755);
+        assert.deepEqual(tmpLeft(out), []);
+    } finally { cleanup(); }
+});
+
+test('G3 A2 verbatim: planted @SCRIPT@ and "# @include lib/common.sh" lines in the src .mjs pass through untouched', { skip }, () => {
+    try {
+        const copy = repoCopy();
+        const p = join(copy, MJS_SRC);
+        const PLANT_S = '@SCRIPT@';
+        const PLANT_I = '# @include lib/common.sh';
+        writeFileSync(p, readFileSync(p, 'utf8') + `/*\n${PLANT_S}\n${PLANT_I}\n*/\n`);   // a block comment: node --check passes
+        const out = mk('bld-out-');
+        const r = build(copy, out);
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        const got = readFileSync(join(out, MJS_NAME));
+        assert.ok(got.equals(readFileSync(p)), 'built .mjs is not byte-equal to the planted src');
+        const lines = got.toString('utf8').split('\n');
+        assert.equal(lines.filter((l) => l === PLANT_S).length, 1, '@SCRIPT@ line count');
+        assert.equal(lines.filter((l) => l === PLANT_I).length, 1, '@include line count');
+    } finally { cleanup(); }
+});
+
+// drift: each mutation of a copy yields exactly one finding; the unmutated copy yields none
+const DRIFT_MUTS = [
+    ['none (baseline)', () => {}, []],
+    ['root .mjs 1-byte edit', (c) => {
+        const p = join(c, MJS_NAME);
+        const b = readFileSync(p);
+        const i = b.indexOf(0x0a) + 1;                 // first byte of line 2 (line 1 stays the shebang)
+        b[i] = b[i] === 0x2f ? 0x2a : 0x2f;
+        writeFileSync(p, b);
+    }, [`differs:${MJS_NAME}`]],
+    ['src .mjs edited, root not rebuilt', appendTo(MJS_SRC, '// src edit\n'), [`differs:${MJS_NAME}`]],
+    ['root .mjs removed', (c) => rmSync(join(c, MJS_NAME)), [`missing-root:${MJS_NAME}`]],
+    ['stray root extra.mjs', (c) => writeFileSync(join(c, 'extra.mjs'), MJS_LINE1 + '\n'), ['stray:extra.mjs']],
+    ['root .mjs chmod 0644', (c) => chmodSync(join(c, MJS_NAME), 0o644), [`mode:${MJS_NAME}`]],
+];
+for (const [label, mutate, want] of DRIFT_MUTS) {
+    test(`G3 A3 drift: ${label} -> ${JSON.stringify(want)}`, { skip }, () => {
+        try {
+            const copy = repoCopy();
+            mutate(copy);
+            const out = mk('bld-out-');
+            const r = build(copy, out);
+            assert.equal(r.status, 0, r.stdout + r.stderr);
+            assert.deepEqual(drift(out, copy), want);
+        } finally { cleanup(); }
+    });
+}
+
+// fail closed: [label, mutate(copy), what stderr must hold (the file + the check), run(copy) or undefined]
+const exportedNodeFn = (copy) => capSync('bash', ['-c', 'node() { return 0; }; export -f node; exec bash build.sh', 'build'],
+    { cwd: copy, encoding: 'utf8' }, 60000, 'bash build.sh (node is an exported function)');
+// a node preload that exits 0 would make `node --check` pass a broken file unless build.sh unsets NODE_OPTIONS
+const nodeOptionsPreload = (c) => {
+    const pre = join(mk('bld-pre-'), 'exit0.cjs');
+    writeFileSync(pre, 'process.exit(0);\n');
+    return capSync('bash', ['build.sh'], { cwd: c, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '--require=' + pre } },
+        60000, 'bash build.sh (NODE_OPTIONS preload)');
+};
+// a cp first on PATH that copies, then appends one byte to the destination: only the cmp -s check can catch it
+const corruptingCp = (c) => {
+    const fake = mk('bld-fakecp-');
+    writeFileSync(join(fake, 'cp'), '#!/bin/sh\n/bin/cp "$@" || exit $?\nfor a in "$@"; do last=$a; done\nprintf x >> "$last"\n');
+    chmodSync(join(fake, 'cp'), 0o755);
+    return capSync('bash', ['build.sh'], { cwd: c, encoding: 'utf8', env: { ...process.env, PATH: fake + ':' + process.env.PATH } },
+        60000, 'bash build.sh (corrupting cp on PATH)');
+};
+const MJS_CASES = [
+    ['src .mjs absent', (c) => rmSync(join(c, MJS_SRC)), `${MJS_SRC}: not found`],
+    ['NUL byte in the src .mjs', appendTo(MJS_SRC, '// x\0y\n'), `${MJS_SRC}: contains a NUL byte`],
+    ['src .mjs without final newline', (c) => {
+        const p = join(c, MJS_SRC);
+        const b = readFileSync(p);
+        assert.equal(b[b.length - 1], 0x0a);
+        writeFileSync(p, b.subarray(0, b.length - 1));
+    }, `${MJS_SRC}: empty or no final newline`],
+    ['src .mjs line 1 not the shebang', (c) => {
+        const p = join(c, MJS_SRC);
+        const s = readFileSync(p, 'utf8');
+        assert.ok(s.startsWith(MJS_LINE1 + '\n'), 'src line 1 is the shebang');
+        writeFileSync(p, '#!/usr/bin/node' + s.slice(MJS_LINE1.length));
+    }, `${MJS_SRC}: line 1 is not exactly`],
+    ['src .mjs fails node --check', appendTo(MJS_SRC, 'if (\n'), `${MJS_SRC}: node --check fails`],
+    ['unknown src/x.mjs', (c) => writeFileSync(join(c, 'src', 'x.mjs'), MJS_LINE1 + '\n'), 'src/x.mjs: not on the .mjs allowlist'],
+    ['node is not an absolute path (exported function)', () => {}, `${MJS_SRC}: node --check needs node at an absolute path`, exportedNodeFn],
+    // review b88 B1 r1 (gate teeth): NODE_OPTIONS unset (O4), line 1 exact (O6), regular file / no symlink (O3), cmp -s (O1)
+    ['NODE_OPTIONS preload exits 0', appendTo(MJS_SRC, 'if (\n'), `${MJS_SRC}: node --check fails`, nodeOptionsPreload],
+    ['src .mjs line 1 ends in CR (CRLF shebang)', (c) => {
+        const p = join(c, MJS_SRC);
+        const s = readFileSync(p, 'utf8');
+        assert.ok(s.startsWith(MJS_LINE1 + '\n'));
+        writeFileSync(p, MJS_LINE1 + '\r' + s.slice(MJS_LINE1.length));
+    }, `${MJS_SRC}: line 1 is not exactly`],
+    ['src .mjs is a symlink', (c) => {
+        const p = join(c, MJS_SRC);
+        renameSync(p, join(c, 'src', 'real.txt'));
+        symlinkSync('real.txt', p);
+    }, `${MJS_SRC}: not a regular file`],
+    ['src .mjs is a directory', (c) => { const p = join(c, MJS_SRC); rmSync(p); mkdirSync(p); }, `${MJS_SRC}: not a regular file`],
+    ['cp corrupts the copy (fake cp first on PATH)', () => {}, `${MJS_SRC}: copy is not byte-equal to its src`, corruptingCp],
+];
+for (const [label, mutate, named, run] of MJS_CASES) {
+    test(`G3 A4 fail closed: ${label}`, { skip }, () => {
+        try {
+            const copy = repoCopy();
+            const before = readFileSync(join(copy, NAME));
+            const beforeMjs = readFileSync(join(copy, MJS_NAME));
+            mutate(copy);
+            const r = run ? run(copy) : build(copy);   // default OUTDIR = copy root
+            assert.equal(r.status, 2, r.stdout + r.stderr);
+            assert.match(r.stderr, /^build\.sh: /m);
+            assert.ok(r.stderr.includes(named), `stderr must hold ${named}: ${r.stderr}`);
+            assert.ok(readFileSync(join(copy, NAME)).equals(before), 'root script changed by an aborted build');
+            assert.ok(readFileSync(join(copy, MJS_NAME)).equals(beforeMjs), 'root .mjs changed by an aborted build');
+            assert.deepEqual(tmpLeft(copy), []);
+        } finally { cleanup(); }
+    });
+}
+
+test('G3 A4 cross-kind all or nothing: a hand-edited root .sh survives a .mjs abort, a hand-edited root .mjs survives a .sh abort', { skip }, () => {
+    try {
+        // (a) the .mjs step aborts AFTER every .sh output passed (node --check): no .sh output may be published
+        const c1 = repoCopy();
+        appendTo(NAME, '# hand edit\n')(c1);
+        const sh1 = readFileSync(join(c1, NAME));
+        const mjs1 = readFileSync(join(c1, MJS_NAME));
+        appendTo(MJS_SRC, 'if (\n')(c1);
+        const r1 = build(c1);
+        assert.equal(r1.status, 2, r1.stdout + r1.stderr);
+        assert.ok(r1.stderr.includes(`${MJS_SRC}: node --check fails`), r1.stderr);
+        assert.ok(readFileSync(join(c1, NAME)).equals(sh1), 'hand-edited root .sh overwritten by a .mjs abort');
+        assert.ok(readFileSync(join(c1, MJS_NAME)).equals(mjs1), 'root .mjs changed by a .mjs abort');
+        assert.deepEqual(tmpLeft(c1), []);
+        // (b) a .sh output fails bash -n: the root .mjs may not be published either
+        const c2 = repoCopy();
+        appendTo(MJS_NAME, '// hand edit\n')(c2);
+        const mjs2 = readFileSync(join(c2, MJS_NAME));
+        appendTo(`src/${NAME}`, 'if then\n')(c2);
+        const r2 = build(c2);
+        assert.equal(r2.status, 2, r2.stdout + r2.stderr);
+        assert.ok(r2.stderr.includes(`src/${NAME}`), r2.stderr);
+        assert.ok(readFileSync(join(c2, MJS_NAME)).equals(mjs2), 'hand-edited root .mjs overwritten by a .sh abort');
+        assert.deepEqual(tmpLeft(c2), []);
     } finally { cleanup(); }
 });
 

@@ -144,6 +144,7 @@ function buildRoot(name, edits) {
     mkdirSync(join(d, 'src'));
     cpSync(join(PKG, 'lib'), join(d, 'lib'), { recursive: true });
     cpSync(join(PKG, 'build.sh'), join(d, 'build.sh'));
+    cpSync(join(PKG, 'src', 'alloc-per-op.mjs'), join(d, 'src', 'alloc-per-op.mjs'));   // build.sh requires its .mjs allowlist
     writeFileSync(join(d, 'src', 'bytecode-budget.sh'), s);
     const r = spawnSync('bash', [join(d, 'build.sh')], { encoding: 'utf8', env: cleanEnv() });
     assert.equal(r.status, 0, `build.sh for ${name}: ${r.stderr}`);
