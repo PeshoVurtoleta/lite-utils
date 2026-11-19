@@ -968,13 +968,19 @@ const X5C_BODY = [
     'let ran = false;',
     "v8.getHeapSpaceStatistics = () => { const l = orig(); for (const s of l) if (ran && s.space_name === 'new_space') s.space_used_size -= 1024; ran = false; return l; };",
     'const C = M.CONTROLS;',
-    'const sc = M.selfCheck(1e5, 3, 1e4, 1e3, { positive: C.positive, negative: (i) => { ran = true; }, Profiler: C.Profiler });',
-    'console.log(JSON.stringify({ ok: sc.ok, neg: sc.misses ? sc.misses.negative : null, emptyPeak: sc.empty.peak, voids: sc.empty.voids, lo: sc.band.lo }));',
+    // b89 FILLERS 2: a noisy leg can VOID the empty lane's window before the row reaches its claim; retry while
+    // sc.empty.voids !== 0, at most X5C_TRIES attempts total, and print the attempt count (provenance).
+    'const X5C_TRIES = 3;',
+    'let sc = null, attempts = 0;',
+    'do { ran = false; attempts++; sc = M.selfCheck(1e5, 3, 1e4, 1e3, { positive: C.positive, negative: (i) => { ran = true; }, Profiler: C.Profiler }); } while (sc.empty.voids !== 0 && attempts < X5C_TRIES);',
+    'console.log(JSON.stringify({ ok: sc.ok, neg: sc.misses ? sc.misses.negative : null, emptyPeak: sc.empty.peak, voids: sc.empty.voids, lo: sc.band.lo, attempts, tries: X5C_TRIES }));',
 ];
 test('E9 X5c: a negative row below -lo makes selfCheck ok false with misses.negative /^negative: empty peak/', () => {
     const o = live('x5c', X5C_BODY);
     // Must-fail mutant m5c. Keyed on misses.negative, not reason / box (S-A43, #132): a noisy-leg positive VOID must not move this row.
-    assert.equal(o.voids, 0);
+    // voids === 0 is judged after at most 3 attempts (b89 FILLERS 2); only the attempt bound is asserted.
+    assert.ok(o.attempts >= 1 && o.attempts <= o.tries && o.tries === 3, 'attempts ' + o.attempts + ' of ' + o.tries);
+    assert.equal(o.voids, 0, 'empty lane VOID on all ' + o.attempts + ' attempts');
     assert.ok(o.emptyPeak < -o.lo, 'stand-in did not bite: ' + o.emptyPeak);
     assert.equal(o.ok, false);
     assert.ok(o.neg !== null, 'no misses (S-A43)');
@@ -982,7 +988,14 @@ test('E9 X5c: a negative row below -lo makes selfCheck ok false with misses.nega
 });
 
 // E11 (S-A39 / fable retention): measureLane keeps no reference to the lane (mutant: LAST = fn).
+// b89 U0-1: CI run 44346982861 (9417eea, macos-latest node 24) read alive [1, 0, 0]: a one-shot transient hold seen on that
+// leg (the first cycle's lane alive at the first check, gone by the second). Not reproduced locally (.handoff/b89/u0/), so no
+// mechanism is claimed. Each cycle now settles: up to SETTLE_MAX rounds of { gc(); a 5 ms macrotask; gc(); count }, stopping
+// at a count of 0. A retained lane (mutant LAST = fn) never reaches 0, so the loop hits its bound and the row stays red.
+// A hold that releases itself inside the settle window (a 10 / 40 ms timer mutant) passes; the row pins retention that
+// outlives SETTLE_MAX rounds (b89 review-U0 NIT).
 const E11_BODY = [
+    'const SETTLE_MAX = 20;',
     'const refs = [];',
     'function cycle() {',
     '  const f64 = new Float64Array(1);',
@@ -990,18 +1003,28 @@ const E11_BODY = [
     '  refs.push(new WeakRef(lane));',
     '  M.measureLane(lane, 1e5, 3, 1e4, 1e4);',
     '}',
-    'const alive = [];',
+    'const alive = [], iters = [];',
     'for (let k = 0; k < 3; k++) {',
     '  cycle();',
-    '  gc();',
-    '  await new Promise((r) => setImmediate(r));',
-    '  gc();',
-    '  alive.push(refs.filter((w) => w.deref() !== undefined).length);',
+    '  let n = -1, it = 0;',
+    '  while (it < SETTLE_MAX) {',
+    '    it++;',
+    '    gc();',
+    '    await new Promise((r) => setTimeout(r, 5));',
+    '    gc();',
+    '    n = refs.filter((w) => w.deref() !== undefined).length;',
+    '    if (n === 0) break;',
+    '  }',
+    '  alive.push(n);',
+    '  iters.push(it);',
     '}',
-    'console.log(JSON.stringify({ alive }));',
+    'console.log(JSON.stringify({ alive, iters, settleMax: SETTLE_MAX }));',
 ];
 test('E11 (child ret): after 3 measureLane cycles on fresh lanes held only by a WeakRef, the alive count is 0 after every cycle', () => {
     const o = live('ret', E11_BODY);
     // Must-fail mutant: LAST = fn (a module-level reference to the last lane). Regression pin: the plan does not claim red on 3641eba.
-    assert.deepEqual(o.alive, [0, 0, 0]);
+    // iters = settle rounds used per cycle (provenance only; bounded by settleMax = 20).
+    assert.equal(o.settleMax, 20);
+    assert.ok(Array.isArray(o.iters) && o.iters.length === 3 && o.iters.every((x) => Number.isInteger(x) && x >= 1 && x <= o.settleMax), 'iters ' + JSON.stringify(o.iters));
+    assert.deepEqual(o.alive, [0, 0, 0], 'alive ' + JSON.stringify(o.alive) + ' iters ' + JSON.stringify(o.iters));
 });
