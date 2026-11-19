@@ -1268,6 +1268,26 @@ control must be reachable alone. What would re-open: a lane read 0 B/op whose tr
 row green with its claimed check deleted. Evidence (local): `.handoff/RULINGS-engine-audit.md`,
 `.handoff/b88/plan-A1.md`, `.handoff/b88/review-A.md`, `audit/2026-11-18-alloc-per-op-engine/` (opus, fable, cross).
 
+**#134 alloc-per-op A4 prep + A2-G2 rung (b89): a fix removed the bias a control fed on; a retry-counted lane;
+an optimizer behaviour written as a contract (TRAP).** (a) TRAP (#132 re-open): the S-A39 driver fix removed the old
+-16 B per sub-window box bias, so in the A4 dry run (local, node v26.8.2, PRELIMINARY) the box lanes read exactly
+16.000 and the pooled "lo x 0.25 must flag a box window" control flagged 0 windows in all 4 cells: lo read NO VERDICT.
+Ruled Q-B89-LOTEETH (a) (S-A47): a planted lane `boxskip` (one box skipped per measured bracket, truth 16, reads 16 -
+16/SUB) is the pooled data control; it flagged 8 / 9 / 9 / 8 windows per cell and stayed in band at lo; the synthetic
+-0.0040 must-fail stays. (b) TRAP (review-U1, DESIGN): the report judged late3's last pre-switch window against truth
+0, but its counter counts retried calls, so R re-runs in windows 0..2 move the switch earlier and that window holds 16
+x sub x R / n real bytes; 3 re-runs at n1e7 s1e4 would read a false Q-B82-BANDRE. Ruled Q-B89-LATE3W2 (a) (S-A49): judge
+that window with the S-A20 allowance hi + 16 x sub x R / n (integer-guarded). (c) Defect caught by review (LITERAL):
+the new -h line said a dropped allocation "reads 0 B/op"; a dropped `JSON.parse('[1]')` read 56.0032 B/op, the same as
+the storing lane; only escape-analysed drops read 0. Fixed: "may be elided by V8 and then reads 0 B/op". (d) E11's
+CI-only [1, 0, 0] (run 44346982861, macos node 24) did not reproduce in 990 local runs; the row now settles (<= 20 rounds
+of gc + 5 ms) and still catches LAST = fn; a hold that releases itself inside the settle window is out of its reach.
+Lesson: a fix to the measurement basis can silently disarm a control that read the old bias -- re-run every data
+control after a basis change and keep a planted, data-independent source of the effect it guards; an oracle for a lane
+whose cost depends on its own call count must model the harness's re-run calls; usage text states contracts, never
+what the optimizer happens to do. What would re-open (a): a CI leg where boxskip flags 0 windows in a cell. Evidence
+(local): `.handoff/b89/` (u1/, review-U1.md, u0/, review-U0.md, u2/, review-U2.md), `.handoff/rejected/b89-U1/`.
+
 ---
 
 ## E. Process lessons
