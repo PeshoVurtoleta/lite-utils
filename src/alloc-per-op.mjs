@@ -543,8 +543,10 @@ export function parseArgs(argv) {
 }
 
 // :preflight
-// Parent, before any spawn (the child repeats it): the v8 APIs through the default `v8` object, the four SPACES
-// names (law 3), then each BENCH resolved ONCE to an absolute realpath that must be a regular file; two BENCH on one
+// Parent, before any spawn (the child repeats it): the v8 APIs through the default `v8` object, the 8 SPACES +
+// XSPACES names (law 3; S-A46): new_space, old_space, large_object_space, new_large_object_space first, then
+// code_space, trusted_space, code_large_object_space, trusted_large_object_space; the first missing name is refused
+// (needEnv stays the refusal for module-API callers). Then each BENCH resolved ONCE to an absolute realpath that must be a regular file; two BENCH on one
 // realpath are refused (C-18). Returns the realpaths in BENCH order; throws the refusal text otherwise.
 function preflight(benches) {
     if (typeof v8.getHeapSpaceStatistics !== 'function') {
@@ -561,6 +563,16 @@ function preflight(benches) {
             }
         }
         if (!found) throw new Error('NO VERDICT: heap space ' + SPACES[j] + ' is missing on this node');
+    }
+    for (let j = 0; j < XSPACES.length; j++) {
+        let found = false;
+        if (Array.isArray(list)) {
+            for (let k = 0; k < list.length; k++) {
+                const sp = list[k];
+                if (sp !== null && typeof sp === 'object' && sp.space_name === XSPACES[j]) { found = true; break; }
+            }
+        }
+        if (!found) throw new Error('NO VERDICT: heap space ' + XSPACES[j] + ' is missing on this node');
     }
     const reals = [];
     for (let k = 0; k < benches.length; k++) {
@@ -625,9 +637,13 @@ const USAGE = [
     'Refusal band (lo = 32 / S, hi = 524288 / N + 0.001 x peak): a --max below lo, or a --tol below',
     '  lo + 524288 / N, is refused before any spawn, naming the smallest accepted value.',
     'A/B: the same file twice is refused; an A/A check needs a copied bench.',
-    'Scope: on-heap bytes of the main isolate only, summed over the four SPACES new_space, old_space,',
-    '  large_object_space and new_large_object_space. off-heap ArrayBuffer memory and Worker threads',
-    '  are not counted.',
+    'Scope: on-heap bytes of the main isolate only: the four SPACES new_space, old_space, large_object_space',
+    '  and new_large_object_space; code_space and trusted_space are counted into old_space, and',
+    '  code_large_object_space and trusted_large_object_space into large_object_space. read_only_space and',
+    '  the shared spaces are not read; off-heap ArrayBuffer memory and Worker threads are not counted.',
+    'The lane must STORE what it allocates: a dropped allocation (returned, or discarded in its body,',
+    '  e.g. `(i) => { add(A, B); }`) may be elided by V8 and then reads 0 B/op. A lane that returns a',
+    "  value is refused, but only lane(0)'s return value is checked.",
     'A rejected sub-window is retried: a retried sub-window calls the lane again, so a lane with side',
     '  effects sees extra calls.',
     'A threshold holds only for the build it was measured on (pointer compression, arch, node / v8).',

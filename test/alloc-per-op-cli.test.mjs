@@ -5,13 +5,14 @@
 // Zero-spawn mechanism: `node --import test/fixtures/alloc-per-op/spawn-spy.mjs TOOL ...`; the spy appends one JSON line per
 // process to $APO_SPY; "0 spawns" = exactly 1 line, and a MISSING spy file fails by name.
 // B1, B2 and B3 (usage text) have landed (b87): no row is red by design. b87 H1e adds the selfCheck-miss --self-test rows (APO_SPY_SCMISS).
+// b89 H1 adds the S-A48 rows (APO_SPY_HIDE; plan-U2 S-A47 text, renumbered S-A48 in the SPEC): rows 1-5 and 9 are red on 9417eea.
 // The body's A6 row 'box at --n 100000 --max 14 -> NO VERDICT (within band' is DELETED per C-23 (S-A1); the band refusal
 // is covered by A9 / C-22 (the self-test 'refusal' row).
 // Caps go only through capSync (spawn-cap.mjs); no raw cap in this file (spawn-cap.test.mjs S5 census).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -44,7 +45,7 @@ function need(name) {
 function cleanEnv(extra = {}) {
     const e = { ...process.env };
     for (const k of Object.keys(e)) if (k.startsWith('GIT_')) delete e[k];
-    for (const k of ['NODE', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE_TEST_CONTEXT', 'TMPDIR', 'OUTDIR', 'ME', 'OUT_NAMES', 'POSIXLY_CORRECT', 'SHELLOPTS', 'BASH_ENV', 'ENV', 'CDPATH', 'APO_SPY', 'APO_SPY_DROP', 'APO_SPY_CHILD', 'APO_SPY_SCMISS', 'ALLOC_PER_OP_CHILD']) delete e[k];
+    for (const k of ['NODE', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE_TEST_CONTEXT', 'TMPDIR', 'OUTDIR', 'ME', 'OUT_NAMES', 'POSIXLY_CORRECT', 'SHELLOPTS', 'BASH_ENV', 'ENV', 'CDPATH', 'APO_SPY', 'APO_SPY_DROP', 'APO_SPY_CHILD', 'APO_SPY_SCMISS', 'APO_SPY_HIDE', 'ALLOC_PER_OP_CHILD']) delete e[k];
     e.NODE_V8_COVERAGE = undefined;   // deleting is not enough: node re-adds it
     return { ...e, ...extra };
 }
@@ -97,6 +98,8 @@ for (const flag of ['-h', '--help']) {
         assert.equal(String(r.stderr), '', 'help leaves stderr empty');
         const out = String(r.stdout);
         assert.ok(out.split('\n')[0].startsWith('alloc-per-op.mjs -- '), `line 1: ${out.split('\n')[0]}`);
+        // b89 H1 (plan-U2 TASK 3/7): the E24 token 'below 1000' stays: B0's sub-probe returned NO VERDICT under the pre-registered
+        // rule, so usage line 620 ("--sub below 1000 under-reads on node v22") is KEPT (.handoff/b89/u2/REPORT-B0.md).
         for (const s of ['new_large_object_space', 'Worker', 'off-heap', 'calls the lane again', '1000', 'below 1000']) assert.ok(out.includes(s), `usage names ${s}`);
         assert.equal(spyLines(spy).length, 1);
     });
@@ -269,6 +272,73 @@ for (const api of ['GCProfiler', 'getHeapSpaceStatistics']) {
         assert.equal(spyLines(spy).length, 1);
     });
 }
+
+// ================= b89 A1 / A4b preflight checks all 8 SPACES + XSPACES names (plan-U2 ASSERTIONS A1, A4b; S-A48) =================
+// Oracle = plan-U2 A1 text, never the code: APO_SPY_HIDE=<name> filters <name> out of v8.getHeapSpaceStatistics in EVERY process,
+// so the PARENT :preflight must refuse it before any spawn, in its own form `NO VERDICT: heap space <name> is missing on this node`
+// (not needEnv's `heap space(s) missing: <name>`, which only the re-spawned child would print -> 2 spy lines). Every other input
+// is valid (#132: the row reaches the 8-name check; f64 at --n 100000 --windows 3 --warm 0 passes every argv check).
+// Red on 9417eea: the parent checks only the 4 SPACES, so each XSPACES row re-spawns and the child's needEnv refuses.
+const XSPACES_NAMES = ['code_space', 'trusted_space', 'code_large_object_space', 'trusted_large_object_space'];
+const A1_ARGS = ['--n', '100000', '--windows', '3', '--warm', '0', A];
+const A4B_DIRS = [];   // A4b: every A1-row mkdtemp cwd, recorded right after run() (before any assert can stop the row)
+function preflightMissing(r, spy, name) {
+    assert.equal(r.status, 2, why(r));
+    assert.equal(String(r.stdout), '', 'a preflight refusal prints nothing on stdout');
+    assert.equal(String(r.stderr), `alloc-per-op: NO VERDICT: heap space ${name} is missing on this node\n`, `stderr is exactly the :preflight refusal for ${name}\n${why(r)}`);
+    assert.doesNotMatch(String(r.stderr), /v\d+\.\d+/, 'a refusal never prints a version string (#128)');
+    assert.equal(spyLines(spy).length, 1, 'refused in the parent before any spawn (1 spy line)');
+}
+for (const name of XSPACES_NAMES) {
+    test(`b89 A1 APO_SPY_HIDE=${name}: exit 2, stdout '', stderr exactly the :preflight "heap space ${name} is missing" line, no /v\\d+\\.\\d+/, 1 spy line (kills: XSPACES loop removed -> child needEnv, 2 spy lines)`, () => {
+        const { r, dir, spy } = run(A1_ARGS, { env: { APO_SPY_HIDE: name } });
+        A4B_DIRS.push(dir);
+        preflightMissing(r, spy, name);
+    });
+}
+test('b89 A1 --self-test with APO_SPY_HIDE=trusted_space: the same :preflight refusal before any spawn (kills: --self-test skips the XSPACES check)', () => {
+    const { r, dir, spy } = run(['--self-test'], { env: { APO_SPY_HIDE: 'trusted_space' } });
+    A4B_DIRS.push(dir);
+    preflightMissing(r, spy, 'trusted_space');
+});
+// Order row: green on 9417eea too (new_space is a SPACES name the old preflight already refused) -- it pins S-A48's order
+// (the 4 SPACES first, then the 4 XSPACES) and kills the "XSPACES checked first" mutant (which names code_space).
+test('b89 A1 order: APO_SPY_HIDE=new_space,code_space names new_space (SPACES are checked before XSPACES; kills: XSPACES first)', () => {
+    const { r, dir, spy } = run(A1_ARGS, { env: { APO_SPY_HIDE: 'new_space,code_space' } });
+    A4B_DIRS.push(dir);
+    preflightMissing(r, spy, 'new_space');
+});
+// Knob row: a spy-fixture self-check (green on any src): an unknown name is refused by the spy, never hides nothing silently.
+test('b89 A1 knob: APO_SPY_HIDE=no_such_space is refused by the spy (exit 3), never ignored', () => {
+    const { r, dir } = run(A1_ARGS, { env: { APO_SPY_HIDE: 'no_such_space' } });
+    A4B_DIRS.push(dir);
+    assert.equal(r.status, 3, why(r));
+    assert.match(String(r.stderr), /APO_SPY_HIDE name "no_such_space" is not in the real heap space listing/);
+});
+// A4b: regression pin (no 9417eea row leaves files either): a refusal leaves nothing behind in its cwd but the spy's own file.
+test('b89 A4b retention: all 7 A1-row cwds (N=7) each list exactly [spy.jsonl]', () => {
+    assert.equal(A4B_DIRS.length, 7, `N = 7 A1 rows recorded a cwd (got ${A4B_DIRS.length})`);
+    for (const d of A4B_DIRS) assert.deepEqual(readdirSync(d).sort(), ['spy.jsonl'], `cwd ${d}`);
+});
+
+// ================= b89 A2 usage scope + dropped-allocation lines (plan-U2 ASSERTIONS A2; TASK 2) =================
+// Oracle = plan-U2 TASK 2 / A2 text. Each token must appear EXACTLY once (#133 f: unique to its claimed line).
+// Red on 9417eea: the old scope line says "summed over the four SPACES" and names none of the tokens below.
+test('b89 A2 -h: no "summed over the four SPACES"; the 4 XSPACES names, read_only, the dropped-allocation example, "reads 0 B/op" and the lane(0) line each appear exactly once; no "Profiler" (kills: old scope line, a token repeated, an S-A42 Profiler line)', () => {
+    const { r, spy } = run(['-h']);
+    assert.equal(r.status, 2, why(r));
+    assert.equal(String(r.stderr), '');
+    assert.equal(spyLines(spy).length, 1);
+    const out = String(r.stdout);
+    assert.doesNotMatch(out, /summed over the four SPACES/, 'the old scope line is gone');
+    // b89 r1: the fold mapping and the elision wording, each a token on ONE usage line (no token spans a wrap; kills M7 fold swap,
+    // overclaim revert)
+    for (const tok of [...XSPACES_NAMES, 'read_only', '(i) => { add(A, B); }', 'reads 0 B/op', "only lane(0)'s return value is checked",
+        'may be elided by V8', 'code_space and trusted_space are counted into old_space', 'trusted_large_object_space into large_object_space']) {
+        assert.equal(out.split(tok).length - 1, 1, `usage names ${JSON.stringify(tok)} exactly once\n${out}`);
+    }
+    assert.equal((out.match(/Profiler/g) ?? []).length, 0, 'no Profiler line in usage (S-A42 stays out)');
+});
 
 // ================= A5 JSON =================
 const KEYS17 = ['arch', 'band', 'benches', 'floor', 'gate', 'isolate', 'n', 'node', 'platform', 'pointer_compression', 'scope', 'signal', 'span', 'sub', 'v8', 'warm', 'windows'];

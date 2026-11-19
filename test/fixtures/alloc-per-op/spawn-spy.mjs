@@ -49,3 +49,26 @@ if (scm === '1' && process.env.ALLOC_PER_OP_CHILD === '1') {
         return a;
     };
 }
+// APO_SPY_HIDE=<name>[,<name>] (b89 H1, plan-U2 TASK 6, S-A48): in EVERY process (parent and re-spawned child) wraps
+// v8.getHeapSpaceStatistics on the default node:v8 export so the listed space names are filtered out of the listing, which makes
+// :preflight (parent) or needEnv (child) see them as missing. Each name must be in the REAL listing at preload, else exit 3
+// (fail closed: a typo or an empty name never hides nothing silently). Runs after the APO_SPY line is written.
+const hide = process.env.APO_SPY_HIDE;
+if (typeof hide === 'string' && hide !== '') {
+    const realH = v8.getHeapSpaceStatistics;
+    if (typeof realH !== 'function') {
+        process.stderr.write('spawn-spy: APO_SPY_HIDE needs v8.getHeapSpaceStatistics\n');
+        process.exit(3);
+    }
+    const names = hide.split(',');
+    const have = realH.call(v8).map((sp) => sp.space_name);
+    for (const n of names) {
+        if (!have.includes(n)) {
+            process.stderr.write('spawn-spy: APO_SPY_HIDE name ' + JSON.stringify(n) + ' is not in the real heap space listing\n');
+            process.exit(3);
+        }
+    }
+    v8.getHeapSpaceStatistics = function () {
+        return realH.call(v8).filter((sp) => !names.includes(sp.space_name));
+    };
+}
