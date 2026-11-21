@@ -1,17 +1,26 @@
 // test/pack.test.mjs -- the publish shape of @zakkster/lite-utils (b76 Phase 6, PLAN-b76-p6.md ASSERTIONS A1-A6; rulings
 // Q-P6-BIN, Q-P6-REPO, Q-P6-PRIVATE, Q-P6-KEYWORDS (a)). Oracle: the plan's lists, not the package.json under test.
-//   A1 `npm pack --dry-run --json` in a private decoy copy lists exactly the 10 shipped paths.
+//   A1 `npm pack --dry-run --json` in a private decoy copy lists exactly the 11 shipped paths (SPEC-alloc-per-op G3
+//      TASK 6: the root alloc-per-op.mjs ships, src/ never does).
 //      Its json: npm <= 11 an array of one, npm 12 an object keyed by the package name (npm/cli PR 9247; Q-B78-PACK).
 //   A2 package.json fields (no "private", bin, repository / homepage / bugs, engines, license, author, keywords) and
 //      `npm pkg fix` leaves it byte-identical.
-//   A3 an offline tarball install gives five node_modules/.bin commands; each `-h` exits 2 with its own first line.
+//   A3 an offline tarball install gives six node_modules/.bin commands; each `-h` exits 2 and its stdout line 1 starts
+//      with its bin target and ` -- ` (e.g. `alloc-per-op.mjs -- `).
 //   A4 README.md, llms.txt, CHANGELOG.md: ASCII except U+00D7 / U+00B5, no tool-call tag substring.
 //   A5 README.md and llms.txt each hold the LEDGER #124 sentence verbatim, exactly once.
-//   A6 no shipped root holds an @include marker or a source / `.` of a lib/ file (a root never sources at run time).
+//   A6 no shipped bash root holds an @include marker or a source / `.` of a lib/ file (a root never sources at run time).
+//   A6b every shipped .mjs root: line 1 `#!/usr/bin/env node`, the A4 byte / tag rules, every literal module specifier
+//      (static import, export-from, literal `import('...')`) starts `node:`, and no `createRequire` token (zero deps).
+//   A7 ci.yml and nightly.yml each hold exactly one `<interp> <target> --self-test` step per WANT_BIN target, named
+//      `<bin> --self-test`, the interpreter set by the extension (.sh bash, .mjs node). Pure regex, no spawn.
 // Must-fail controls: A1 / A2 / A3 run the 861f3d3 package.json (private, no files[], no bin) and must see the old shape
 // (history rows: SKIP locally when the commit is unreachable, FAIL under CI=true, law 9). A2 also plants a "./" bin path
 // that npm pkg fix rewrites. A4 / A5 / A6 run their checker on planted copies (U+2014, a tag, a doubled or missing
-// sentence, an include line, a source line) that must be flagged.
+// sentence, an include line, a source line) that must be flagged. A6b plants 8 defects (1 finding each) plus 2 clean
+// controls; A7 reads the 694800e ci.yml (no alloc-per-op step; a history row as above) and plants a `bash` interpreter
+// for the .mjs, a duplicated step, a renamed step, a removed step, a run line with no name line, a key after run:
+// and a job-level if:.
 // npm runs as `process.execPath <npm-cli.js>`, never through PATH; no npm-cli.js = SKIP locally, FAIL under CI=true.
 // The child env drops every npm_* key and NODE, sets NODE_V8_COVERAGE undefined (a delete is not a strip), strips the git /
 // editor steering keys, and points npm at a private cache, an empty userconfig and a dead registry (offline only).
@@ -37,14 +46,17 @@ const NPM_CAP = 90000;   // TASK 0e: pack 0.16-0.31 s, install 0.16 s wall (evid
 const H_CAP = 30000;     // TASK 0e: each -h 0.18-0.29 s wall
 
 const ROOTS = ['allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh'];
+const MJS_ROOTS = ['alloc-per-op.mjs'];   // G3 TASK 6: the node roots build.sh copies verbatim from src/ (build.test MJS)
 const DOCS = ['README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
-const WANT_FILES = ['CHANGELOG.md', 'LICENSE', 'README.md', 'allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh',
-    'ic-diff.sh', 'inlining-budget-diff.sh', 'llms.txt', 'package.json'];
-const DECOYS = ['stray.sh', '.handoff/x', 'audit/x', 'src/x.sh', 'lib/x.sh', 'test/x.mjs', 'build.sh', 'LEDGER.md', 'ROADMAP.md'];
+const WANT_FILES = ['CHANGELOG.md', 'LICENSE', 'README.md', 'alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh',
+    'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh', 'llms.txt', 'package.json'];
+const DECOYS = ['stray.sh', '.handoff/x', 'audit/x', 'src/x.sh', 'lib/x.sh', 'test/x.mjs', 'build.sh', 'LEDGER.md', 'ROADMAP.md',
+    'src/alloc-per-op.mjs', 'stray.mjs', 'research/alloc-probe/x.mjs'];
 const WANT_BIN = {
-    'allocation-diff': 'allocation-diff.sh', 'bytecode-budget': 'bytecode-budget.sh', 'deopt-diff': 'deopt-diff.sh',
-    'ic-diff': 'ic-diff.sh', 'inlining-budget-diff': 'inlining-budget-diff.sh',
+    'alloc-per-op': 'alloc-per-op.mjs', 'allocation-diff': 'allocation-diff.sh', 'bytecode-budget': 'bytecode-budget.sh',
+    'deopt-diff': 'deopt-diff.sh', 'ic-diff': 'ic-diff.sh', 'inlining-budget-diff': 'inlining-budget-diff.sh',
 };
+const A7_SHA = '694800e';   // the last commit whose ci.yml has no alloc-per-op step (A7 history must-fail)
 const REPO = 'git+https://github.com/PeshoVurtoleta/lite-utils.git';
 const HOME = 'https://github.com/PeshoVurtoleta/lite-utils#readme';
 const BUGS = 'https://github.com/PeshoVurtoleta/lite-utils/issues';
@@ -120,7 +132,7 @@ function oldPkg() {
 // keep .handoff/ and audit/ out)
 function decoyCopy(pkgText) {
     const d = mk('copy');
-    for (const f of [...ROOTS, ...DOCS]) {
+    for (const f of [...ROOTS, ...MJS_ROOTS, ...DOCS]) {
         assert.ok(existsSync(join(ROOT, f)), `live ${f} is missing: it ships`);
         cpSync(join(ROOT, f), join(d, f));
     }
@@ -220,6 +232,53 @@ function rootProblems(name, text) {
     });
     return p;
 }
+// A6b (pure): a shipped .mjs root imports only node: builtins. Literal specifiers only: `from '...'` (static import and
+// export-from), a bare `import '...'`, and the first quoted literal argument of `import(` (whatever follows it);
+// `import(p)` is not literal and is not judged. A matching literal in a comment or string is judged too (fail closed: reword it).
+const MJS_SHEBANG = '#!/usr/bin/env node';
+const SPEC_RES = [
+    ['from', /\bfrom\s*(['"])([^'"\n]*)\1/g],
+    ['import', /\bimport\s*(['"])([^'"\n]*)\1/g],
+    ['import()', /\bimport\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*|\/\/[^\n]*\n\s*)*(['"`])([^'"`\n]*)\1/g],
+];
+const lineAt = (s, i) => s.slice(0, i).split('\n').length;
+function mjsProblems(name, buf) {
+    const p = [];
+    const s = buf.toString('utf8');
+    const l1 = s.split('\n')[0];
+    if (l1 !== MJS_SHEBANG) p.push(`${name}:1 line 1 is not ${MJS_SHEBANG}: ${l1.slice(0, 80)}`);
+    p.push(...docProblems(name, buf));
+    for (const [kind, re] of SPEC_RES) {
+        for (const m of s.matchAll(re)) if (!m[2].startsWith('node:')) p.push(`${name}:${lineAt(s, m.index)} ${kind} specifier ${JSON.stringify(m[2])} is not node:`);
+    }
+    for (const m of s.matchAll(/\bcreateRequire\b/g)) p.push(`${name}:${lineAt(s, m.index)} createRequire token`);
+    return p;
+}
+// A7 (pure regex, no spawn): every `run: <interp> <target> --self-test` line (exactly that, so the --fixtures steps are
+// not self-test steps) with the `- name:` line right above it.
+const STEP_RE = /^( *)- name: ([^\n]*)\n\1 {2}run: (\S+) (\S+) --self-test[ \t]*$/gm;
+const RUN_RE = /^ +run: (\S+) (\S+) --self-test[ \t]*$/gm;
+function selfTestSteps(yaml) {
+    return [...yaml.matchAll(STEP_RE)].map((m) => ({ name: m[2], interp: m[3], target: m[4], line: lineAt(yaml, m.index) + 1 }));
+}
+function selfTestProblems(file, yaml) {
+    const p = [];
+    const steps = selfTestSteps(yaml);
+    const runs = [...yaml.matchAll(RUN_RE)].length;
+    if (runs !== steps.length) p.push(`${file}: ${runs} self-test run lines, ${steps.length} with a "- name:" line right above`);
+    for (const m of yaml.matchAll(/^( *)run: \S+ \S+ --self-test[ \t]*\n(?:[ \t]*(?:#[^\n]*)?\n)*\1(?!run:|#)\S/gm)) p.push(`${file}:${lineAt(yaml, m.index)} a self-test step has a key after run:`);
+    for (const m of yaml.matchAll(/^ {4}(?:if|continue-on-error):/gm)) p.push(`${file}:${lineAt(yaml, m.index)} a job-level ${m[0].trim()}`);
+    for (const [bin, target] of Object.entries(WANT_BIN)) {
+        const mine = steps.filter((s) => s.target === target);
+        if (mine.length !== 1) { p.push(`${file}: ${target}: ${mine.length} self-test steps, want 1`); continue; }
+        const want = target.endsWith('.mjs') ? 'node' : target.endsWith('.sh') ? 'bash' : '?';
+        if (mine[0].interp !== want) p.push(`${file}:${mine[0].line} ${target}: interpreter ${mine[0].interp}, want ${want}`);
+        if (mine[0].name !== `${bin} --self-test`) p.push(`${file}:${mine[0].line} ${target}: step name ${JSON.stringify(mine[0].name)}, want "${bin} --self-test"`);
+    }
+    const known = new Set(Object.values(WANT_BIN));
+    for (const s of steps) if (!known.has(s.target)) p.push(`${file}:${s.line} self-test step for ${s.target}, not a WANT_BIN target`);
+    return p;
+}
 const LIVE_PKG = () => readFileSync(join(ROOT, 'package.json'), 'utf8');
 
 // ---- A1 ----
@@ -253,7 +312,7 @@ for (const [label, json, re] of [
         assert.throws(() => packEntry(json(), PN, 'canned'), re);
     });
 }
-test('A1 npm pack --dry-run --json lists exactly the 10 shipped paths; no decoy, src/, lib/, test/, build.sh, LEDGER, ROADMAP, audit/, .handoff/', { skip: NPMSKIP }, () => {
+test('A1 npm pack --dry-run --json lists exactly the 11 shipped paths; no decoy, src/, lib/, test/, research/, build.sh, LEDGER, ROADMAP, audit/, .handoff/', { skip: NPMSKIP }, () => {
     const files = dryRun(decoyCopy(LIVE_PKG()), 'A1 pack --dry-run');
     assert.deepEqual(files, WANT_FILES);
     for (const f of DECOYS) assert.ok(!files.includes(f), `decoy ${f} packed`);
@@ -296,14 +355,14 @@ test(`A2 RED (history): the ${OLD_SHA} package.json is flagged (private true, no
 });
 
 // ---- A3 ----
-test('A3 offline tarball install: node_modules/.bin/<name> -h exits 2 for all 5, stdout line 1 starts "<name>.sh -- "', { skip: NPMSKIP }, () => {
+test('A3 offline tarball install: node_modules/.bin/<name> -h exits 2 for all 6, stdout line 1 starts "<bin target> -- "', { skip: NPMSKIP }, () => {
     const bin = installTgz(decoyCopy(LIVE_PKG()), 'A3');
     assert.deepEqual(readdirSync(bin).sort(), Object.keys(WANT_BIN).sort());
     const env = gitEnv();
     for (const name of Object.keys(WANT_BIN)) {
         const r = capSync(join(bin, name), ['-h'], { cwd: dirname(dirname(bin)), encoding: 'utf8', env }, H_CAP, `.bin/${name} -h`);
         assert.equal(r.status, 2, `${name} -h exit ${r.status} signal ${r.signal}\n${r.stderr}`);
-        assert.ok(r.stdout.split('\n')[0].startsWith(`${name}.sh -- `), `${name} -h line 1: ${r.stdout.split('\n')[0]}`);
+        assert.ok(r.stdout.split('\n')[0].startsWith(`${WANT_BIN[name]} -- `), `${name} -h line 1: ${r.stdout.split('\n')[0]}`);
     }
 });
 test(`A3 RED (history): the ${OLD_SHA} package.json installs no .bin entry`, { skip: NPMSKIP || OLDSKIP }, () => {
@@ -366,4 +425,72 @@ test('A6 controls: a root copy with a planted include line, or a planted source 
         assert.equal(p.length, 1, `plant ${plant}: ${p.join('\n')}`);
         assert.ok(p[0].startsWith('bytecode-budget.sh:3 '), p[0]);
     }
+});
+
+// ---- A6b ----
+test('A6b every shipped .mjs root: node shebang, ASCII / no tag, only node: specifiers, no createRequire', { skip }, () => {
+    const p = [];
+    for (const f of MJS_ROOTS) {
+        assert.ok(existsSync(join(ROOT, f)), `live ${f} is missing: it ships (run build.sh)`);
+        p.push(...mjsProblems(f, readFileSync(join(ROOT, f))));
+    }
+    assert.deepEqual(p, []);
+});
+test('A6b controls: 8 plants give exactly 1 finding each; import \'node:fs\' and import(p) give 0', { skip }, () => {
+    const lines = readFileSync(join(ROOT, MJS_ROOTS[0]), 'utf8').split('\n');
+    const plantAt3 = (l) => Buffer.from([...lines.slice(0, 2), l, ...lines.slice(2)].join('\n'), 'utf8');
+    const cases = [
+        ['shebang', Buffer.from(['#!/usr/bin/env bash', ...lines.slice(1)].join('\n'), 'utf8'), /:1 line 1 is not/],
+        ['U+2014', plantAt3('// a \u2014 b'), /byte 0xe2 at offset \d+ \(line 3\)/],
+        ['from lite-leak', plantAt3("import { createLeakTracker } from 'lite-leak';"), /:3 from specifier "lite-leak" is not node:/],
+        ['from nodemailer', plantAt3("import x from 'nodemailer';"), /:3 from specifier "nodemailer" is not node:/],
+        ['export-from', plantAt3("export {a} from './x.mjs';"), /:3 from specifier "\.\/x\.mjs" is not node:/],
+        ['import(fs)', plantAt3("const fsm = await import('fs');"), /:3 import\(\) specifier "fs" is not node:/],
+        ['import() 2-arg', plantAt3("const pkg = await import('./package.json', { with: { type: 'json' } });"), /:3 import\(\) specifier "\.\/package\.json" is not node:/],
+        ['createRequire', plantAt3('const req = createRequire(import.meta.url);'), /:3 createRequire token/],
+    ];
+    for (const [label, buf, re] of cases) {
+        const p = mjsProblems(MJS_ROOTS[0], buf);
+        assert.equal(p.length, 1, `plant ${label}: ${p.join('\n')}`);
+        assert.match(p[0], re, `plant ${label}`);
+    }
+    assert.deepEqual(mjsProblems('x.mjs', plantAt3("import 'node:fs';")), []);
+    assert.deepEqual(mjsProblems('x.mjs', plantAt3('const m = await import(p);')), []);
+});
+
+// ---- A7 ----
+const WF = ['.github/workflows/ci.yml', '.github/workflows/nightly.yml'];
+test('A7 ci.yml and nightly.yml: exactly one self-test step per WANT_BIN target (6), named "<bin> --self-test", interpreter by extension', () => {
+    for (const f of WF) {
+        const y = readFileSync(join(ROOT, f), 'utf8');
+        assert.deepEqual(selfTestProblems(f, y), []);
+        assert.equal(selfTestSteps(y).length, Object.keys(WANT_BIN).length, `${f}: self-test step count`);
+    }
+});
+test('A7 controls: a planted `bash alloc-per-op.mjs`, a duplicated step, a renamed step, a removed step, a step with no name line, a key after run: and a job-level if: are each flagged once', () => {
+    const y = readFileSync(join(ROOT, WF[0]), 'utf8');
+    const STEP = '      - name: alloc-per-op --self-test\n        run: node alloc-per-op.mjs --self-test\n';
+    assert.equal(y.split(STEP).length - 1, 1, 'live ci.yml: the alloc-per-op step text (control anchor)');
+    const cases = [
+        ['bash interpreter', y.replace(STEP, STEP.replace('run: node ', 'run: bash ')), /alloc-per-op\.mjs: interpreter bash, want node/],
+        ['duplicated step', y.replace(STEP, STEP + STEP), /alloc-per-op\.mjs: 2 self-test steps, want 1/],
+        ['renamed step', y.replace(STEP, STEP.replace('name: alloc-per-op ', 'name: alloc ')), /step name "alloc --self-test", want "alloc-per-op --self-test"/],
+        ['removed step', y.replace(STEP, ''), /alloc-per-op\.mjs: 0 self-test steps, want 1/],
+        ['no name line', y.replace(STEP, STEP + '        run: node alloc-per-op.mjs --self-test\n'), /7 self-test run lines, 6 with a "- name:" line right above/],
+        ['if: false after run', y.replace(STEP, STEP + '        if: false\n'), /:\d+ a self-test step has a key after run:/],
+        ['job-level if', y.replace('    runs-on: ${{ matrix.os }}\n', '    runs-on: ${{ matrix.os }}\n    if: false\n'), /:\d+ a job-level if:/],
+        ['comment then if: false after run', y.replace(STEP, STEP + '        # off for now\n        if: false\n'), /:\d+ a self-test step has a key after run:/],
+    ];
+    for (const [label, text, re] of cases) {
+        const p = selfTestProblems(WF[0], text);
+        assert.equal(p.length, 1, `${label}: ${p.join('\n')}`);
+        assert.match(p[0], re, label);
+    }
+});
+const haveA7 = capSync('git', ['cat-file', '-e', `${A7_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git cat-file A7').status === 0
+    ? true : `commit ${A7_SHA} not available (shallow clone?)`;
+test(`A7 RED (history): the ${A7_SHA} ci.yml has no alloc-per-op step and is flagged exactly once`, { skip: histSkip(haveA7) }, () => {
+    const g = capSync('git', ['show', `${A7_SHA}:${WF[0]}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git show A7');
+    assert.equal(g.status, 0, `git show ${A7_SHA}:${WF[0]} failed (CI_STRICT: an unreachable pin is a failure): ${g.stderr}`);
+    assert.deepEqual(selfTestProblems(WF[0], g.stdout), [`${WF[0]}: alloc-per-op.mjs: 0 self-test steps, want 1`]);
 });

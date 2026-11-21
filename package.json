@@ -1,10 +1,11 @@
 {
   "name": "@zakkster/lite-utils",
   "version": "1.0.0",
-  "description": "Standalone bash V8-diagnostic scripts with fail-closed SAME / DIFF / NO-VERDICT verdicts",
+  "description": "Standalone V8-diagnostic CLIs (five bash scripts, one node tool) with fail-closed verdicts",
   "type": "module",
   "sideEffects": false,
   "bin": {
+    "alloc-per-op": "alloc-per-op.mjs",
     "allocation-diff": "allocation-diff.sh",
     "bytecode-budget": "bytecode-budget.sh",
     "deopt-diff": "deopt-diff.sh",
@@ -12,6 +13,7 @@
     "inlining-budget-diff": "inlining-budget-diff.sh"
   },
   "files": [
+    "alloc-per-op.mjs",
     "allocation-diff.sh",
     "bytecode-budget.sh",
     "deopt-diff.sh",

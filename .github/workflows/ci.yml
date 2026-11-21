@@ -1,10 +1,11 @@
 # ci.yml -- lite-utils per-push / per-PR gate (.handoff/PLAN-ci.md, burst 35; rulings Q-CI-1 / Q-CI-3).
-# DETERMINISTIC gates only (ROADMAP "Statistical host: none, REPORTED only"): npm test, every root tool's
-# --self-test, and the --fixtures self-tests of bytecode-budget and deopt-diff. No quiet lock, no timed gate.
+# DETERMINISTIC gates only (ROADMAP "Statistical host: none, REPORTED only"): npm test, the --self-test of every
+# root tool (five bash + one node tool), and the --fixtures self-tests of bytecode-budget and deopt-diff. No quiet
+# lock, no timed gate (the alloc-per-op --self-test step is untimed: it gates its verdict rows, not a timing).
 # Matrix: node 22 / 24 / 26 x ubuntu-latest (bash 5, case-sensitive FS; uutils coreutils and a NUL-clean awk as
 # of 2026-11) and macos-latest (/bin/bash 3.2, case-insensitive APFS, BSD userland), plus one node 26.8.2 leg per
-# OS: 8 legs. No Windows: the tools are bash only. The provenance step prints the awk / tr / mktemp / env flavour and
-# whether env EXECs the program (the driver runs' `$!`, b72 CI-HANG).
+# OS: 8 legs. No Windows: five of the six tools are bash. The provenance step prints the awk / tr / mktemp / env
+# flavour and whether env EXECs the program (the driver runs' `$!`, b72 CI-HANG).
 # fetch-depth 0: the parity / teeth rows read `git show <commit>:<file>`. The pins live in the test files only:
 # GitHub Actions sets CI=true, and under CI=true every history row (the pinned-commit rows of test/bytecode-budget*.test.mjs,
 # the deopt-diff-boundary A4 git row, the 221ff2ec base rows of test/deopt-diff-stage*.test.mjs, the spawn-cap S5 teeth
@@ -94,6 +95,8 @@ jobs:
         run: bash ic-diff.sh --self-test
       - name: inlining-budget-diff --self-test
         run: bash inlining-budget-diff.sh --self-test
+      - name: alloc-per-op --self-test
+        run: node alloc-per-op.mjs --self-test
       - name: bytecode-budget --self-test --fixtures (node 26.8.2 captures)
         run: bash bytecode-budget.sh --self-test --fixtures test/fixtures/bytecode-budget/node-26.8.2
       - name: deopt-diff --self-test --fixtures (node 26.8.2 traces)
