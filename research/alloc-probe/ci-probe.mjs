@@ -2,14 +2,17 @@
 // dispatch-only alloc-probe workflow. Research only, not shipped (not in package.json files[]).
 //   node ci-probe.mjs --os <ubuntu-latest|macos-latest|local> --node <22|24|26|26.8.2|M|M.m.p> --out /abs/leg.json
 //   (cwd = a private mktemp dir outside the repo; the children run there: V8 flag runs leave files in cwd)
-// Spawns ./band.mjs (r6-band.mjs verbatim) with process.execPath (resolved once, law 5), P 2, interleaved by round:
-//   T0b band4 cells {1e6, 1e7} x {1e3, 1e4}, K 4, WARM 2e5, --expose-gc                     x ROUNDS (3)
+// Spawns ./band.mjs (a4-band: r6-band.mjs measured through src bracketS2 / makeDriver, b89 U1) with process.execPath
+// (resolved once, law 5), P 2, interleaved by round:
+//   T0b band4 cells {1e6, 1e7} x {1e3, 1e4}, K 4, WARM 2e5, --expose-gc (+ A4 lanes lateTier, late3, box8)  x ROUNDS (3)
+//   A4  ctl cell (src SELF_TEST_LANES old / nlo): ctl 1e5 1e4 K 5 WARM 2e5, --expose-gc        x ROUNDS (3)
 //   T0d fence states fresh (1e6 1e4 4 2e5) / state-1e8 (1e8 1e4 4 2e5) / state-large (200 1 4 20), --expose-gc  x 3
 //   T0c lb cell (S-A17): lb 1e6 1e4 K 6 WARM 5e6, FLAGS_A = --expose-gc --no-concurrent-recompilation,
 //       env FORCE_RETRY 0                                                                    x LB_ROUNDS (20)
 //       + 1 run at FORCE_RETRY 7 (the A3 / S-A20 must-fail control ci-report.mjs needs for the lb verdict)
-// Writes ONE JSON (schema 1): { probe, schema, leg, provenance (incl. busyNodeStart / End = other node processes as
-// { pid, pcpu }), band { sha256 }, plan, wallMs, jobs[] }; each job
+// Writes ONE JSON (schema 2, b89 U1): { probe, schema, leg, provenance (incl. busyNodeStart / End = other node processes
+// as { pid, pcpu }), band { file, sha256 }, src { file, sha256 } (the src/alloc-per-op.mjs band.mjs imports), census
+// (every space_name of v8.getHeapSpaceStatistics() in this node), plan, wallMs, jobs[] }; each job
 // carries rc / signal / timedOut / ms / stderr head and `record` = the child's parsed JSON line (null when it did not
 // parse: null is not zero). Law 3: every argument and the cwd / out / band.mjs / node checks are refused exit 2
 // before the first spawn. Children get a minimal env (FORCE_RETRY for lb only; no NODE_OPTIONS). A child over
@@ -19,6 +22,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, loadavg, platform, release, type, arch, totalmem } from 'node:os';
+import v8 from 'node:v8';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -64,6 +68,12 @@ if (inside(OUTDIR, ROOT)) die('--out is inside the repo: ' + OUT);
 const BAND = join(HERE, 'band.mjs');
 if (!existsSync(BAND) || !statSync(BAND).isFile()) die('missing ' + BAND);
 const BAND_SHA256 = createHash('sha256').update(readFileSync(BAND)).digest('hex');
+// src/alloc-per-op.mjs: the bracket / driver / gateVerdict band.mjs imports (its own relative path, from HERE)
+const SRC = resolve(HERE, '..', '..', 'src', 'alloc-per-op.mjs');
+if (!existsSync(SRC) || !statSync(SRC).isFile()) die('missing ' + SRC);
+const SRC_SHA256 = createHash('sha256').update(readFileSync(SRC)).digest('hex');
+if (typeof v8.getHeapSpaceStatistics !== 'function') die('v8.getHeapSpaceStatistics is missing (no census)');
+const CENSUS = v8.getHeapSpaceStatistics().map((sp) => sp.space_name);
 const EXEC = realpathSync(process.execPath);
 if (!statSync(EXEC).isFile()) die('process.execPath is not a file: ' + EXEC);
 
@@ -74,6 +84,7 @@ for (let k = 0; k < ROUNDS; k++) {
     for (const [n, s] of [[1e6, 1e3], [1e6, 1e4], [1e7, 1e3], [1e7, 1e4]]) jobs.push({ group: 'band', mode: 'band4', n, sub: s, k: 4, warm: 2e5, flags: GX, forceRetry: 0, round: k });
     for (const [mode, n, s, K, warm] of [['fresh', 1e6, 1e4, 4, 2e5], ['state-1e8', 1e8, 1e4, 4, 2e5], ['state-large', 200, 1, 4, 20]])
         jobs.push({ group: 'fence', mode, n, sub: s, k: K, warm, flags: GX, forceRetry: 0, round: k });
+    jobs.push({ group: 'ctl', mode: 'ctl', n: 1e5, sub: 1e4, k: 5, warm: 2e5, flags: GX, forceRetry: 0, round: k });
 }
 for (let k = 0; k < LB_ROUNDS; k++) jobs.push({ group: 'lb', mode: 'lb', n: 1e6, sub: 1e4, k: 6, warm: 5e6, flags: FLAGS_A, forceRetry: 0, round: k });
 jobs.push({ group: 'lb', mode: 'lb', n: 1e6, sub: 1e4, k: 6, warm: 5e6, flags: FLAGS_A, forceRetry: 7, round: 0 });
@@ -132,8 +143,8 @@ async function worker() { while (next < jobs.length) { const i = next++; await o
 await Promise.all(Array.from({ length: P }, worker));
 provenance.loadavgEnd = loadavg();
 provenance.busyNodeEnd = busyNodes();
-const leg = { probe: 'ci-probe', schema: 1, leg: { os: LEG_OS, node: LEG_NODE }, provenance, band: { file: 'band.mjs', sha256: BAND_SHA256 },
-    plan: { p: P, rounds: ROUNDS, lbRounds: LB_ROUNDS, timeoutMs: TIMEOUT_MS, jobs: jobs.length }, wallMs: Date.now() - t0, jobs };
+const leg = { probe: 'ci-probe', schema: 2, leg: { os: LEG_OS, node: LEG_NODE }, provenance, band: { file: 'band.mjs', sha256: BAND_SHA256 },
+    src: { file: 'src/alloc-per-op.mjs', sha256: SRC_SHA256 }, census: CENSUS, plan: { p: P, rounds: ROUNDS, lbRounds: LB_ROUNDS, timeoutMs: TIMEOUT_MS, jobs: jobs.length }, wallMs: Date.now() - t0, jobs };
 writeFileSync(OUT, JSON.stringify(leg) + '\n', { flag: 'wx' });
 console.log(`ci-probe ${LEG_OS} node ${LEG_NODE} (${process.version}): jobs ${jobs.length} bad ${bad} wall ${leg.wallMs} ms -> ${OUT}`);
 process.exitCode = bad ? 1 : 0;
