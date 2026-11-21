@@ -1,11 +1,13 @@
 # @zakkster/lite-utils
 
-Five standalone bash tools that compare two JavaScript builds through V8's own
+Six standalone CLIs: five bash tools that compare two JavaScript builds through V8's own
 traces -- bytecode length, deopts, inline caches, inlining decisions, young-GC
 event counts -- and end every run with a fail-closed verdict line
 (SAME / DIFF / NO-VERDICT, or WITHIN / OVER, ZERO / NONZERO, REPORTED). Each
-tool is one self-contained bash script that drives `node` and reads its trace
-output. This is not a JS library: there is no import, no JS API.
+bash tool is one self-contained script that drives `node` and reads its trace
+output. The sixth, `alloc-per-op`, is a node script that measures steady-state
+on-heap bytes per op of a synchronous lane (PASS / FAIL, SAME / DIFF, NO VERDICT).
+This is not a JS library: no JS API is supported (alloc-per-op.mjs's exports serve its tests and carry no contract).
 
 ## Status
 
@@ -15,21 +17,23 @@ Install (instructions; pick one):
 
 - `npm i -D @zakkster/lite-utils`
 - `npm i -D git+https://github.com/PeshoVurtoleta/lite-utils.git`
-- copy ONE root script into your project and run it with `bash <script>`; a
-  root never sources another file at run time.
+- copy ONE root script into your project and run it with `bash <script>` (alloc-per-op: `node alloc-per-op.mjs`); a
+  root never sources or imports another package file at run time.
 
 After an npm install the commands are in `./node_modules/.bin/`:
-`allocation-diff`, `bytecode-budget`, `deopt-diff`, `ic-diff`,
+`allocation-diff`, `alloc-per-op`, `bytecode-budget`, `deopt-diff`, `ic-diff`,
 `inlining-budget-diff`.
 
 ## Rules for a caller (read first)
 
-- ALWAYS require the `VERDICT <v>` line on stdout, not only the exit code.
+- ALWAYS require the `VERDICT <v>` line on stdout, not only the exit code (the five bash tools;
+  `alloc-per-op` prints no `VERDICT` line: use its exit code, 0 / 1 / 2, or `--json`).
 - Exit 2 = NO-VERDICT: the tool could not decide and failed closed. It is not
   "no difference". Never treat 2 as success.
 - Exit 0 and 1 are verdicts; the verdict word names which (see each tool).
-- `--self-test` exit 1 means a `FAIL <label>` line was printed. It is NOT DIFF.
-- `-h` / `--help` prints the header and exits 2 (all five). Do not use it as a
+- `--self-test` exit 1 means a `FAIL <label>` line was printed (alloc-per-op: a row printed `MISS`; its exit 2 = a
+  selfCheck miss). It is NOT DIFF.
+- `-h` / `--help` prints the header and exits 2 (all six). Do not use it as a
   liveness probe that expects 0.
 - An unexpected failure inside a tool exits 2 NO-VERDICT, never 1.
 - A refused argument exits 2 before any node is spawned, with these named
@@ -44,8 +48,9 @@ Shared options (each tool's own `-h` is the authority for its subset):
 path), `--v8-flags STR` (runtime allowlist of V8 flags; log / trace / print /
 prof flags and node options are refused), `--out DIR` (keep the report and raw
 runs), `--runs N` (runs per side; run 1 vs the later runs is the null control),
-`--self-test`, `-h`. The tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
-NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS from every spawn.
+`--self-test`, `-h`. The five bash tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
+NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS from every spawn (alloc-per-op's one --expose-gc respawn inherits the
+environment).
 
 ### bytecode-budget (bytecode-budget.sh)
 
@@ -150,6 +155,40 @@ change? Counts of GC events, never bytes.
 - Tier: the script logic is DETERMINISTIC (`--self-test`); a verdict on a user
   driver is STATISTICAL and REPORTED only.
 
+### alloc-per-op (alloc-per-op.mjs)
+
+Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, steady state, in the main isolate?
+
+    alloc-per-op [opts] [--max B] BENCH           # table, or gate: PASS / FAIL / NO VERDICT
+    alloc-per-op [opts] --tol B BENCH_A BENCH_B   # A/B: SAME / DIFF / NO VERDICT
+    alloc-per-op --self-test [--json]
+
+- BENCH: an ES module exporting `lanes`, a plain object of synchronous functions `lane(i)`; an optional exported
+  `setup()` is awaited once. Example: `const sink = [{}, {}]; export const lanes = { 'name': (i) => { sink[i & 1] = i + 0.5; } };`
+- Options: `--n` 100000..100000000 (default 1000000), `--windows` 3..50 (default 5; PEAK = max of windows 1..K-1),
+  `--warm` (default 200000), `--sub` 1000..10000 (default 10000; N % S == 0, N / S <= 10000), `--lane NAME`
+  (repeatable), `--max B`, `--tol B` (required in A/B), `--json`. Option checks run before any spawn.
+- Exit 0 PASS / SAME / table; 1 FAIL / DIFF / ONLY-A / ONLY-B; 2 NO VERDICT or refused. `--self-test`: 0 all rows ok,
+  1 a row missed, 2 the selfCheck missed. Output has a `gate --max ...` / `A/B --tol ...` line, no `VERDICT` line.
+- Refusal band: lo = 32 / S, hi = 524288 / N + 0.001 x peak. A `--max` below lo, or a `--tol` below
+  lo + 524288 / N, is refused before any spawn. The floor (empty lane) is printed and never subtracted. A rejected
+  sub-window is retried (at most 3): a retry calls the lane again. The same file twice as A and B is refused.
+- Scope: on-heap bytes, main isolate. Reads new_space, old_space, large_object_space, new_large_object_space;
+  code_space and trusted_space count into old_space, code_large_object_space and trusted_large_object_space into
+  large_object_space; read_only_space and the shared spaces are not read. Off-heap ArrayBuffer memory and Worker
+  threads are not counted (no Worker detector); lite-perf-gate's arrayBuffers signal covers external memory.
+- The lane must STORE what it allocates: a dropped allocation (returned, or discarded in the body, e.g.
+  `(i) => { add(A, B); }`) may be elided by V8 and then reads 0 B/op. A lane that returns a value is refused, but only
+  lane(0)'s return value is checked, so a value or a thenable from a later call is not seen. An allocation that does not
+  recur inside the span ((K-1) x N ops) is seen only if an occurrence falls inside it, by every rule. The default `--warm` covers constructor, class-field and literal shapes. `--sub` below
+  1000 under-reads on node v22. A bench that replaces v8.GCProfiler gets a fence miss, NO VERDICT, exit 2.
+  `--no-concurrent-recompilation` lowers noise; it is not forced. A threshold holds only for the build it was measured
+  on (pointer compression, arch, node / v8).
+- Tier: `--self-test` rows DETERMINISTIC (untimed, in CI); a verdict on a user lane STATISTICAL. Numeric constants
+  FROZEN by S-A36 (CI run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local
+  PRELIMINARY data only); read set and driver re-frozen by S-A51 (CI run 44945969102); both REPORTED tier (hosted CI,
+  one run each). Needs node only (no bash, no awk).
+
 ## Exit codes and the VERDICT line
 
 | tool                  | 0                  | 1                 | 2          |
@@ -159,25 +198,28 @@ change? Counts of GC events, never bytes.
 | ic-diff               | SAME               | DIFF              | NO-VERDICT |
 | inlining-budget-diff  | SAME               | DIFF              | NO-VERDICT |
 | allocation-diff       | SAME / ZERO        | DIFF / NONZERO    | NO-VERDICT |
+| alloc-per-op          | PASS / SAME / table | FAIL / DIFF / ONLY-A / ONLY-B | NO VERDICT / refused |
 
-Every run that reaches a verdict ends in a `VERDICT <v>` line on stdout. A refusal prints
-`<tool>: <why>` and `VERDICT NO-VERDICT` on stderr and exits 2. A SIGINT /
-SIGTERM / SIGHUP during a run ends NO-VERDICT, exit 2. `-h` exits 2.
-`--self-test` exits 0 (all checks ok) or 1 (a FAIL line); that 1 is not DIFF.
+For the five bash tools: every run that reaches a verdict ends in a `VERDICT <v>` line on stdout; a refusal prints
+`<tool>: <why>` and `VERDICT NO-VERDICT` on stderr and exits 2; a SIGINT /
+SIGTERM / SIGHUP during a run ends NO-VERDICT, exit 2; `--self-test` exits 0 (all checks ok) or 1 (a FAIL line), and
+that 1 is not DIFF. alloc-per-op: a refusal prints `alloc-per-op: <why>` only; its exits are in its row above and its
+section. `-h` exits 2 (all six).
 
 ## Tiers
 
 - DETERMINISTIC: same inputs give the same verdict. bytecode-budget (one node
   binary), each tool's `--self-test`, the deopt-diff natives pair.
 - STATISTICAL: the verdict on a user driver follows warm-up, GC and tier-up
-  timing (deopt-diff, ic-diff, inlining-budget-diff, allocation-diff). Run
-  them on a quiet host. These tools report; they do not gate a build.
+  timing (deopt-diff, ic-diff, inlining-budget-diff, allocation-diff, alloc-per-op). Run
+  them on a quiet host. Their verdict on a user driver is a report, not a build gate (alloc-per-op --max and
+  allocation-diff --zero still exit 1 on FAIL / NONZERO).
 - REPORTED: printed measurements that gate nothing (inlining budget report,
   deopt-diff tier section, allocation-diff counts line).
 
 ## Requirements
 
-- bash >= 3.2.
+- bash >= 3.2 (the five bash tools; alloc-per-op needs only node).
 - A POSIX awk (BSD awk and the ubuntu-latest awk are what the CI matrix uses;
   other awks are not claimed).
 - node >= 22, with the ic-diff and inlining-budget-diff caveats above.
@@ -202,6 +244,10 @@ Each bullet names its LEDGER id.
   `--out`.
 - #123: inlining-budget-diff file mode decides its "byte-identical, null control" NOTE on Signal.js alone; a differing
   Watch.js can print that NOTE and then DIFF. The verdict is right, the NOTE is false.
+- alloc-per-op: the lane must STORE what it allocates (a dropped allocation may be elided by V8 and then reads 0 B/op);
+  only lane(0)'s return value is checked (a value or a thenable from a later call is not seen); off-heap ArrayBuffer
+  memory and Worker threads are not counted; an allocation that does not recur inside the span ((K-1) x N ops) is seen
+  only if an occurrence falls inside it, by every rule.
 - Driver output is trusted (#72 B1b, #92 b): a driver can write lines that look like trace or marker output.
 - a hard link to `--before` elsewhere in the repository (outside `--before`'s directory and below), or under a case-only
   sibling name on a case-sensitive file system, can stay undetected (LEDGER #71, #88, #89)
@@ -209,14 +255,15 @@ Each bullet names its LEDGER id.
 
 ## Composability
 
-One CI job can run all five. Gate only on bytecode-budget `--max` (exit 1 or 2
-fails the job). Run the other four so a nonzero exit does not abort the job,
-keep `--out` as an artifact, and fail the job if the `VERDICT` line is missing:
+One CI job can run all six (alloc-per-op: `node alloc-per-op.mjs --self-test`, untimed, in CI; installed:
+`./node_modules/.bin/alloc-per-op --max B bench.mjs`). Gate only on bytecode-budget `--max` (exit 1 or 2 fails the job).
+Run the other four bash tools so a nonzero exit does not abort the job, keep `--out` as an artifact, and fail the job if
+the `VERDICT` line is missing:
 
     rc=0; ./node_modules/.bin/deopt-diff --fn add --out out/dd before.js after.js > dd.txt || rc=$?
     grep -q '^VERDICT ' dd.txt || exit 1
 
-The statistical tools report; they do not gate. Call installed tools as
+A statistical verdict is a report, not a build gate. Call installed tools as
 `./node_modules/.bin/<name>`.
 
 ## License

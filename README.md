@@ -1,7 +1,8 @@
 # @zakkster/lite-utils
 
-> Five standalone bash tools that compare two JS builds through V8's own traces -- bytecode length, deopts, inline
-> caches, inlining decisions, young-GC counts -- with a fail-closed SAME / DIFF / NO-VERDICT verdict.
+> Six standalone CLIs for V8 diagnostics: five bash tools that compare two JS builds through V8's own traces --
+> bytecode length, deopts, inline caches, inlining decisions, young-GC counts -- and one node tool that measures
+> steady-state on-heap bytes per op. Every verdict fails closed.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-utils.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-utils)
 [![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
@@ -16,9 +17,10 @@ You changed a hot function. Did its bytecode grow? Did it start to deopt? Did an
 TurboFan stop inlining a callee? Did it start to trigger young-generation GCs? Each of these is a question V8 will
 answer in its own trace output, but reading two traces by eye does not scale and a flaky comparison is worse than none.
 
-`lite-utils` is five self-contained bash scripts, one per question. Each one runs your driver file on ONE node binary,
-under V8 trace flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a
-`VERDICT` line and an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
+`lite-utils` is six self-contained command-line tools, one per question: five bash scripts and one node script
+(`alloc-per-op`, described in its own section). Each bash tool runs your driver file on ONE node binary, under V8 trace
+flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a `VERDICT` line and
+an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
 
 Install (version 1.0.0), three ways:
 
@@ -33,8 +35,8 @@ npm i -D git+https://github.com/PeshoVurtoleta/lite-utils.git
 cp node_modules/@zakkster/lite-utils/bytecode-budget.sh tools/ && bash tools/bytecode-budget.sh -h
 ```
 
-After an npm install the five commands are `allocation-diff`, `bytecode-budget`, `deopt-diff`, `ic-diff` and
-`inlining-budget-diff`, run as `./node_modules/.bin/<name>` or `npx <name>`.
+After an npm install the six commands are `allocation-diff`, `alloc-per-op`, `bytecode-budget`, `deopt-diff`, `ic-diff`
+and `inlining-budget-diff`, run as `./node_modules/.bin/<name>` or `npx <name>`.
 
 Quick-start: report the bytecode length of one function. Save this as `driver.mjs`:
 
@@ -77,6 +79,7 @@ Report mode ends `VERDICT REPORTED` (exit 0) when it could read the length, `VER
 - [ic-diff](#ic-diff)
 - [inlining-budget-diff](#inlining-budget-diff)
 - [allocation-diff](#allocation-diff)
+- [alloc-per-op](#alloc-per-op)
 - [CLI reference](#cli-reference)
 - [Composability](#composability)
 - [Design notes](#design-notes)
@@ -99,7 +102,7 @@ only through trace flags whose output is noisy (addresses, ids, timing) and chan
 These tools do the unglamorous part: they run the driver under the right flags on one pinned node binary, normalize the
 trace, compare the two builds as an order-free multiset, and repeat the runs so that any run-to-run change is
 caught by a null control and reported as `NO-VERDICT` instead of a false `DIFF`. They are plain bash plus POSIX
-awk, with no runtime dependency, so a script can be copied into any repository.
+awk (alloc-per-op: plain node), with no runtime dependency, so a script can be copied into any repository.
 
 ---
 
@@ -112,13 +115,15 @@ awk, with no runtime dependency, so a script can be copied into any repository.
 | `ic-diff` | In which state did their inline-cache sites end? | driver | SAME / DIFF / NO-VERDICT | STATISTICAL on a user driver |
 | `inlining-budget-diff` | Which inlining decisions did TurboFan and Maglev make? | driver (ref / file: lite-signal shaped) | SAME / DIFF / NO-VERDICT | STATISTICAL (budget report: REPORTED) |
 | `allocation-diff` | How many young-generation GCs in a marked window? | diff, `--zero` gate | SAME / DIFF; ZERO / NONZERO; NO-VERDICT | script logic DETERMINISTIC; user verdict STATISTICAL |
+| `alloc-per-op` | How many on-heap bytes does one op of this lane allocate, steady state? | table, gate (`--max`), A/B (`--tol`), `--self-test` | PASS / FAIL; SAME / DIFF; NO VERDICT | `--self-test` DETERMINISTIC; a verdict on a user lane STATISTICAL |
 
 The tiers are the suite's verification tiers. DETERMINISTIC: the result does not depend on timing and is gated in
 `npm test`. STATISTICAL: the result follows tier-up and GC timing, so a comparison on your driver is never gated here
 and should be run on a quiet host. REPORTED: a table the tool prints, a measurement and not a law.
 
-Every run that reaches a verdict ends in a `VERDICT <v>` line on stdout. Exit codes: 0 = SAME / WITHIN / REPORTED /
-ZERO, 1 = DIFF / OVER / NONZERO, 2 = NO-VERDICT or a refused argument.
+Every run of the five bash tools that reaches a verdict ends in a `VERDICT <v>` line on stdout. Exit codes: 0 = SAME /
+WITHIN / REPORTED / ZERO, 1 = DIFF / OVER / NONZERO, 2 = NO-VERDICT or a refused argument. `alloc-per-op` has its own
+verdict words and exit codes (its section below).
 
 ---
 
@@ -241,10 +246,55 @@ allocation-diff.sh --self-test
 
 ---
 
+## alloc-per-op
+
+Steady-state ON-HEAP BYTES per op of a synchronous lane, in the main isolate, for one bench file (a table, or a gate)
+or for two (an A/B). It is a node script (`alloc-per-op.mjs`), not bash, and needs no driver markers: the bench file
+exports the lanes and the tool times nothing.
+
+```bash
+alloc-per-op [options] [--max B] BENCH           # table, or a gate: PASS / FAIL / NO VERDICT
+alloc-per-op [options] --tol B BENCH_A BENCH_B   # A/B: SAME / DIFF / NO VERDICT
+alloc-per-op --self-test [--json]                # the engine controls and the self-test lanes
+```
+
+- **Bench file.** An ES module exporting `lanes`, a plain object of synchronous functions `lane(i)`; an optional
+  exported `setup()` is awaited once before the first lane. A lane that returns a value is refused, but only
+  `lane(0)`'s return value is checked.
+- **Options.** `--n` (ops per window, 100000..100000000, default 1000000), `--windows K` (3..50, default 5; PEAK is the
+  max of windows 1..K-1), `--warm W` (warm-up ops, default 200000), `--sub S` (ops per sub-window, 1000..10000,
+  default 10000; `N % S == 0` and `N / S <= 10000`), `--lane NAME` (repeatable), `--max B`, `--tol B` (required in A/B,
+  no default), `--json` (one JSON line, last on stdout). Option checks run before any spawn.
+- **Exit.** 0 `PASS` / `SAME` / a table; 1 `FAIL` / `DIFF` / `ONLY-A` / `ONLY-B`; 2 `NO VERDICT` or a refused
+  argument. `--self-test`: 0 when every row is ok, 1 when a row misses, 2 when the selfCheck misses. A statistic inside
+  the refusal band is `NO VERDICT`, never a guess. It prints a `gate --max B (peak B/op): <verdict>` or
+  `A/B --tol B (peak B/op): <verdict>` line, not a `VERDICT <v>` line: take the exit code (or `--json`).
+- **Refusal band.** `lo = 32 / S` and `hi = 524288 / N + 0.001 x peak`. A `--max` below `lo`, or a `--tol` below
+  `lo + 524288 / N`, is refused before any spawn and the refusal names the smallest accepted value. The floor (the
+  empty-lane reading) is reported and never subtracted. A rejected sub-window is retried (at most 3 re-runs); a retried
+  sub-window calls the lane again, so a lane with side effects sees extra calls.
+- **A/B.** The same file twice is refused; an A/A check needs a copied bench.
+- **Scope.** On-heap bytes of the main isolate only. The tool reads the four spaces `new_space`, `old_space`,
+  `large_object_space` and `new_large_object_space`; `code_space` and `trusted_space` are counted into `old_space`, and
+  `code_large_object_space` and `trusted_large_object_space` into `large_object_space`. `read_only_space` and the shared
+  spaces are not read. Off-heap `ArrayBuffer` memory and Worker threads are not counted (there is no Worker detector); for
+  external memory use lite-perf-gate's `arrayBuffers` signal.
+- **Tier.** The `--self-test` verdict rows are DETERMINISTIC (gated in `npm test` and in CI, untimed). A verdict on your
+  lane is STATISTICAL: it follows tier-up and GC timing, so run it on a quiet host; `--no-concurrent-recompilation`
+  lowers the noise and is not forced. The constants (`32`, `524288`, `0.001`, `RETRY_MAX 3`) are FROZEN by S-A36 (CI run
+  43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the
+  read set and the driver are re-frozen by S-A51 (CI run 44945969102, 8/8 legs, ci-report VERDICT PASS); both REPORTED
+  tier (hosted CI, one run each). A threshold holds only for the build it was measured on (pointer compression, arch,
+  node / v8).
+- **Not detected.** An allocation the lane does not STORE (see Known limits), an allocation that does not recur
+  inside the measured span, off-heap memory.
+
+---
+
 ## CLI reference
 
-Flags shared by the tools (each tool's section above shows its own usage lines; `bash <tool>.sh -h` prints the full
-text):
+Flags shared by the five bash tools (each tool's section above shows its own usage lines; `bash <tool>.sh -h` prints the
+full text; `alloc-per-op` has its own flags, in its section above and in `alloc-per-op -h`):
 
 | Flag | Meaning |
 |------|---------|
@@ -255,8 +305,9 @@ text):
 | `--self-test` | canned checks (a fake node or canned text) |
 | `-h`, `--help` | print the header text and exit 2 |
 
-`-h` exits 2 on all five tools. For `allocation-diff`, `bytecode-budget`, `deopt-diff` and `ic-diff`, `--self-test`
+`-h` exits 2 on all six tools. For `allocation-diff`, `bytecode-budget`, `deopt-diff` and `ic-diff`, `--self-test`
 exits 0 when every check is ok and 1 when a check prints a `FAIL` line; that 1 is a failed check and not a `DIFF`.
+`alloc-per-op --self-test` exits 0 when every row is ok, 1 when a row misses and 2 when its selfCheck misses.
 
 Defaults and limits:
 
@@ -268,11 +319,14 @@ Defaults and limits:
 | `ic-diff` | 3 | 2..20 | |
 | `inlining-budget-diff` | 3 | 2..50 | `--tiers turbo,maglev`; `--fn` `$ME`, else `m0`; `--out` `$OUTDIR`, else `$TMPDIR/inl-diff-<timestamp>` |
 
-Every spawn runs with `NODE_OPTIONS`, `NODE_V8_COVERAGE`, `NODE_COMPILE_CACHE` and `NODE_REDIRECT_WARNINGS` stripped.
+`alloc-per-op` has `--windows` (default 5, 3..50), `--n` (default 1000000), `--warm` (default 200000) and `--sub`
+(default 10000) instead of `--runs`; see its section.
+
+Every bash-tool spawn runs with `NODE_OPTIONS`, `NODE_V8_COVERAGE`, `NODE_COMPILE_CACHE` and `NODE_REDIRECT_WARNINGS` stripped.
 
 Requirements:
 
-- bash >= 3.2 (CI exercises macOS `/bin/bash`).
+- bash >= 3.2 for the five bash tools (CI exercises macOS `/bin/bash`); `alloc-per-op` needs only node.
 - A POSIX awk. CI runs the BSD awk of macOS and the awk of `ubuntu-latest`; no other awk is claimed.
 - node >= 22 (`engines.node`), with the caveats above: `ic-diff` ends `NO-VERDICT` on node 22 and 24, and the
   maglev tier of `inlining-budget-diff` is `NO-VERDICT` on node 22.
@@ -283,9 +337,11 @@ Requirements:
 
 ## Composability
 
-One CI job, all five tools. Only `bytecode-budget --max` is a gate: its exit 1 (OVER) or 2 (NO-VERDICT) fails the job.
-The other four are statistical, so they report and do not gate: run them with `rc=0; ... || rc=$?`, keep `--out` as a
-build artifact, and fail the job only when the `VERDICT` line is missing.
+One CI job, all six tools (five bash + one node tool; CI runs `node alloc-per-op.mjs --self-test`, untimed; installed,
+the `--max` run below (a report here) is `./node_modules/.bin/alloc-per-op --max B bench.mjs`). Only
+`bytecode-budget --max` is a gate here: its exit 1 (OVER) or 2 (NO-VERDICT) fails the job. The other four bash tools are
+statistical, so they report and do not gate: run them with `rc=0; ... || rc=$?`, keep `--out` as a build artifact, and
+fail the job only when the `VERDICT` line is missing.
 
 ```bash
 set -eu
@@ -315,13 +371,33 @@ ME=add "$B/inlining-budget-diff" --out artifacts/inlining bench/before.mjs bench
 grep -q '^VERDICT ' artifacts/inlining.txt || { echo "inlining-budget-diff: no VERDICT line"; exit 1; }
 ```
 
-Replace the `--max` value and the node version with values you recorded on that node version.
+`alloc-per-op` takes a bench file instead of a driver. Save this as `bench/alloc.mjs` (the lane STORES what it
+allocates):
+
+```js
+const sink = [{}, {}];
+export const lanes = {
+  'box.frac': (i) => { sink[i & 1] = i + 0.5; },
+};
+```
+
+```bash
+rc=0
+"$B/alloc-per-op" --max 1 bench/alloc.mjs > artifacts/alloc-per-op.txt 2>&1 || rc=$?
+echo "alloc-per-op: exit $rc"   # 0 PASS, 1 FAIL, 2 NO VERDICT or refused (this lane boxes a number per op, so 1)
+```
+
+Replace the `--max` value and the node version with values you recorded on that node version. An `alloc-per-op` threshold
+holds only for the build it was measured on.
 
 <details>
 <summary>Design notes</summary>
 
-- **Bash only, generated.** Each root script is generated by `build.sh` from `src/` and `lib/` fragments and committed;
-  a test fails when a shipped script differs from a fresh build. A root never sources anything at run time, so copying
+- **Generated roots.** Each bash root script is generated by `build.sh` from `src/` and `lib/` fragments and committed;
+  `alloc-per-op.mjs` is copied byte for byte from `src/alloc-per-op.mjs` (no expansion, no substitution; `build.sh`
+  refuses an unlisted `src/*.mjs`, a missing, non-regular or symlinked source, a NUL byte, no final newline, a line 1
+  other than `#!/usr/bin/env node`, or a failing `node --check`, exit 2). A test fails when a shipped file differs from a
+  fresh build. A root never sources or imports a package file at run time (its `import`s are `node:` only), so copying
   one file is a complete install (ROADMAP S-2).
 - **What each tool measures.** Bytecode length (`--print-bytecode`), deopt records (`--trace-deopt`), IC sites
   (`--log-ic`), inlining decisions (V8's TurboFan trace and `--trace-maglev-inlining`), young-GC events
@@ -346,7 +422,7 @@ Replace the `--max` value and the node version with values you recorded on that 
 - **Null control.** Run 1 of each side is compared with runs 2..N of the same side. Any difference is `NO-VERDICT`,
   never `DIFF`: a comparison that does not reproduce itself says nothing.
 - **Counts, not bytes.** `allocation-diff` counts young-GC events; it cannot tell you how many bytes a window
-  allocated.
+  allocated. `alloc-per-op` is the bytes tool, for on-heap bytes per op of a synchronous lane.
 - **The frozen "before".** Ref and file modes refuse a `--before` that is the live, tracked file: comparing a build with
   itself would be a silent `SAME`. Keep the "before" build in a frozen copy or at a git ref.
 - **No timing tool.** Timing is noisy and belongs in a statistical host; these tools compare what V8 decided, not how
@@ -358,19 +434,34 @@ Replace the `--max` value and the node version with values you recorded on that 
 
 ## Testing
 
-`npm test` runs 4057 tests (node:test), 4043 pass / 0 fail / 14 skip in one local run (2026-11-12,
-node v26.8.2, macOS arm64, /bin/bash 3.2.57, host quiet: load1 2.46 at start; a measurement, not a guarantee).
+`npm test` runs 4241 tests (node:test), 4227 pass / 0 fail / 14 skip in one local run (2026-11-22, node v26.8.2,
+macOS arm64, /bin/bash 3.2.57, host load1 1.48 at start; a measurement, not a guarantee).
 
-Scripts: `npm test`, `npm run build` (regenerate the five roots from `src/` and `lib/`).
+Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 
 The CI workflow is configured for a matrix of ubuntu-latest and macos-latest on node 22, 24 and 26, plus node 26.8.2
-on both. Bash only: LiteUtils is exempt from the suite's `test/torture.mjs` law (ROADMAP S-12); its gates are each
+on both. LiteUtils is exempt from the suite's `test/torture.mjs` law (ROADMAP S-12; `alloc-per-op.mjs` included); its gates are each
 tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
 
 ---
 
 ## Known limits
 
+- `alloc-per-op`: the lane must STORE what it allocates. A dropped allocation (returned, or discarded in the lane body,
+  e.g. `(i) => { add(A, B); }`) may be elided by V8 and then reads 0 B/op. A lane that returns a value is refused, but
+  only `lane(0)`'s return value is checked, so a value or a thenable from a later call is not seen.
+- `alloc-per-op` reads the four spaces plus code_space, trusted_space and their large-object spaces (folded into
+  old_space / large_object_space); `read_only_space` and the shared spaces are not read, and off-heap `ArrayBuffer` memory
+  and Worker threads are not counted (no Worker detector; lite-perf-gate's `arrayBuffers` signal covers external memory).
+- `alloc-per-op`: an allocation that does not recur inside the measured span ((K-1) x N ops) is seen only if an
+  occurrence falls inside it, by every rule. The default `--warm` covers constructor, class-field and literal shapes.
+  `--sub` below 1000 under-reads on node v22, hence the floor of 1000. A retried sub-window calls the lane again, so a
+  lane with side effects sees extra calls; the floor is reported and never subtracted.
+- `alloc-per-op`: a bench that replaces `v8.GCProfiler` gets a fence miss, NO VERDICT, exit 2 (code that imports alloc-per-op.mjs's
+  exports (unsupported, no contract) and replaced `v8.GCProfiler` passes `Profiler: v8.GCProfiler`).
+  `--no-concurrent-recompilation` lowers noise and is not forced. The numeric constants are FROZEN by S-A36 (CI run
+  43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the
+  read set and the driver are re-frozen by S-A51 (CI run 44945969102); both REPORTED tier (hosted CI, one run each).
 - an inherited SHELLOPTS=noexec runs nothing and exits 0; callers must require the VERDICT line, not only the exit code
   (class 2; LEDGER #124).
 - The `--v8-flags` allowlist checks a numeric value's FORM only: `--max-inlined-bytecode-size=NaN` passes, node
@@ -394,10 +485,12 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
 
 ## What this is not
 
-- Not a JavaScript API: there is nothing to import. These are command-line scripts.
+- Not a JavaScript API: the supported surface is the six commands; `alloc-per-op.mjs`'s ES exports serve its own tests
+  and carry no API contract. These are command-line scripts (five bash, one node).
 - Not a benchmark or a timing tool: no wall-clock claim, no ops per second.
-- Not a byte counter: `allocation-diff` reports young-GC event counts, never allocated bytes.
-- Not a Windows tool: it needs bash and a POSIX userland.
+- Not a byte counter in `allocation-diff`: it reports young-GC event counts, never allocated bytes. `alloc-per-op` counts
+  on-heap bytes of one synchronous lane in the main isolate, and nothing off-heap.
+- Not a Windows tool: five of the six need bash and a POSIX userland (`alloc-per-op` needs node >= 22 only; CI does not run Windows).
 - Not a security boundary: the driver runs with your privileges.
 
 ---

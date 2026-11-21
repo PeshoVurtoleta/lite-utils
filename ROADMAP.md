@@ -11,7 +11,7 @@ Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
 
-- This repo holds ONLY shell scripts plus their tests. No lite-leak, lite-gc-profiler or lite-perf-gate
+- This repo holds shell scripts plus their tests, and one node CLI (alloc-per-op, 1.1.0 candidate). No lite-leak, lite-gc-profiler or lite-perf-gate
   integration. Tests are `node:test` suites in the style of LiteSignal `test/94-inlining-budget-diff.test.mjs`.
 - Each shipped script is ONE self-contained file a client can copy and run (`bash`, POSIX awk, `node`,
   optional `git`). Shared code exists only at authoring time (see S-2).
@@ -49,6 +49,10 @@ belong here.
   (expands `# @include lib/<file>.sh` marker lines in `src/<name>.sh` into `<name>.sh` at the repo root).
   The generated file is committed. A test fails when any shipped script differs from a fresh build.
   Shipped scripts never `source` anything at run time.
+  Node tool (Q-AP-LAYOUT (a), 1.1.0 candidate): the node CLI is authored in `src/alloc-per-op.mjs` and copied BYTE FOR
+  BYTE to the root `alloc-per-op.mjs` by `build.sh` (an allowlist of one file; no `@include` expansion; the refusals
+  are listed in `build.sh`'s header and the 9417eea commit message); the root is committed, a test fails on drift, and it
+  imports `node:` modules only. A client may copy that one file.
 - S-3 What goes in lib: arg parsing helpers, `die` / `say` / `usage`, the fail-closed EXIT trap,
   `worst()`, `multiset()` + `MSDIFF_AWK`, the frozen-"before" refusal (`refuse_live` and helpers),
   `sha8`, `devino`, driver / ref / file mode plumbing, the null-control loop. Each script keeps its own
@@ -57,7 +61,8 @@ belong here.
   (Phase 1) with the Phase 0 tests as the oracle; the regenerated `inlining-budget-diff.sh` must pass the
   same self-test and mutants unchanged.
 - S-5 Tiers (suite verification tiers):
-  - DETERMINISTIC (in `npm test`): every `--self-test`, every mutant row, the build-drift test, the
+  - DETERMINISTIC (in `npm test`): every `--self-test` (alloc-per-op's included: its verdict rows clean / box / C1 / C2 /
+    refusal / old / nlo, Q-AP-TIER (a); numeric constants FROZEN by S-A36, read set and driver re-frozen by S-A51 (CI run 44945969102): REPORTED tier, not a gate here), every mutant row, the build-drift test, the
     bytecode-budget live check (S-6), and the `--allow-natives-syntax` control pairs (S-8).
   - STATISTICAL: real before/after comparisons of inlining / deopt / IC / allocation on a user driver
     (tier-up timing dependent). Never in `npm test`. Run under
@@ -81,7 +86,9 @@ belong here.
 - S-11 LiteSignal keeps a vendored copy of `inlining-budget-diff.sh`; LiteUtils is the source of truth.
   LiteSignal pins it by sha256 in a test (the maintainer coordinates the LiteSignal side).
 - S-12 (maintainer 2026-11-02) LiteUtils is exempt from the torture.mjs law; gates = each script's
-  --self-test (+ --fixtures), npm test, cmp frozen 7f0ba7b.
+  --self-test (+ --fixtures), npm test, cmp frozen 7f0ba7b. alloc-per-op.mjs is covered by this exemption too
+  (Q-AP-TORTURE (a)); its gate is `node alloc-per-op.mjs --self-test` (CI, untimed) plus the engine, CLI and LiteBisect-shape
+  tests.
 
 ## 3. Phases
 
@@ -206,6 +213,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   1. 1.1.0 alloc-per-op: its own tool with `bin: alloc-per-op` (Q-M-SHAPE (a); LiteBisect's
      `test/gates/lu.mjs` resolves it by that stem). Input: the maintainer's untracked prototype
      `alloc-per-op.mjs` (sha256/8 d4386d85). A research burst comes first (new public surface).
+     STATUS (b91): BUILT (engine, CLI, root copy, package.json bin / files[], CI self-test step, LiteBisect-shape test,
+     docs in the working tree); A4 closed (S-A51, CI run 44945969102, 8/8 legs PASS); the Q-M-AUDIT audit and the release are pending.
   2. 1.0.x maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a)). No new surface.
   3. 1.2.0 import-audit (L1 below).
   4. 1.3.0 code-size-diff (L4 below).

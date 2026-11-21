@@ -5,6 +5,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+1.1.0 candidate (no version header and no VERSION / package.json bump yet; the audit and the release are pending).
+Test counts and the final npm test run: 4241 tests, 4227 pass, 0 fail, 14 skip (2026-11-22, node v26.8.2,
+/bin/bash 3.2.57, host QUIET, load1 1.48 at start, 1656 s; private copy with .git, quiet-lock; one run; tree
+168e202 + the pre-fill docs + `test/alloc-per-op-qa.test.mjs`).
+
+### Added
+
+- `alloc-per-op`, a node CLI (`alloc-per-op.mjs`, `bin: alloc-per-op`): steady-state ON-HEAP BYTES per op of a
+  synchronous lane, main isolate only (ROADMAP "Post-1.0 minors" item 1). Modes: a table, a gate (`--max B`: PASS /
+  FAIL / NO VERDICT), an A/B of two bench files (`--tol B`, required: SAME / DIFF / NO VERDICT), `--self-test [--json]`.
+  A bench is an ES module exporting `lanes` (plain object of `lane(i)`) and an optional `setup()`. Options `--n`,
+  `--windows`, `--warm`, `--sub`, `--lane`, `--json`; every option check runs before any spawn. Exit 0 PASS / SAME /
+  table, 1 FAIL / DIFF / ONLY-A / ONLY-B, 2 NO VERDICT or refused.
+  - Engine (add1189, audit fix 72e76b3): paired space-used brackets over the four heap spaces, folded with
+    code_space, trusted_space and their large-object spaces (read per slot; a missing name never reads 0; a shrink in
+    any slot rejects the attempt and re-runs it, at most 3 times); a twin-sandwich acceptance; PEAK = max of windows
+    1..K-1; the refusal band lo = 32 / S, hi = 524288 / N + 0.001 x peak; the floor (empty lane) is printed and never
+    subtracted. Fail closed: a non-finite peak, a VOID window, a fence miss or a selfCheck miss is NO VERDICT. The
+    numeric constants are FROZEN by S-A36 (CI run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the new read set and driver are re-frozen by S-A51 (CI
+    run 44945969102, 8/8 legs, ci-report VERDICT PASS); both REPORTED tier (hosted CI, one run each).
+  - CLI (3641eba, 4ea66ce): the allowlist parser, the preflight (the eight heap spaces, the v8 API, the bench file),
+    one respawn with `--expose-gc`, `-h` (exit 2) stating scope, the store rule and the exit codes.
+  - A lane that returns a value is refused (only lane(0) is checked); a lane must STORE what it allocates (a dropped
+    allocation may be elided by V8 and then reads 0 B/op).
+  - Tier: the `--self-test` rows (clean / box / C1 / C2 / refusal / old / nlo) are DETERMINISTIC and run untimed in CI;
+    a verdict on a user lane is STATISTICAL.
+- `build.sh` copies the allowlisted `src/alloc-per-op.mjs` byte for byte to the package root (9417eea): no
+  expansion, no substitution; before any write it refuses (exit 2, `build.sh: <file>: <why>`) an unlisted
+  `src/*.mjs`, a missing, non-regular or symlinked source, a NUL byte, no final newline, a line 1 other than
+  `#!/usr/bin/env node`, or an unresolved node; the copy is `cmp`-checked, `node --check`ed and moved with the .sh
+  outputs, all or nothing.
+- `package.json`: `bin` and `files[]` gain `alloc-per-op` / `alloc-per-op.mjs` (the root copy ships, `src/` does not).
+- `test/pack.test.mjs`: A1 11 shipped paths against 12 decoys, A2 / A3 six bins (each `-h` exits 2, line 1 starts with
+  its target and ` -- `), new A6b (every shipped .mjs root: node shebang, ASCII, `node:`-only module specifiers, no
+  `createRequire`) and A7 (ci.yml and nightly.yml each hold exactly one `<interp> <target> --self-test` step per bin).
+  Tier: DETERMINISTIC. Test count: 31 (every `test/pack.test.mjs` row in the final npm test run).
+- `.github/workflows/ci.yml` and `nightly.yml`: an untimed `alloc-per-op --self-test` step (`node alloc-per-op.mjs
+  --self-test`) after the ibd step.
+- `test/alloc-per-op-lb.test.mjs` and `test/fixtures/alloc-per-op-lb/lb-bench.mjs`: pin the contract LiteBisect's
+  `test/gates/lu.mjs` consumes (the `--json` shape, the argument order, the `--max 1` FAIL exit and line). Tier:
+  DETERMINISTIC (shape and exit codes, no timing threshold).
+- `test/alloc-per-op-qa.test.mjs`: b92 qa boundary row QA1 (build.sh outputs mode 0755 under umask 022; G3 A1). Tier:
+  DETERMINISTIC.
+- README.md and llms.txt: an `alloc-per-op` section, six commands, and the scope, store, period, Worker and Profiler
+  limits.
+- Never-released code, fixed in this cycle:
+  - Engine audit fixes (72e76b3): the driver loads its base from a module `Int32Array`, so the first peeled iteration cannot
+    constant-fold an index-derived allocation; a lane returning a value is refused; selfCheck judges each control on its
+    own and reports `misses` per control (a CI flake on node 22); a Profiler that is not the live `v8.GCProfiler` is a
+    fence miss; `bandOf` refuses a non-integer or < 1 `n` / `sub`.
+  - Test fixes (eb66f8a, 1c4a11c): engine E11 settles before it counts; E9 X5c retries a VOIDed selfCheck and its stand-in
+    pads every read, so a one-off positive reading in the old / code space cannot fail a DETERMINISTIC row (LEDGER law 6).
+
+### Changed
+
+- `package.json` `description` no longer says bash-only: "Standalone V8-diagnostic CLIs (five bash scripts, one node
+  tool) with fail-closed verdicts".
+- README.md, llms.txt: "five tools" wording is now "six" where it counts the commands, the `-h` exit 2 and the CI job;
+  the five bash tools keep their `VERDICT <v>` line, `alloc-per-op` prints a `gate --max` / `A/B --tol` line and is
+  read by exit code or `--json`.
+
 ## [1.0.0] - 2026-11-12
 
 First release. Five generated bash tools (allocation-diff, bytecode-budget, deopt-diff, ic-diff,
