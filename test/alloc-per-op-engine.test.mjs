@@ -962,18 +962,31 @@ test('E9 X5b: n 15000 / sub 10000 throws RangeError /n % sub = 5000/, lane calle
     assert.match(o.msg, /n % sub = 5000/);
     assert.equal(o.c, 0);
 });
+// b90 U0-1: CI run 44436795470 (eb66f8a, ubuntu-latest node 26) read empty peak +0.73376 against the old -1024 B stand-in.
+// MEASURED locally (.handoff/b90/u0/MECH.md, darwin-arm64, PRELIMINARY): an accepted sandwich can carry a one-off positive
+// r - z1 of up to 253024 B, all of it in D[1] (old_space + code_space + trusted_space) of the measured bracket, the
+// new_space delta unchanged; 0 such events in --no-maglev runs (n26 40 runs, n27 80 runs). One such event outweighs
+// the old stand-in's whole window (100 sandwiches x -1024 B = -102400 B). The stand-in's size is bounded: the measured
+// bracket's new_space delta must stay >= 0 (sandwich rejects a negative slot), and that delta measured only ~1.8-4.2 KB.
+// So the hook now pads EVERY read: after taking the listing it stores a new Array(X5C_PAD) on the listing (escapes to
+// readS; garbage by the next bracket's minor gc). The pad of the opening read lands in every bracket's new_space delta
+// alike (z1 === z2 kept), which leaves room for an X5C_SUB-byte subtraction in the read after the lane ran:
+// X5C_PAD 8192 holey elements = 8192 x 8 + 16 = 65552 B (32776 B with pointer compression) > X5C_SUB 16384, so the measured
+// bracket's new_space delta stays >= 0. A clean window then reads 100 x -16384 / 1e5 = -16.384 B/op; the claim holds
+// unless positive noise in one window exceeds 100 x 16384 - 1e5 x lo (0.032) = 1635200 B (over 6x the largest event seen).
 const X5C_BODY = [
     "import v8 from 'node:v8';",
     'const orig = v8.getHeapSpaceStatistics;',
+    'const X5C_SUB = 16384, X5C_PAD = 8192;',
     'let ran = false;',
-    "v8.getHeapSpaceStatistics = () => { const l = orig(); for (const s of l) if (ran && s.space_name === 'new_space') s.space_used_size -= 1024; ran = false; return l; };",
+    "v8.getHeapSpaceStatistics = () => { const l = orig(); l[0].pad = new Array(X5C_PAD); for (const s of l) if (ran && s.space_name === 'new_space') s.space_used_size -= X5C_SUB; ran = false; return l; };",
     'const C = M.CONTROLS;',
     // b89 FILLERS 2: a noisy leg can VOID the empty lane's window before the row reaches its claim; retry while
     // sc.empty.voids !== 0, at most X5C_TRIES attempts total, and print the attempt count (provenance).
     'const X5C_TRIES = 3;',
     'let sc = null, attempts = 0;',
     'do { ran = false; attempts++; sc = M.selfCheck(1e5, 3, 1e4, 1e3, { positive: C.positive, negative: (i) => { ran = true; }, Profiler: C.Profiler }); } while (sc.empty.voids !== 0 && attempts < X5C_TRIES);',
-    'console.log(JSON.stringify({ ok: sc.ok, neg: sc.misses ? sc.misses.negative : null, emptyPeak: sc.empty.peak, voids: sc.empty.voids, lo: sc.band.lo, attempts, tries: X5C_TRIES }));',
+    'console.log(JSON.stringify({ ok: sc.ok, neg: sc.misses ? sc.misses.negative : null, emptyPeak: sc.empty.peak, windows: sc.empty.windows, voids: sc.empty.voids, lo: sc.band.lo, sub: X5C_SUB, attempts, tries: X5C_TRIES }));',
 ];
 test('E9 X5c: a negative row below -lo makes selfCheck ok false with misses.negative /^negative: empty peak/', () => {
     const o = live('x5c', X5C_BODY);
@@ -981,7 +994,8 @@ test('E9 X5c: a negative row below -lo makes selfCheck ok false with misses.nega
     // voids === 0 is judged after at most 3 attempts (b89 FILLERS 2); only the attempt bound is asserted.
     assert.ok(o.attempts >= 1 && o.attempts <= o.tries && o.tries === 3, 'attempts ' + o.attempts + ' of ' + o.tries);
     assert.equal(o.voids, 0, 'empty lane VOID on all ' + o.attempts + ' attempts');
-    assert.ok(o.emptyPeak < -o.lo, 'stand-in did not bite: ' + o.emptyPeak);
+    // The stand-in itself is pinned: with X5C_SUB = 0 this assert goes red (.handoff/b90/u0/REPORT.md).
+    assert.ok(o.emptyPeak < -o.lo, 'stand-in did not bite: ' + o.emptyPeak + ' windows ' + JSON.stringify(o.windows));
     assert.equal(o.ok, false);
     assert.ok(o.neg !== null, 'no misses (S-A43)');
     assert.match(o.neg, /^negative: empty peak/);
