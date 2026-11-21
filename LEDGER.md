@@ -1288,6 +1288,24 @@ whose cost depends on its own call count must model the harness's re-run calls; 
 what the optimizer happens to do. What would re-open (a): a CI leg where boxskip flags 0 windows in a cell. Evidence
 (local): `.handoff/b89/` (u1/, review-U1.md, u0/, review-U0.md, u2/, review-U2.md), `.handoff/rejected/b89-U1/`.
 
+**#135 alloc-per-op b90: a stand-in sized below the noise it must beat; controls that test only the fail-closed side
+(TRAP).** (a) TRAP (law 6): E9 X5c's negative stand-in subtracted 1024 B per measured bracket (-1.024 B/op per window);
+CI run 44436795470 (eb66f8a, ubuntu node v26.13.1) read +0.73376. Measured locally (.handoff/b90/u0/MECH.md,
+darwin-arm64, PRELIMINARY): an accepted sandwich can carry a one-off positive r - z1 of up to 253024 B, all in D[1] (old
++ code + trusted) of the measured bracket, new_space unchanged; 0 such events in --no-maglev runs; the CI shape
+reproduced on node 27-alpha (3/120). The stand-in could not simply grow: the measured bracket's new_space delta
+(~1.8-4.2 KB) must stay >= 0 or sandwich rejects the attempt. Fix: the hook pads every listing (new Array(8192), equal in
+z1 / r / z2) and subtracts 16384 B -> -16.384 B/op, a 1635200 B per-window noise margin (6.46x the largest event);
+X5C_PAD 0 / pad-on-closing-read mutants turn the row red at its voids assert, never vacuous. (b) Defect caught by review
+(LITERAL, twice): the S-A49 controls had no teeth on three sub-clauses (allowance leaking to windows after sw-1; R
+summed past sw-1; the integer guard skipping window sw-1 so a NaN limit read PASS); the next round's new
+`calls === n + sub x reruns` tie was again tested only on the fail-closed side (calls above the count) and not on
+window sw-1. Lesson: a planted stand-in must dominate the largest one-off the harness can accept, by construction,
+and its size is bounded by what the engine's own guards let through -- find that bound before choosing a magnitude;
+every guard gets a control on its fail-OPEN side and on each boundary window it names. What would re-open (a): a CI
+leg where X5c's worst window rises above -lo again. Evidence (local): `.handoff/b90/` (u0/, review-U0.md, u1/,
+review-U1.md, review-U1-r2.md).
+
 ---
 
 ## E. Process lessons
