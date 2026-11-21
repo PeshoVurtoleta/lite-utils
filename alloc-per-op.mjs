@@ -9,7 +9,8 @@ import v8 from 'node:v8';
 
 // :CONSTANTS
 // Numeric constants FROZEN by SPEC S-A36 (CI run 43691163080, 8/8 legs, ci-report VERDICT PASS). A change is a
-// re-pin (SPEC C-5). Read set (XSPACES) and driver changed by S-A38 / S-A39; A4 8-leg re-run pending (C-5).
+// re-pin (SPEC C-5). Read set (XSPACES) and driver (S-A38 / S-A39) re-frozen by S-A51 (A4 CI run 44945969102, 8/8
+// legs, ci-report VERDICT PASS); the numeric constants are unchanged.
 export const BAND_LO_B = 32;
 export const BAND_HI_FIXED_B = 524288;
 export const BAND_HI_REL = 0.001;
