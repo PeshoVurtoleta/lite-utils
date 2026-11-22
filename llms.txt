@@ -164,15 +164,23 @@ Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, ste
     alloc-per-op --self-test [--json]
 
 - BENCH: an ES module exporting `lanes`, a plain object of synchronous functions `lane(i)`; an optional exported
-  `setup()` is awaited once. Example: `const sink = [{}, {}]; export const lanes = { 'name': (i) => { sink[i & 1] = i + 0.5; } };`
+  `setup()` (plain or async; a generator is refused, exit 2) is awaited once, before `lanes` is read. A bench that
+  imports the tool file again inside its run is refused. Example: `const sink = [{}, {}]; export const lanes = { 'name': (i) => { sink[i & 1] = i + 0.5; } };`
 - Options: `--n` 100000..100000000 (default 1000000), `--windows` 3..50 (default 5; PEAK = max of windows 1..K-1),
   `--warm` (default 200000), `--sub` 1000..10000 (default 10000; N % S == 0, N / S <= 10000), `--lane NAME`
-  (repeatable), `--max B`, `--tol B` (required in A/B), `--json`. Option checks run before any spawn.
+  (repeatable), `--max B`, `--tol B` (required in A/B), `--json` (the last line the tool writes to stdout). Option
+  checks run before any spawn, except a `--lane NAME` (checked after the bench loads, setup() has run; a dash-led NAME
+  is a name).
+- lane(i): i runs 0 .. S-1 in every sub-window and restarts; it is not an op index. An allocation that needs i >= S never
+  happens; one at i = 0 happens once per sub-window. A GC inside a sub-window VOIDs it: a lane allocating more than new space
+  holds per sub-window (on the order of 100 B/op at the default S; it depends on the new-space size) is NO VERDICT,
+  never FAIL; lower --sub.
 - Exit 0 PASS / SAME / table; 1 FAIL / DIFF / ONLY-A / ONLY-B; 2 NO VERDICT or refused. `--self-test`: 0 all rows ok,
   1 a row missed, 2 the selfCheck missed. Output has a `gate --max ...` / `A/B --tol ...` line, no `VERDICT` line.
-- Refusal band: lo = 32 / S, hi = 524288 / N + 0.001 x peak. A `--max` below lo, or a `--tol` below
-  lo + 524288 / N, is refused before any spawn. The floor (empty lane) is printed and never subtracted. A rejected
-  sub-window is retried (at most 3): a retry calls the lane again. The same file twice as A and B is refused.
+- Refusal band: lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N, doubled below --n 1000000
+  (PRELIMINARY). A `--max` below lo, or a `--tol` below lo + hiFixed, is refused before any spawn (corner --tol floor
+  at --n 100000 --sub 10000: 10.48896). The floor (empty lane) is printed and never subtracted; null after a selfCheck
+  miss. A rejected sub-window is retried (at most 3): a retry calls the lane again. The same path twice as A and B (after realpath) is refused; a hard link or a case variant counts as a copy.
 - Scope: on-heap bytes, main isolate. Reads new_space, old_space, large_object_space, new_large_object_space;
   code_space and trusted_space count into old_space, code_large_object_space and trusted_large_object_space into
   large_object_space; read_only_space and the shared spaces are not read. Off-heap ArrayBuffer memory and Worker
@@ -181,7 +189,12 @@ Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, ste
   `(i) => { add(A, B); }`) may be elided by V8 and then reads 0 B/op. A lane that returns a value is refused, but only
   lane(0)'s return value is checked, so a value or a thenable from a later call is not seen. An allocation that does not
   recur inside the span ((K-1) x N ops) is seen only if an occurrence falls inside it, by every rule. The default `--warm` covers constructor, class-field and literal shapes. `--sub` below
-  1000 under-reads on node v22. A bench that replaces v8.GCProfiler gets a fence miss, NO VERDICT, exit 2.
+  1000 under-reads on node v22. A bench that replaces v8.GCProfiler gets a fence miss, exit 2: at import or in setup() a selfCheck miss (no lane
+  measured); in a lane, every lane verdict NO VERDICT (`fence (after)`). A
+  prototype patch of v8.GCProfiler / v8.getHeapSpaceStatistics, or a swap restored before the run ends, is not detected.
+  On a fence miss a non-VOID gate text lane line ends ` (fence)` (A/B text lines: no label); every lane verdict in --json is NO VERDICT. A table run's NO VERDICT is exit 2 plus the stderr line (no verdict field in --json). The tool exits when the event loop
+  drains: a bench that leaves a timer, socket or Worker open keeps it running; a signal to the tool alone does not reach
+  the --expose-gc child it re-spawns (signal the process group).
   `--no-concurrent-recompilation` lowers noise; it is not forced. A threshold holds only for the build it was measured
   on (pointer compression, arch, node / v8).
 - Tier: `--self-test` rows DETERMINISTIC (untimed, in CI); a verdict on a user lane STATISTICAL. Numeric constants

@@ -6,9 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 1.1.0 candidate (no version header and no VERSION / package.json bump yet; the audit and the release are pending).
-Test counts and the final npm test run: 4241 tests, 4227 pass, 0 fail, 14 skip (2026-11-22, node v26.8.2,
-/bin/bash 3.2.57, host QUIET, load1 1.48 at start, 1656 s; private copy with .git, quiet-lock; one run; tree
-168e202 + the pre-fill docs + `test/alloc-per-op-qa.test.mjs`).
+Test counts and the final npm test run: 4281 tests, 4267 pass, 0 fail, 14 skip (2026-11-22, node v26.8.2,
+/bin/bash 3.2.57, host PRELIMINARY: load1 2.98 at start vs baseline 2.21, another node at 45%; 1773 s; private copy
+with .git, quiet-lock; one run; tree f572f08 + the b93 audit-fix changes, docs before the review-r2 doc fix).
 
 ### Added
 
@@ -21,7 +21,7 @@ Test counts and the final npm test run: 4241 tests, 4227 pass, 0 fail, 14 skip (
   - Engine (add1189, audit fix 72e76b3): paired space-used brackets over the four heap spaces, folded with
     code_space, trusted_space and their large-object spaces (read per slot; a missing name never reads 0; a shrink in
     any slot rejects the attempt and re-runs it, at most 3 times); a twin-sandwich acceptance; PEAK = max of windows
-    1..K-1; the refusal band lo = 32 / S, hi = 524288 / N + 0.001 x peak; the floor (empty lane) is printed and never
+    1..K-1; the refusal band lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N (doubled below --n 1000000, b93, PRELIMINARY); the floor (empty lane) is printed and never
     subtracted. Fail closed: a non-finite peak, a VOID window, a fence miss or a selfCheck miss is NO VERDICT. The
     numeric constants are FROZEN by S-A36 (CI run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the new read set and driver are re-frozen by S-A51 (CI
     run 44945969102, 8/8 legs, ci-report VERDICT PASS); both REPORTED tier (hosted CI, one run each).
@@ -65,6 +65,42 @@ Test counts and the final npm test run: 4241 tests, 4227 pass, 0 fail, 14 skip (
 - README.md, llms.txt: "five tools" wording is now "six" where it counts the commands, the `-h` exit 2 and the CI job;
   the five bash tools keep their `VERDICT <v>` line, `alloc-per-op` prints a `gate --max` / `A/B --tol` line and is
   read by exit code or `--json`.
+- U6: below `--n 1000000` the band's fixed part is doubled (`hiFixed = 2 x 524288 / N`, a non-exported
+  `BAND_HI_N_MIN`; the `:CONSTANTS` block is unchanged), PRELIMINARY until the 8-leg corner tally. The corner `--tol`
+  floor at `--n 100000 --sub 10000` is 10.48896 (was 5.24608). Every `--n >= 1e6` pin is unchanged.
+- `-h` text: the setup, `lane(i)`, VOID, hang and signal, `--json` and band lines above.
+
+### Fixed
+
+b93 audit-fix burst on the never-released `alloc-per-op` (RULINGS-cli-audit.md; src 610bbfa8, root copy equal):
+
+- U1: `setup()` is awaited BEFORE `lanes` is read (a setup that builds or replaces lanes is honoured); the refusal order
+  moves, exit 2 either way.
+- U2: a generator / async-generator `setup` is refused (exit 2); a plain or async `setup` is awaited.
+- U3: fence liveness: the post-run fence also requires `v8.GCProfiler` to be the verified export
+  (`fence (after): v8.GCProfiler was replaced during the run`), and every lane verdict is NO VERDICT on a fence miss
+  (exit 2). Text output: only a non-VOID gate lane line ends ` (fence)`; A/B text lane lines carry no label (Q-B93-C14
+  (a)); every lane verdict in `--json` is NO VERDICT. A prototype patch of `v8.GCProfiler` / `v8.getHeapSpaceStatistics`,
+  or a swap restored before the run ends, is not detected (documented). A table run has no verdict field; its NO VERDICT
+  is exit 2 plus the stderr line.
+- U4: error printing is total (a Symbol or null-prototype throw no longer escapes `die()` as exit 7; a getter-backed
+  `e.message` is read once); the exit code stays 0 / 1 / 2.
+- U5: the floor is null after a selfCheck miss (it printed a number).
+- U8: a bench that imports the tool file again inside its run is refused (exit 2).
+- Docs (U14 and rulings): `lane(i)` index, VOID above ~100 B/op per sub-window, the event-loop exit rule and the orphan
+  child on a signal, `--json` is the last stdout line, `--lane NAME` checked after setup (dash-led NAME is a name),
+  A/B same path after realpath (hard link / case variant = a copy).
+
+### Tests (b93)
+
+- New `test/alloc-per-op-fixa.test.mjs` (18 rows) and `test/alloc-per-op-fixb.test.mjs` (16 rows); the engine A1 row is
+  re-pinned for the doubled band below `--n 1e6`. Tier: DETERMINISTIC.
+- `test/audit-g4.test.mjs` real-node caps 120000 -> 480000 ms (CI-F1: run 44963451684, macOS node 22 leg, "A1 real node
+  OLD twin" 136325 ms against the 120000 ms cap). `package.json` "test": `--test-timeout` 3600000 -> 7200000 (node 22
+  applies it per file; the slow leg of that run took allocation-diff ~1983 s and inlining-budget-diff ~2100 s per file;
+  Q-B93-TT (a)). The bound is honest only in part: node 22 applies `--test-timeout` per test FILE, so with the 180-minute CI
+  job (ci.yml:41, nightly.yml:35) a hung file fails by name only if it starts within about the first 60 min of the job
+  (minus the steps before `npm test`); at 3600000 every file qualified.
 
 ## [1.0.0] - 2026-11-12
 

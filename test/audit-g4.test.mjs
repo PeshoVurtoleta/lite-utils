@@ -203,6 +203,8 @@ test('A1 OLD twin: TMPDIR=<d>/t%p%t%% -> rc 2', { skip: OLDSKIP }, () => {
     code(r, 2, 'A1 TMPDIR old'); assert.equal(verdict(r), 'NO-VERDICT', msg(r));
 });
 // real node: one tiny driver; the tool reads real V8 --log-ic output. One attempt each, generous cap.
+// cap 480000 (was 120000; b93 CI-F1, ruling Q-CA-CIF1): ci.yml run 44963451684, macOS node 22: A1 OLD twin timed out at
+// 120000 (row 136325 ms; 34884 ms on run 44958268094), A1 real 116955 ms, A2 real 89807 ms (.handoff/evidence/b93-ci)
 const REAL_DRV = 'function get(o) { return o.x; }\nfor (let i = 0; i < 200; i++) get({ x: i });\n';
 // canned rows for the V8 split (no spawn; Q-B78-ICV8)
 for (const [v, want] of [['12.4.254.21-node.33', 'refuse'], ['13.6.233.10-node.18', 'refuse'], ['14.6.202.34-node.28', 'SAME'],
@@ -218,7 +220,7 @@ function realCase(extra) {
     const c = mkCase();
     for (const n of ['mono', 'mono2']) writeFileSync(join(dirname(c.D[n]), 'driver.js'), REAL_DRV);
     const o = join(c.dir, 'o%pz%t%%q');
-    const r = run(extra.root, c, ['--node', NODE_REAL, ...(extra.out ? ['--out', o] : []), '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cap: 120000, ...(extra.run || {}) });
+    const r = run(extra.root, c, ['--node', NODE_REAL, ...(extra.out ? ['--out', o] : []), '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cap: 480000, ...(extra.run || {}) });
     return { c, o, r };
 }
 test('A1 real node: --out o%pz, process.execPath -> rc 0 SAME on V8 >= 14 (14.6 and 15.6 share the CodeKind numbering), else rc 2 NO-VERDICT \'code kind outside the allowlist\' (one attempt; Q-B66-G4REAL, Q-B78-ICV8)', { skip }, () => {
@@ -264,7 +266,7 @@ function a2Real(root) {
     const c = mkCase();
     for (const n of ['mono', 'mono2']) writeFileSync(join(dirname(c.D[n]), 'driver.js'), REAL_DRV);
     const w = join(c.dir, 'w'), t = join(c.dir, 'tmp2'); mkdirSync(w); mkdirSync(t);
-    const r = run(root, c, ['--node', NODE_REAL, '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cwd: w, tmpdir: '../tmp2', cap: 120000 });
+    const r = run(root, c, ['--node', NODE_REAL, '--runs', '2', '--v8-flags', '--no-lazy-feedback-allocation', '--fn', 'get', c.D.mono, c.D.mono2], { cwd: w, tmpdir: '../tmp2', cap: 480000 });
     return { t, r };
 }
 test('A2 real node: relative TMPDIR -> rc 0 SAME on V8 >= 14 (14.6 and 15.6 share the CodeKind numbering), else rc 2 NO-VERDICT \'code kind outside the allowlist\'; 0 entries (one attempt; Q-B66-G4REAL, Q-B78-ICV8)', { skip }, () => {

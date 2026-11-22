@@ -243,11 +243,16 @@ export function measureFloor(n, windows, warm, sub) {
 }
 
 // :bandOf
-// The one source of the refusal band (SPEC C-4): lo = BAND_LO_B / sub, hiFixed = BAND_HI_FIXED_B / n, hiRel.
+// The one source of the refusal band (SPEC C-4): lo = BAND_LO_B / sub, hiFixed = BAND_HI_FIXED_B / n (doubled below
+// n = BAND_HI_N_MIN), hiRel.
 // n and sub must be integers >= 1, else RangeError (S-A42: a negative, fractional, zero or non-number cell has no band).
+// BAND_HI_N_MIN (S-A59, Q-CA-BAND (a)): below 1000000 ops per window (cells with no S-A36 CI evidence) the fixed part
+// of hi is doubled: a window that short can hold more than one one-off heap step (APC-fable-10). The factor 2 is
+// PRELIMINARY: not frozen until the 8-leg corner tally (SPEC C-30). Not exported; `:CONSTANTS` is unchanged.
+const BAND_HI_N_MIN = 1000000;
 export function bandOf(n, sub) {
     if (!(Number.isInteger(n) && n >= 1 && Number.isInteger(sub) && sub >= 1)) throw new RangeError('alloc-per-op: bandOf: n and sub must be integers >= 1');
-    return { lo: BAND_LO_B / sub, hiFixed: BAND_HI_FIXED_B / n, hiRel: BAND_HI_REL };
+    return { lo: BAND_LO_B / sub, hiFixed: (n < BAND_HI_N_MIN ? 2 : 1) * BAND_HI_FIXED_B / n, hiRel: BAND_HI_REL };
 }
 
 // :gateVerdict
@@ -624,20 +629,30 @@ const USAGE = [
     '       node alloc-per-op.mjs --self-test [--json]               selfCheck + the self-test lanes',
     '       node alloc-per-op.mjs -h | --help                        this text (exit 2)',
     'BENCH: an ES module exporting `lanes`, a plain object of synchronous functions lane(i); an optional',
-    '  exported setup() is awaited once before the first lane.',
-    'options (integers in plain digits; option checks run before any spawn):',
+    '  exported setup(), a plain or async function, is awaited once, before `lanes` is read.',
+    'lane(i): i runs 0 .. S-1 in every sub-window (0 .. W-1 in the warm-up) and then restarts; it is not an',
+    '  op index. An allocation keyed on i is read for those calls: one that needs i >= S never happens, and',
+    '  one at i = 0 happens once per sub-window. Count calls inside the lane instead.',
+    'options (integers in plain digits; option checks run before any spawn, except that a --lane NAME is',
+    '  checked after the bench loads, so setup() has run; a dash-led NAME is a name):',
     '  --n N        ops per window, 100000..100000000 (default 1000000)',
     '  --windows K  windows per lane, 3..50 (default 5); PEAK = max of windows 1..K-1',
     '  --warm W     warm-up ops before window 0, 0..100000000 (default 200000)',
     '  --sub S      ops per sub-window, 1000..10000 (default 10000); N % S == 0 and N / S <= 10000.',
     '               --sub below 1000 under-reads on node v22, hence the floor of 1000.',
+    '               A GC inside a sub-window VOIDs it: a lane that allocates more than new space holds per',
+    '               sub-window (on the order of 100 B/op at the default S; it depends on the new-space size)',
+    '               is NO VERDICT, never FAIL; lower --sub.',
     '  --lane NAME  measure only this lane; repeatable (default: every lane)',
     '  --max B      one BENCH only: gate on peak B/op, PASS / FAIL / NO VERDICT',
     '  --tol B      A/B only, and REQUIRED there (no default): SAME / DIFF / NO VERDICT on peak B/op',
-    '  --json       one JSON line, last on stdout',
-    'Refusal band (lo = 32 / S, hi = 524288 / N + 0.001 x peak): a --max below lo, or a --tol below',
-    '  lo + 524288 / N, is refused before any spawn, naming the smallest accepted value.',
-    'A/B: the same file twice is refused; an A/A check needs a copied bench.',
+    '  --json       one JSON line, the last line the tool writes to stdout. Keep bench output off stdout:',
+    '               what a bench prints later follows that line, and an unfinished line before it shares it.',
+    'Refusal band (lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N): a --max below lo, or a',
+    '  --tol below lo + hiFixed, is refused before any spawn, naming the smallest accepted value. Below',
+    '  --n 1000000 hiFixed is doubled (PRELIMINARY), in hi and in the --tol floor.',
+    'A/B: the same path twice (after realpath) is refused; a hard link or a case variant counts as a copy; an',
+    '  A/A check needs a copied bench.',
     'Scope: on-heap bytes of the main isolate only: the four SPACES new_space, old_space, large_object_space',
     '  and new_large_object_space; code_space and trusted_space are counted into old_space, and',
     '  code_large_object_space and trusted_large_object_space into large_object_space. read_only_space and',
@@ -651,25 +666,51 @@ const USAGE = [
     'Exit: 0 PASS / SAME / table; 1 FAIL / DIFF / ONLY-A / ONLY-B; 2 NO VERDICT or refused (a child',
     '  status outside 0 / 1 / 2 becomes 2). --self-test: 0 all rows ok, 1 a row miss, 2 a selfCheck miss.',
     'Exit guard: best effort; process.reallyExit or a later \'exit\' listener in a bench can override the code.',
+    'The tool exits when the event loop drains: a bench that leaves a timer, socket or Worker open keeps it',
+    '  (and the re-spawning parent) running after the verdict line. Close or unref them.',
+    'A signal sent to the tool alone does not reach the --expose-gc child it re-spawns: signal the process',
+    '  group, or run `node --expose-gc alloc-per-op.mjs ...` (no re-spawn).',
 ].join('\n') + '\n';
 function usage() {
     process.stdout.write(USAGE);
 }
 
 // :loadBench
-// Child, cold. Import one BENCH (an absolute realpath from the parent); it must export `lanes`, a plain object of
-// functions (empty / non-function refused), and may export setup(), awaited once. Every failure throws an Error naming
-// the path (and the lane or setup), which main maps to NO VERDICT exit 2 (C-19).
+// Child, cold. Import one BENCH (an absolute realpath from the parent); it may export setup(), a plain or async function
+// (Object.prototype.toString allowlist: a generator would never run its body), awaited once FIRST; it must export
+// `lanes`, a plain object of functions (empty / non-function refused), read only AFTER setup() settled, so a lane that
+// setup() adds, replaces or removes is the lane measured (S-A52). setup() therefore runs before `lanes` is read or
+// validated: the refusal order moved (a bad `lanes` is refused after setup() ran; exit 2 either way). Every failure
+// throws an Error naming the path (and the lane or setup), which main maps to NO VERDICT exit 2 (C-19).
 import { pathToFileURL } from 'node:url';
 
+// Every error print is total (S-A53): a thrown Symbol, a null-prototype object or a throwing getter prints as text and
+// the exit stays 0 / 1 / 2, never node's 7 (a throw inside an 'uncaughtException' handler).
+function safeStr(e) {
+    try { return String(e); } catch { return '(unprintable ' + typeof e + ')'; }
+}
+function fmtErr(e) {
+    try { return String((e && e.stack) || e); } catch { return safeStr(e); }
+}
 function errText(e) {
-    const m = e !== null && typeof e === 'object' && typeof e.message === 'string' ? e.message : String(e);
+    let m;
+    try { const msg = e !== null && typeof e === 'object' ? e.message : undefined; m = typeof msg === 'string' ? msg : safeStr(e); }
+    catch { m = safeStr(e); }
     return m.startsWith('alloc-per-op: ') ? m.slice(14) : m;
 }
 
 async function loadBench(p) {
     let mod;
     try { mod = await import(pathToFileURL(p).href); } catch (e) { throw new Error('BENCH ' + p + ': import threw: ' + errText(e)); }
+    const setup = mod.setup;
+    if (setup !== undefined) {
+        let sk;
+        try { sk = Object.prototype.toString.call(setup); } catch (e) { throw new Error('BENCH ' + p + ': reading `setup` threw: ' + errText(e)); }
+        if (sk !== '[object Function]' && sk !== '[object AsyncFunction]') {
+            throw new Error('BENCH ' + p + ': `setup` must be a plain or async function (got ' + sk + ')');
+        }
+        try { await setup(); } catch (e) { throw new Error('BENCH ' + p + ': setup() threw: ' + errText(e)); }
+    }
     const fns = new Map();
     try {
         const lanes = mod.lanes;
@@ -687,11 +728,6 @@ async function loadBench(p) {
         }
     } catch (e) {
         throw new Error(errText(e).startsWith('BENCH ') ? errText(e) : 'BENCH ' + p + ': reading `lanes` threw: ' + errText(e));
-    }
-    const setup = mod.setup;
-    if (setup !== undefined) {
-        if (typeof setup !== 'function') throw new Error('BENCH ' + p + ': `setup` must be a function');
-        try { await setup(); } catch (e) { throw new Error('BENCH ' + p + ': setup() threw: ' + errText(e)); }
     }
     return { path: p, fns };
 }
@@ -714,7 +750,8 @@ function selectLanes(benches, wanted) {
 
 // :run
 // Child, cold (C-12 / C-14 / C-15): load the benches, select the lanes, selfCheck at the caller's cell (floor =
-// selfCheck().empty.peak), measure A then B per lane, fenceCheck after the last lane, settle, print. Returns the exit
+// selfCheck().empty.peak when ok, else null), measure A then B per lane, fenceCheck after the last lane (a miss, or a
+// v8.GCProfiler that is no longer CONTROLS.Profiler, makes every lane verdict NO VERDICT), settle, print. Returns the exit
 // code; a lane / setup / import throw propagates (main maps it to exit 2). No code here runs inside a window.
 const SIGNAL = 'space-used-paired';
 const SCOPE = 'on-heap allocation of the main isolate (new, old and large-object spaces); off-heap ArrayBuffer ' +
@@ -732,7 +769,7 @@ async function run(o, reals) {
     const out = { node: process.version, v8: process.versions.v8, platform: process.platform, arch: process.arch,
         pointer_compression: buildInfo(process.config && process.config.variables), isolate: ISOLATE, signal: SIGNAL,
         scope: SCOPE, n: o.n, windows: o.windows, warm: o.warm, sub: o.sub, span: (o.windows - 1) * o.n, band,
-        floor: sc.empty ? sc.empty.peak : null, benches: benches.map((b) => ({ path: b.path, rows: [] })) };
+        floor: sc.ok && sc.empty ? sc.empty.peak : null, benches: benches.map((b) => ({ path: b.path, rows: [] })) };
     const reasons = [];
     if (!sc.ok) {
         reasons.push('selfCheck: ' + sc.reason + ' (no lane measured)');
@@ -761,8 +798,11 @@ async function run(o, reals) {
         }
     }
     const fence = fenceCheck();
-    const fenceOk = typeof fence.recorded === 'number' && fence.recorded >= fence.forced;
-    if (!fenceOk) reasons.push('fence (after): recorded ' + fence.recorded + ' < forced ' + fence.forced);
+    const fenceRecOk = typeof fence.recorded === 'number' && Number.isFinite(fence.recorded) && fence.recorded >= fence.forced;
+    const fenceLiveOk = v8.GCProfiler === CONTROLS.Profiler;
+    const fenceOk = fenceRecOk && fenceLiveOk;
+    if (!fenceRecOk) reasons.push('fence (after): recorded ' + fence.recorded + ' < forced ' + fence.forced);
+    else if (!fenceLiveOk) reasons.push('fence (after): v8.GCProfiler was replaced during the run');
     let nv = !fenceOk || sel.length === 0 || reasons.length !== 0;
     if (sel.length === 0) reasons.push('zero lanes selected');
     let bad = false;
@@ -770,7 +810,7 @@ async function run(o, reals) {
         const lanes = [];
         for (const row of out.benches[0].rows) {
             const hi = Number.isFinite(row.peak) ? band.hiFixed + band.hiRel * row.peak : null;
-            const verdict = laneVerdictNV(row) ? 'NO VERDICT' : gateVerdict(row.peak, o.max, band);
+            const verdict = !fenceOk || laneVerdictNV(row) ? 'NO VERDICT' : gateVerdict(row.peak, o.max, band);
             lanes.push({ lane: row.lane, peak: row.peak, lo: band.lo, hi, verdict });
             if (verdict === 'NO VERDICT') nv = true;
             if (verdict === 'FAIL') bad = true;
@@ -790,7 +830,7 @@ async function run(o, reals) {
                 continue;
             }
             const fin = Number.isFinite(ra.peak) && Number.isFinite(rb.peak);
-            const verdict = laneVerdictNV(ra) || laneVerdictNV(rb) ? 'NO VERDICT' : abVerdict(ra.peak, rb.peak, o.tol, band);
+            const verdict = !fenceOk || laneVerdictNV(ra) || laneVerdictNV(rb) ? 'NO VERDICT' : abVerdict(ra.peak, rb.peak, o.tol, band);
             lanes.push({ lane: name, a: ra.peak, b: rb.peak, delta: fin ? rb.peak - ra.peak : null,
                 E: fin ? band.lo + band.hiFixed + band.hiRel * Math.max(ra.peak, rb.peak) : null, verdict });
             if (verdict === 'NO VERDICT') nv = true;
@@ -868,10 +908,11 @@ function report(o, out, reasons, verdicts) {
         if (out.gate.verdict !== 'NO VERDICT') why = '';
         else if (reasons.length !== 0) why = ' (' + reasons[0] + ')';
         L.push('', 'gate --max ' + out.gate.max + ' (peak B/op): ' + out.gate.verdict + why);
+        const fenceMiss = reasons.some((r) => r.startsWith('fence '));
         for (const g of out.gate.lanes) {
             const row = out.benches[0].rows.find((x) => x.lane === g.lane);
-            const band = g.verdict !== 'NO VERDICT' ? '' : row && row.voids !== 0 ? ' (VOID)' : g.hi === null ? '' :
-                ' (within band -' + short(g.lo) + '/+' + short(g.hi) + ')';
+            const band = g.verdict !== 'NO VERDICT' ? '' : row && row.voids !== 0 ? ' (VOID)' : fenceMiss ? ' (fence)' :
+                g.hi === null ? '' : ' (within band -' + short(g.lo) + '/+' + short(g.hi) + ')';
             L.push('  ' + g.lane.padEnd(24) + num(g.peak).padStart(12) + '  ' + g.verdict + band);
         }
     }
@@ -937,10 +978,18 @@ async function main(argv) {
 // setup must not turn into exit 1 (= FAIL / DIFF): it is NO VERDICT, exit 2 (C-19).
 let direct = false;
 try { direct = !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(SELF); } catch { direct = false; }
+// A second instance of this file in one process (a bench importing it under another URL: a ?query, or a symlink
+// under --preserve-symlinks) would start a second run inside the first: refused at import, which loadBench reports
+// as NO VERDICT exit 2 (APC-fable-9). Set only when run directly, so importing this file still has no side effects.
+const DIRECT_KEY = Symbol.for('@zakkster/lite-utils/alloc-per-op.direct');
 if (direct) {
-    const die = (e) => { process.stderr.write('alloc-per-op: NO VERDICT: uncaught: ' + ((e && e.stack) || e) + '\n'); process.exit(2); };
+    if (globalThis[DIRECT_KEY] === true) throw new Error('alloc-per-op: the tool file was imported again inside its own run (a bench must not import alloc-per-op.mjs)');
+    globalThis[DIRECT_KEY] = true;
+}
+if (direct) {
+    const die = (e) => { process.stderr.write('alloc-per-op: NO VERDICT: uncaught: ' + fmtErr(e) + '\n'); process.exit(2); };
     process.on('uncaughtException', die);
     process.on('unhandledRejection', die);
 }
 if (direct) main(process.argv.slice(2)).then((c) => { process.exitCode = c; },
-    (e) => { process.stderr.write('alloc-per-op: NO VERDICT: ' + (e && e.stack) + '\n'); process.exitCode = 2; });
+    (e) => { process.stderr.write('alloc-per-op: NO VERDICT: ' + fmtErr(e) + '\n'); process.exitCode = 2; });

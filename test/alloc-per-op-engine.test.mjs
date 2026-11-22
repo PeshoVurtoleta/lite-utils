@@ -72,12 +72,16 @@ test('A1 bandOf(1e6, 1e4) and bandOf(1e5, 1e3)', () => {
     assert.deepEqual(bandOf(1e6, 1e4), { lo: 32 / 1e4, hiFixed: 524288 / 1e6, hiRel: 0.001 });
     assert.equal(bandOf(1e5, 1e3).lo, 0.032);
 });
-test('A1 bandOf second point: hiFixed = 524288 / n, lo = 32 / sub (hand: 524288 / 1e5 = 5.24288)', () => {
+test('A1 bandOf second point: hiFixed = 2 x 524288 / n below n 1e6, 524288 / n at 1e6 (S-A59; hand: 2 x 524288 / 1e5 = 10.48576)', () => {
     const { bandOf } = mod();
-    // Must-fail mutant: hiFixed uses sub, or lo uses n.
+    // S-A59 (Q-CA-BAND (a)) re-pin: below BAND_HI_N_MIN = 1e6 the fixed part is doubled (PRELIMINARY factor 2).
+    // Must-fail mutants: hiFixed uses sub, or lo uses n; the factor removed (M-BAND); n <= 1e6 doubles (M-LE);
+    // the threshold at 999999 (M-OFF).
     const b = bandOf(1e5, 1e3);
-    assert.equal(b.hiFixed, 524288 / 1e5);
+    assert.equal(b.hiFixed, 2 * 524288 / 1e5);
     assert.equal(b.hiRel, 0.001);
+    assert.equal(bandOf(999999, 1).hiFixed, 2 * 524288 / 999999);
+    assert.equal(bandOf(1e6, 1e3).hiFixed, 524288 / 1e6);
 });
 
 // ================= A2 gateVerdict =================

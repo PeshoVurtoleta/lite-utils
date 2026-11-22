@@ -259,21 +259,37 @@ alloc-per-op --self-test [--json]                # the engine controls and the s
 ```
 
 - **Bench file.** An ES module exporting `lanes`, a plain object of synchronous functions `lane(i)`; an optional
-  exported `setup()` is awaited once before the first lane. A lane that returns a value is refused, but only
-  `lane(0)`'s return value is checked.
+  exported `setup()`, a plain or async function (a generator is refused, exit 2), is awaited once, BEFORE `lanes` is
+  read, so setup may build or replace lanes. A lane that returns a value is refused, but only `lane(0)`'s return
+  value is checked. A bench that imports the tool file again inside its run is refused (exit 2).
+- **`lane(i)`.** `i` runs 0 .. S-1 in every sub-window (0 .. W-1 in the warm-up) and then restarts; it is not an op
+  index. An allocation keyed on `i` is read for those calls: one that needs i >= S never happens, and one at
+  `i = 0` happens once per sub-window. Count calls inside the lane instead.
 - **Options.** `--n` (ops per window, 100000..100000000, default 1000000), `--windows K` (3..50, default 5; PEAK is the
   max of windows 1..K-1), `--warm W` (warm-up ops, default 200000), `--sub S` (ops per sub-window, 1000..10000,
   default 10000; `N % S == 0` and `N / S <= 10000`), `--lane NAME` (repeatable), `--max B`, `--tol B` (required in A/B,
-  no default), `--json` (one JSON line, last on stdout). Option checks run before any spawn.
+  no default), `--json` (one JSON line, the last line the tool writes to stdout; keep bench output off stdout: what a bench
+  prints later follows that line, and an unfinished line before it shares it). Option checks run before any spawn,
+  except that a `--lane NAME` is checked after the bench loads (so `setup()` has run); a dash-led NAME is a name.
 - **Exit.** 0 `PASS` / `SAME` / a table; 1 `FAIL` / `DIFF` / `ONLY-A` / `ONLY-B`; 2 `NO VERDICT` or a refused
   argument. `--self-test`: 0 when every row is ok, 1 when a row misses, 2 when the selfCheck misses. A statistic inside
   the refusal band is `NO VERDICT`, never a guess. It prints a `gate --max B (peak B/op): <verdict>` or
-  `A/B --tol B (peak B/op): <verdict>` line, not a `VERDICT <v>` line: take the exit code (or `--json`).
-- **Refusal band.** `lo = 32 / S` and `hi = 524288 / N + 0.001 x peak`. A `--max` below `lo`, or a `--tol` below
-  `lo + 524288 / N`, is refused before any spawn and the refusal names the smallest accepted value. The floor (the
-  empty-lane reading) is reported and never subtracted. A rejected sub-window is retried (at most 3 re-runs); a retried
+  `A/B --tol B (peak B/op): <verdict>` line, not a `VERDICT <v>` line: take the exit code (or `--json`). A table
+  run has no verdict field in `--json`; its NO VERDICT (for example a fence miss) is exit 2 plus the stderr line.
+  A GC inside a sub-window VOIDs it: a lane that allocates more than new space holds per sub-window (on the order
+  of 100 B/op at the default S; it depends on the new-space size) is NO VERDICT, never FAIL; lower `--sub`.
+  The tool exits when the event loop drains: a bench that leaves a timer, socket or Worker open keeps it (and the
+  re-spawning parent) running after the verdict line; close or unref them. A signal sent to the tool alone does
+  not reach the `--expose-gc` child it re-spawns: signal the process group, or run `node --expose-gc
+  alloc-per-op.mjs ...` (no re-spawn).
+- **Refusal band.** `lo = 32 / S` and `hi = hiFixed + 0.001 x peak` with `hiFixed = 524288 / N`. A `--max` below `lo`,
+  or a `--tol` below `lo + hiFixed`, is refused before any spawn and the refusal names the smallest accepted value.
+  Below `--n 1000000` `hiFixed` is doubled (`2 x 524288 / N`; PRELIMINARY until the 8-leg corner tally), in `hi` and
+  in the `--tol` floor: at `--n 100000 --sub 10000` the corner `--tol` floor is 10.48896 (was 5.24608). The floor (the
+  empty-lane reading) is reported and never subtracted, and is null (`null` in text) after a selfCheck miss. A rejected sub-window is retried (at most 3 re-runs); a retried
   sub-window calls the lane again, so a lane with side effects sees extra calls.
-- **A/B.** The same file twice is refused; an A/A check needs a copied bench.
+- **A/B.** The same path twice (after realpath) is refused; a hard link or a case variant counts as a copy; an A/A
+  check needs a copied bench.
 - **Scope.** On-heap bytes of the main isolate only. The tool reads the four spaces `new_space`, `old_space`,
   `large_object_space` and `new_large_object_space`; `code_space` and `trusted_space` are counted into `old_space`, and
   `code_large_object_space` and `trusted_large_object_space` into `large_object_space`. `read_only_space` and the shared
@@ -434,8 +450,8 @@ holds only for the build it was measured on.
 
 ## Testing
 
-`npm test` runs 4241 tests (node:test), 4227 pass / 0 fail / 14 skip in one local run (2026-11-22, node v26.8.2,
-macOS arm64, /bin/bash 3.2.57, host load1 1.48 at start; a measurement, not a guarantee).
+`npm test` runs 4281 tests (node:test), 4267 pass / 0 fail / 14 skip in one local run (2026-11-22, node v26.8.2,
+macOS arm64, /bin/bash 3.2.57, host PRELIMINARY, load1 2.98 at start; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 
@@ -457,7 +473,10 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
   occurrence falls inside it, by every rule. The default `--warm` covers constructor, class-field and literal shapes.
   `--sub` below 1000 under-reads on node v22, hence the floor of 1000. A retried sub-window calls the lane again, so a
   lane with side effects sees extra calls; the floor is reported and never subtracted.
-- `alloc-per-op`: a bench that replaces `v8.GCProfiler` gets a fence miss, NO VERDICT, exit 2 (code that imports alloc-per-op.mjs's
+- `alloc-per-op`: a bench that replaces `v8.GCProfiler` gets a fence miss, exit 2: replaced at import or in `setup()`,
+  selfCheck misses (`selfCheck: fence: ...`, no lane measured, floor null); replaced by a lane during the run, every
+  lane verdict is NO VERDICT and stderr says `fence (after): v8.GCProfiler was replaced during the run`. A prototype patch of
+  `v8.GCProfiler` / `v8.getHeapSpaceStatistics`, or a swap restored before the run ends, is not detected. On a fence miss a non-VOID gate lane line in the text output ends ` (fence)`; A/B text lane lines carry no label, and every lane verdict in `--json` is NO VERDICT. (Code that imports alloc-per-op.mjs's
   exports (unsupported, no contract) and replaced `v8.GCProfiler` passes `Profiler: v8.GCProfiler`).
   `--no-concurrent-recompilation` lowers noise and is not forced. The numeric constants are FROZEN by S-A36 (CI run
   43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the

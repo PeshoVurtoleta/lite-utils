@@ -1306,6 +1306,25 @@ every guard gets a control on its fail-OPEN side and on each boundary window it 
 leg where X5c's worst window rises above -lo again. Evidence (local): `.handoff/b90/` (u0/, review-U0.md, u1/,
 review-U1.md, review-U1-r2.md).
 
+**#136 alloc-per-op CLI delta audit (b93): a post-run fence that checked a count but not the profiler; per-lane verdicts
+outliving a fence miss; a band sized from 1e6 evidence applied at 1e5 (TRAP).** Three-model audit (opus
+claude-opus-5-5, fable claude-fable-5-2, neon); every finding confirmed by another model (RULINGS-cli-audit.md). (a) A
+lane that replaced `v8.GCProfiler` after selfCheck read PASS exit 0. Rule: `fenceOk` also requires the export to be
+the verified one, and every lane verdict is NO VERDICT on a fence miss (text: only a non-VOID gate lane line ends
+` (fence)`, A/B text lines carry no label, Q-B93-C14 (a)). A prototype patch, or a swap that is restored, stays
+undetectable and is documented (class 3). (b) isFinite was kept only because a prototype-patched `stop()` returning
+length Infinity reaches it (law 6). (c) At `--n 100000`, Maglev concurrent-compile finalization landed 330-584 KB
+one-off steps in judged windows: clean lanes read up to 5.84 B/op against hi 5.2489, and 2 FAIL verdicts in 150
+Maglev-only runs. Rule (Q-CA-BAND (a)): hiFixed doubled below N = 1e6, PRELIMINARY until an 8-leg tally freezes 2 or 4;
+the corner `--tol` floor goes from 5.24608 to 10.48896. (d) After a selfCheck miss the floor printed a number; it is
+now null. (e) Defect caught by the A1 review (LITERAL): errText read a getter-backed `e.message` twice (TOCTOU: the
+second read returned a non-string and `m.startsWith` threw outside the try) -> read once. Known class-3 survivor
+M11: main's reject arm is reachable only by a bench that patches `process.stderr.write` (exit 2 either way; probe
+`.handoff/b93/a1fix/probes/m11.mjs`). Lesson: a constant frozen on CI evidence binds only the cells that evidence
+covered. Re-check every corner before calling it frozen, and a fail-closed exit does not excuse a per-item verdict that
+says otherwise. What would re-open (c): a clean judged reading above 2 x 524288 / N on any leg. Evidence (local):
+`audit/2026-11-22-alloc-per-op-cli/`, `.handoff/b93/`.
+
 ---
 
 ## E. Process lessons
