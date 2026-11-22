@@ -6,8 +6,8 @@
 
 Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
 1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3).
-1.1.0 PREPARED 2026-11-22 (b94; alloc-per-op, post-1.0 minor 1): the maintainer commits, tags v1.1.0 and publishes.
-Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5), item 2 (the 1.0.x patch, Q-M-PATCH (a)).
+1.1.0 RELEASED 2026-11-22: commit 65e500c, tag v1.1.0, npm `@zakkster/lite-utils` 1.1.0 (alloc-per-op, minor 1).
+Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5), item 2 (the 1.1.1 patch, Q-M-PATCH (a)).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -214,13 +214,18 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   1. 1.1.0 alloc-per-op: its own tool with `bin: alloc-per-op` (Q-M-SHAPE (a); LiteBisect's
      `test/gates/lu.mjs` resolves it by that stem). Input: the maintainer's untracked prototype
      `alloc-per-op.mjs` (sha256/8 d4386d85). A research burst comes first (new public surface).
-     STATUS (b94): BUILT (engine, CLI, root copy, package.json bin / files[], CI self-test step, LiteBisect-shape test,
-     docs in the working tree); A4 closed (S-A51, CI run 44945969102, 8/8 legs PASS); the Q-M-AUDIT audit (two models + cross-checks) is fixed in b93 (RULINGS-cli-audit.md); 1.1.0 PREPARED in b94 (status line 9).
-  2. 1.0.x maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a)). No new surface.
+     STATUS: SHIPPED 2026-11-22 as 1.1.0 (commit 65e500c, tag v1.1.0, npm 1.1.0). Engine, CLI, root copy,
+     package.json bin / files[], CI self-test step, LiteBisect-shape test and docs committed; A4 closed (S-A51,
+     CI run 44945969102, 8/8 legs PASS); the Q-M-AUDIT audit (two models + cross-checks) fixed in b93
+     (RULINGS-cli-audit.md).
+  2. 1.1.1 maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a); versioned 1.1.1 by Q-PATCH-NAME (a),
+     maintainer 2026-11-22). No new surface.
   3. 1.2.0 import-audit (L1 below).
   4. 1.3.0 code-size-diff (L4 below).
   5. 1.4.0 suite-run (L6 below).
-  6. heap-count-diff (L5 below): kept or dropped after 1.1.0 ships.
+  6. heap-count-diff (L5 below): KEPT (Q-HCD (a), maintainer 2026-11-22), after 1.4.0 and before shape-diff.
+     Its research burst lands the bash 3.2 port (R2-L5-1), a streaming count past the ~512 MiB string-length
+     ceiling (readFileSync + JSON.parse, R2-L5-2) and a stated per-run cost before any planner pass.
   7. shape-diff (L2 below): last.
   ablation-run (L3 below) is not a minor: if ever wanted, a mode of deopt-diff / allocation-diff.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
@@ -307,3 +312,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   alloc-per-op as its own command, a full two-model audit for alloc-per-op only and lighter checks for the
   rest, the 1.0.x patch after 1.1.0, before it" -> Q-M-ORDER (a), Q-M-SHAPE (a), Q-M-AUDIT (a), Q-M-PATCH (a)
   (read as "after 1.1.0, before 1.2.0"; confirmed by Q-B79-PATCH, b79). Shape: section 3, "Post-1.0 minors".
+- D-6 ANSWERED 2026-11-22 (after the 1.1.0 release): Q-PATCH-NAME (a), in the maintainer's words "Yes, 1.1.1": the
+  post-1.1.0 maintenance patch is versioned 1.1.1. Q-HCD (a) (b95, chosen option "Keep at slot 6"): heap-count-diff
+  stays a minor, after 1.4.0 suite-run and before shape-diff; its research burst lands R2-L5-1, R2-L5-2 and a stated
+  per-run cost first. Shape: section 3, "Post-1.0 minors", items 2 and 6.
