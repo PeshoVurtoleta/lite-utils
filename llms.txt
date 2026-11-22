@@ -11,7 +11,7 @@ This is not a JS library: no JS API is supported (alloc-per-op.mjs's exports ser
 
 ## Status
 
-Version 1.0.0 (2026-11-12), the first release, on npm as @zakkster/lite-utils.
+Version 1.1.0 (2026-11-22), on npm as @zakkster/lite-utils (1.0.0, 2026-11-12, was the first release).
 
 Install (instructions; pick one):
 

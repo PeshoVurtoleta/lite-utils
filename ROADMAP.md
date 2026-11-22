@@ -5,13 +5,14 @@
 > lite-perf-gate into a test suite.
 
 Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
-1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3). Next: the
-post-1.0 minors (section 3, "Post-1.0 minors"; D-5).
+1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3).
+1.1.0 PREPARED 2026-11-22 (b94; alloc-per-op, post-1.0 minor 1): the maintainer commits, tags v1.1.0 and publishes.
+Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5), item 2 (the 1.0.x patch, Q-M-PATCH (a)).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
 
-- This repo holds shell scripts plus their tests, and one node CLI (alloc-per-op, 1.1.0 candidate). No lite-leak, lite-gc-profiler or lite-perf-gate
+- This repo holds shell scripts plus their tests, and one node CLI (alloc-per-op, since 1.1.0). No lite-leak, lite-gc-profiler or lite-perf-gate
   integration. Tests are `node:test` suites in the style of LiteSignal `test/94-inlining-budget-diff.test.mjs`.
 - Each shipped script is ONE self-contained file a client can copy and run (`bash`, POSIX awk, `node`,
   optional `git`). Shared code exists only at authoring time (see S-2).
@@ -49,7 +50,7 @@ belong here.
   (expands `# @include lib/<file>.sh` marker lines in `src/<name>.sh` into `<name>.sh` at the repo root).
   The generated file is committed. A test fails when any shipped script differs from a fresh build.
   Shipped scripts never `source` anything at run time.
-  Node tool (Q-AP-LAYOUT (a), 1.1.0 candidate): the node CLI is authored in `src/alloc-per-op.mjs` and copied BYTE FOR
+  Node tool (Q-AP-LAYOUT (a), since 1.1.0): the node CLI is authored in `src/alloc-per-op.mjs` and copied BYTE FOR
   BYTE to the root `alloc-per-op.mjs` by `build.sh` (an allowlist of one file; no `@include` expansion; the refusals
   are listed in `build.sh`'s header and the 9417eea commit message); the root is committed, a test fails on drift, and it
   imports `node:` modules only. A client may copy that one file.
@@ -213,8 +214,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   1. 1.1.0 alloc-per-op: its own tool with `bin: alloc-per-op` (Q-M-SHAPE (a); LiteBisect's
      `test/gates/lu.mjs` resolves it by that stem). Input: the maintainer's untracked prototype
      `alloc-per-op.mjs` (sha256/8 d4386d85). A research burst comes first (new public surface).
-     STATUS (b91): BUILT (engine, CLI, root copy, package.json bin / files[], CI self-test step, LiteBisect-shape test,
-     docs in the working tree); A4 closed (S-A51, CI run 44945969102, 8/8 legs PASS); the Q-M-AUDIT audit and the release are pending.
+     STATUS (b94): BUILT (engine, CLI, root copy, package.json bin / files[], CI self-test step, LiteBisect-shape test,
+     docs in the working tree); A4 closed (S-A51, CI run 44945969102, 8/8 legs PASS); the Q-M-AUDIT audit (two models + cross-checks) is fixed in b93 (RULINGS-cli-audit.md); 1.1.0 PREPARED in b94 (status line 9).
   2. 1.0.x maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a)). No new surface.
   3. 1.2.0 import-audit (L1 below).
   4. 1.3.0 code-size-diff (L4 below).

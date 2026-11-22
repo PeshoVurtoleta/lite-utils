@@ -5,10 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-1.1.0 candidate (no version header and no VERSION / package.json bump yet; the audit and the release are pending).
-Test counts and the final npm test run: 4281 tests, 4267 pass, 0 fail, 14 skip (2026-11-22, node v26.8.2,
-/bin/bash 3.2.57, host PRELIMINARY: load1 2.98 at start vs baseline 2.21, another node at 45%; 1773 s; private copy
-with .git, quiet-lock; one run; tree f572f08 + the b93 audit-fix changes, docs before the review-r2 doc fix).
+## [1.1.0] - 2026-11-22
+
+Minor release. Adds a sixth tool, `alloc-per-op` (a node CLI, `bin: alloc-per-op`), with the b93 audit fixes to it;
+the five bash tools are unchanged. Zero runtime dependencies; node >= 22, bash >= 3.2.
+npm test (the b94 release gate): 4281 tests, 4267 pass, 0 fail, 14 skip (2026-11-22, node v26.8.2, /bin/bash 3.2.57,
+host PRELIMINARY: load1 7.83 at start vs baseline 2.21, another node at 104.9%; 1655 s; private copy with .git,
+quiet-lock; one run; tree 385a843 + the 1.1.0 version bump, docs before this count line and the README Testing
+line were filled). The b93 closing run on the pre-release tree gave the same counts.
 
 ### Added
 
@@ -68,7 +72,8 @@ with .git, quiet-lock; one run; tree f572f08 + the b93 audit-fix changes, docs b
 - U6: below `--n 1000000` the band's fixed part is doubled (`hiFixed = 2 x 524288 / N`, a non-exported
   `BAND_HI_N_MIN`; the `:CONSTANTS` block is unchanged), PRELIMINARY until the 8-leg corner tally. The corner `--tol`
   floor at `--n 100000 --sub 10000` is 10.48896 (was 5.24608). Every `--n >= 1e6` pin is unchanged.
-- `-h` text: the setup, `lane(i)`, VOID, hang and signal, `--json` and band lines above.
+- `-h` text: the setup, `lane(i)`, VOID, hang and signal, `--json` and band lines (the band behaviour is U6
+  above; the rest is under Fixed).
 
 ### Fixed
 
@@ -90,11 +95,8 @@ b93 audit-fix burst on the never-released `alloc-per-op` (RULINGS-cli-audit.md; 
 - Docs (U14 and rulings): `lane(i)` index, VOID above ~100 B/op per sub-window, the event-loop exit rule and the orphan
   child on a signal, `--json` is the last stdout line, `--lane NAME` checked after setup (dash-led NAME is a name),
   A/B same path after realpath (hard link / case variant = a copy).
-
-### Tests (b93)
-
-- New `test/alloc-per-op-fixa.test.mjs` (18 rows) and `test/alloc-per-op-fixb.test.mjs` (16 rows); the engine A1 row is
-  re-pinned for the doubled band below `--n 1e6`. Tier: DETERMINISTIC.
+- Tests (b93): new `test/alloc-per-op-fixa.test.mjs` (18 rows) and `test/alloc-per-op-fixb.test.mjs` (16 rows);
+  the engine A1 row is re-pinned for the doubled band below `--n 1e6`. Tier: DETERMINISTIC.
 - `test/audit-g4.test.mjs` real-node caps 120000 -> 480000 ms (CI-F1: run 44963451684, macOS node 22 leg, "A1 real node
   OLD twin" 136325 ms against the 120000 ms cap). `package.json` "test": `--test-timeout` 3600000 -> 7200000 (node 22
   applies it per file; the slow leg of that run took allocation-diff ~1983 s and inlining-budget-diff ~2100 s per file;
