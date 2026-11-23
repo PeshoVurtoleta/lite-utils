@@ -6,7 +6,7 @@
 // .handoff/frozen/b63-g3/allocation-diff.sh, sha256/8 e0b55101). Every behaviour row (A1 A4 A5 A6 A7 A8 A10) must FAIL on
 // that frozen build; the controls (A2 A3 A9) must pass on it.
 //   A1  D-LIT --zero --runs 3: exit 1 or 2, no VERDICT ZERO, run 1 young >= 1, head ends with the pretenuring pin
-//   A2  D-F64 --zero --runs 3: exit 0, VERDICT ZERO, young 0 in every run, old 0 (control)
+//   A2  D-F64 --zero --runs 3: exit 0 VERDICT ZERO, or the accepted guard NO-VERDICT exit 2 ('trace lost 1 GC line', Q-B98-L2TWINS (a)); young 0 in every run, old 0 (control)
 //   A3  retention: 3 invocations, TMPDIR a fresh dir: 0 entries left; the driver dir holds only driver.js (control)
 //   A4  --v8-flags refusals (pretenuring x3 spellings, stress-concurrent-inlining x3): exit 2, exactly one die line, 0 spawns
 //   A5  --node <d>/a=b/node: exit 2, the R26 die text, 0 spawns
@@ -222,14 +222,83 @@ test('A1 D-LIT --zero --runs 3: young GCs in run 1, never ZERO, head names the p
     assert.ok(o.split('\n').some((l) => l.startsWith('mode ') && l.endsWith(PIN_TAIL)), `the mode line must end with the pin\n${msg(r)}`);
 });
 
-test('A2 D-F64 --zero --runs 3: ZERO, young 0 in each run, old 0 (control, same on old)', { skip: nodeSkip }, () => {
+// A2 verdict predicate (Q-B98-L2TWINS (a) / Q-B97-L2ROW (a)): 'zero' (exit 0, VERDICT ZERO) or 'guard1' (exit 2 whose
+// ONLY NO-VERDICT reason is "trace lost 1 GC line in run k (guard count c, trace c-1)"); the counts line must read
+// young 0 in run 1, old 0, young per run 0,0,0 in both. Anything else throws AssertionError.
+const A2_COUNTS = /^ {2}driver: run 1 young 0, old 0 in the window; .*; young per run 0,0,0$/m;
+const A2_REASON = /^ {2}NO-VERDICT -- driver: trace lost 1 GC line in run ([1-3]) \(guard count (\d+), trace (\d+)\)$/;
+function a2Ok(r) {
+    const ls = r.stdout.split('\n');
+    assert.equal(youngOf(r.stdout, 1), 0, msg(r));
+    assert.match(r.stdout, A2_COUNTS, msg(r));
+    const verdicts = ls.filter((l) => l.startsWith('VERDICT'));
+    if (r.status === 0) {
+        assert.match(r.stdout, /VERDICT ZERO/, msg(r));
+        return 'zero';
+    }
+    assert.equal(r.status, 2, msg(r));
+    assert.deepEqual(verdicts, ['VERDICT NO-VERDICT'], msg(r));
+    const nv = ls.filter((l) => l.startsWith('  NO-VERDICT -- '));
+    assert.equal(nv.length, 1, msg(r));
+    const m = A2_REASON.exec(nv[0]);
+    assert.ok(m !== null, `not the ruled guard reason\n${msg(r)}`);
+    assert.equal(Number(m[3]), Number(m[2]) - 1, msg(r));
+    return 'guard1';
+}
+const a2Lines = (r) => { const ls = r.stdout.split('\n'); return `${ls.find((l) => l.startsWith('  NO-VERDICT -- '))} | ${ls.find((l) => /^ {2}driver: run 1 young/.test(l))}`; };
+
+test('A2 D-F64 --zero --runs 3: ZERO or the ruled guard NO-VERDICT (trace lost 1 GC line), young 0 in each run, old 0 (control, same on old)', { skip: nodeSkip }, (t) => {
     const r = run(driverDir(D_F64), ['--zero', '--runs', '3']);
+    const how = a2Ok(r);
+    if (how === 'guard1') t.diagnostic('A2 accepted guard NO-VERDICT (Q-B98-L2TWINS (a) / Q-B97-L2ROW (a)): ' + a2Lines(r));
+});
+
+// A2 canned pin (no spawn). Fixtures: the CI sighting (b96-ci 137420421262 ubuntu-node26) and variants; expected values
+// come from the ruling text, not from running the tool.
+const A2_MODE = `mode    zero  runs 3  v8 flags --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --${PIN_TAIL.slice(2)}`;
+const a2Fix = ({ status = 2, young = '0,0,0', reason = 'trace lost 1 GC line in run 1 (guard count 13, trace 12)', verdict = 'NO-VERDICT', mode = A2_MODE, nv = 1 } = {}) => ({
+    status,
+    stderr: '',
+    stdout: ['driver  /tmp/x/drv/driver.js  sha256/8 157c4dc3', mode, '',
+        `  driver: run 1 young 0, old 0 in the window; 12 GC line(s) before the fence, 6 after end; young per run ${young}`,
+        ...(reason === null ? [] : Array(nv).fill(`  NO-VERDICT -- driver: ${reason}`)), '', `VERDICT ${verdict}`, ''].join('\n'),
+});
+const a2Strict = (r) => { // the HEAD (ccd531f) A2 body
     const o = all(r);
     assert.equal(r.status, 0, msg(r));
     assert.match(o, /VERDICT ZERO/, msg(r));
     assert.equal(youngOf(o, 1), 0, msg(r));
     assert.match(o, /young per run 0,0,0\b/, msg(r));
     assert.match(o, /old 0/, msg(r));
+};
+test('A2 canned pin: guard1 sightings pass, everything else fails (no spawn)', (t) => {
+    const zero = a2Fix({ status: 0, reason: null, verdict: 'ZERO' });
+    assert.equal(a2Ok(a2Fix()), 'guard1');
+    assert.equal(a2Ok(a2Fix({ reason: 'trace lost 1 GC line in run 3 (guard count 14, trace 13)' })), 'guard1');
+    assert.equal(a2Ok(zero), 'zero');
+    const bad = {
+        'old-gen reason': a2Fix({ reason: 'old-generation GC in the window in run 1 (1 old GC line)' }),
+        'no guard count': a2Fix({ reason: 'no guard count in run 1' }),
+        'lost 2 lines': a2Fix({ reason: 'trace lost 2 GC lines in run 1 (guard count 14, trace 12)' }),
+        'young 1,0,0': a2Fix({ young: '1,0,0' }),
+        'young 0,1,0': a2Fix({ young: '0,1,0' }),
+        'young 0,0,1': a2Fix({ young: '0,0,1' }),
+        'extra line in trace': a2Fix({ reason: '1 GC line in run 1 the guard did not count (guard count 12, trace 13)' }),
+        'trace 11': a2Fix({ reason: 'trace lost 1 GC line in run 1 (guard count 13, trace 11)' }),
+        'status 1': a2Fix({ status: 1 }),
+        'status 2 + VERDICT ZERO': a2Fix({ verdict: 'ZERO' }),
+        'old 1 in the window': { ...a2Fix(), stdout: a2Fix().stdout.replace('old 0 in the window', 'old 1 in the window') },
+        'status 0 but VERDICT NO-VERDICT': a2Fix({ status: 0, reason: null, verdict: 'NO-VERDICT' }),
+        'status 0 but VERDICT NONZERO': a2Fix({ status: 0, reason: null, verdict: 'NONZERO' }),
+        'two NO-VERDICT lines': a2Fix({ nv: 2 }),
+    };
+    for (const [name, r] of Object.entries(bad)) {
+        t.diagnostic(`A2 pin must reject: ${name}`);
+        assert.throws(() => a2Ok(r), assert.AssertionError, name);
+    }
+    // parity: the HEAD body refuses the CI sighting and accepts a ZERO run
+    assert.throws(() => a2Strict(a2Fix()), assert.AssertionError);
+    a2Strict(zero);
 });
 
 test('A3 retention: 3 runs of the tool leave TMPDIR empty and the driver dir with only driver.js (control)', { skip: nodeSkip }, () => {

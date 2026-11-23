@@ -1236,27 +1236,86 @@ test(`allocation-diff Q-A1 control: revert checks (${A1_OPEN_TEETH.map((x) => x[
 const A1_LIVE_DRIVER = ["const fs = require('fs');", 'const keep = new Array(1024);', 'function hot(i) { return { a: i, b: i + 1 }; }',
     'for (let i = 0; i < 20000; i++) keep[i & 1023] = hot(i);', "fs.writeSync(1, '@@LITE-MARK start\\n');",
     'for (let i = 0; i < 300000; i++) keep[i & 1023] = hot(i);', "fs.writeSync(1, '@@LITE-MARK end\\n');", ''].join('\n');
+// b98 U8c (Q-B97-L2FIX (a), FINDING-b97-L2TRACE): every live row runs with --out <its mkdtemp>/out; on a guard
+// NO-VERDICT the run's raw stdout (the GC lines around end / gcn) becomes r.diag, so a CI sighting names H1 / H2 / H3.
+// guardNv: the FIRST `  NO-VERDICT -- <side>: ` line whose reason is one of judge()'s 3 guard strings
+// (src/allocation-diff.sh judge(); singular "line" exactly when d = 1), anchored; else null. c, g null for "no guard count".
+const GNV_LINE = /^ {2}NO-VERDICT -- (before|after|driver): (.*)$/;
+const GNV_LOST = /^trace lost (\d+) GC (lines?) in run (\d+) \(guard count (\d+), trace (\d+)\)$/;
+const GNV_UNCOUNTED = /^(\d+) GC (lines?) in run (\d+) the guard did not count \(guard count (\d+), trace (\d+)\)$/;
+const GNV_NONE = /^no guard count in run (\d+)$/;
+function guardNv(stdout) {
+    for (const l of String(stdout).split('\n')) {
+        const m = GNV_LINE.exec(l);
+        if (!m) continue;
+        const side = m[1], reason = m[2];
+        for (const re of [GNV_LOST, GNV_UNCOUNTED]) {
+            const x = re.exec(reason);
+            if (x && (x[2] === 'line') === (x[1] === '1')) return { side, reason, k: Number(x[3]), c: Number(x[4]), g: Number(x[5]) };
+        }
+        const n = GNV_NONE.exec(reason);
+        if (n) return { side, reason, k: Number(n[1]), c: null, g: null };
+    }
+    return null;
+}
+// the dump of <out>/raw/<side>/run.<k>.txt: a header, the GC-line counts per stretch (+ the reason's c / g), then the raw
+// lines from 3 before `@@LITE-MARK end` to EOF (<= 60, each <= 200 chars). Never throws; never '' on a guard NV.
+const GNV_GC = /^\[\d+:0x[0-9a-f]+\]/;
+const GNV_MARKS = ['@@LITE-MARK start', '@@LITE-MARK end', '@@LITE-MARK gcn'];
+function guardDump(outDir, nv) {
+    const head = `guard NO-VERDICT dump (${process.version} ${process.platform}/${process.arch}): ${nv.reason}`;
+    const p = join(outDir, 'raw', nv.side, `run.${nv.k}.txt`);
+    let txt;
+    try { txt = readFileSync(p, 'latin1'); } catch (e) { return `${head}\nraw file missing or unreadable: ${p} (${e && e.code ? e.code : String(e)})`; }
+    const L = txt.split('\n');
+    if (L.length && L[L.length - 1] === '') L.pop();
+    const n = [0, 0, 0, 0], at = [0, 0, 0];   // at: 1-based line of each mark, in order; 0 = none
+    let seg = 0;
+    for (let i = 0; i < L.length; i++) {
+        if (seg < 3 && L[i] === GNV_MARKS[seg]) { at[seg] = i + 1; seg++; continue; }
+        if (GNV_GC.test(L[i])) n[seg]++;
+    }
+    const sh = (x) => (x === null ? 'none' : String(x));
+    const cnt = `GC lines: before start ${n[0]}, start..end ${n[1]}, end..gcn ${n[2]}, after gcn ${n[3]} | guard count ${sh(nv.c)}, trace ${sh(nv.g)}` +
+        ` | marks at line start ${at[0] || 'none'} end ${at[1] || 'none'} gcn ${at[2] || 'none'} of ${L.length} | ${p}`;
+    const from = at[1] ? Math.max(0, at[1] - 1 - 3) : Math.max(0, L.length - 60);
+    const tail = L.slice(from, from + 60).map((l) => (l.length > 200 ? l.slice(0, 200) : l));
+    const cut = L.length - from - tail.length;
+    return [head, cnt, ...(at[1] ? [] : ['(no @@LITE-MARK end line: the last lines follow)']), ...tail, ...(cut > 0 ? [`(${cut} more line(s) cut)`] : [])].join('\n');
+}
+// r.diag / r.msg for a live run; r.msg is an assertion MESSAGE only (every count / match stays on r.out or r.L)
+function liveDiag(r, outDir) {
+    const nv = guardNv(r.stdout);
+    r.diag = nv ? guardDump(outDir, nv) : '';
+    r.msg = r.out + (r.diag ? '\n' + r.diag : '');
+    return r;
+}
+const emitDiag = (t, r) => { if (r.diag) t.diagnostic(r.diag); };
 function a1Live(script) {
     const d = mkdtempSync(join(tmpdir(), 'ad-a1l-'));
     try {
         writeFileSync(join(d, 'driver.js'), A1_LIVE_DRIVER);
-        const r = capSync('bash', [script, '--node', process.execPath, '--runs', '2', '--zero', join(d, 'driver.js')], { encoding: 'utf8', cwd: d, env: { ...ENV, TMPDIR: d } }, 120000, `${AD_RUN} ${basename(script)}`);
-        return { status: r.status, out: r.stdout + r.stderr };
+        // d is cwd, TMPDIR and the driver dir at once (no drv/ / tmp/ split, no A3 check here): out sits in d, made by the tool
+        const out = join(d, 'out');
+        const r = capSync('bash', [script, '--node', process.execPath, '--runs', '2', '--zero', '--out', out, join(d, 'driver.js')], { encoding: 'utf8', cwd: d, env: { ...ENV, TMPDIR: d } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return liveDiag({ status: r.status, out: r.stdout + r.stderr, stdout: r.stdout }, out);
     } finally { rmSync(d, { recursive: true, force: true }); }
 }
 const A1_LIVE_TEETH = ['A1-live-control', [[A1_WIDE, A1_WIDE.replace(' ms +(', ' ms #(')]]];
-test(`allocation-diff Q-A1 live (${process.version}): a real node's --trace-gc lines never read as "does not match the --trace-gc grammar"`, { skip }, () => {
+test(`allocation-diff Q-A1 live (${process.version}): a real node's --trace-gc lines never read as "does not match the --trace-gc grammar"`, { skip }, (t) => {
     const r = a1Live(SCRIPT);
-    assert.ok([0, 1, 2].includes(r.status), r.out);
-    assert.match(r.out, /^ {2}driver: run 1 young \d+/m, r.out);
-    assert.equal(count(r.out, 'does not match the --trace-gc grammar'), 0, r.out);
+    emitDiag(t, r);
+    assert.ok([0, 1, 2].includes(r.status), r.msg);
+    assert.match(r.out, /^ {2}driver: run 1 young \d+/m, r.msg);
+    assert.equal(count(r.out, 'does not match the --trace-gc grammar'), 0, r.msg);
 });
-test('allocation-diff Q-A1 live: must-fail control (a root whose grammar refuses every line) shows the grammar text on this node', { skip }, () => {
+test('allocation-diff Q-A1 live: must-fail control (a root whose grammar refuses every line) shows the grammar text on this node', { skip }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-a1c-'));
     try {
         const r = a1Live(variant(dir, A1_LIVE_TEETH[0], A1_LIVE_TEETH[1]));
-        assert.equal(r.status, 2, r.out);
-        assert.ok(count(r.out, 'does not match the --trace-gc grammar') >= 1, r.out);
+        emitDiag(t, r);
+        assert.equal(r.status, 2, r.msg);
+        assert.ok(count(r.out, 'does not match the --trace-gc grammar') >= 1, r.msg);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // --- b63 lane g3 live rows (PLAN-b63-g3 ASSERTIONS A1-A3, A7-A9; ADDENDUM A2: tier DETERMINISTIC -- GC counts and exits
@@ -1298,46 +1357,176 @@ function g3Live(script, driver, args, env = {}) {
     const d = mkdtempSync(join(tmpdir(), 'ad-g3l-'));
     try {
         const dd = join(d, 'drv'); const tmp = join(d, 'tmp');
+        const out = join(d, 'out');   // a sibling of drv/ and tmp/ (A3's left / drv unchanged), made by the tool
         mkdirSync(dd); mkdirSync(tmp);
         writeFileSync(join(dd, 'driver.js'), driver);
-        const r = capSync('bash', [script, '--node', process.execPath, ...args, join(dd, 'driver.js')], { encoding: 'utf8', cwd: dd, env: { ...ENV, TMPDIR: tmp, ...env } }, 120000, `${AD_RUN} ${basename(script)}`);
-        return { status: r.status, out: r.stdout + r.stderr, L: r.stdout.split('\n'), left: readdirSync(tmp), drv: readdirSync(dd) };
+        const r = capSync('bash', [script, '--node', process.execPath, ...args, '--out', out, join(dd, 'driver.js')], { encoding: 'utf8', cwd: dd, env: { ...ENV, TMPDIR: tmp, ...env } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return liveDiag({ status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, L: r.stdout.split('\n'), left: readdirSync(tmp), drv: readdirSync(dd) }, out);
     } finally { rmSync(d, { recursive: true, force: true }); }
 }
-// A1 on one D-LIT run, A3 on its dirs
+// the head pin line (g3LitOk, l2Ok)
+const G3_PIN_HEAD = 'mode    zero  runs 3  v8 flags ';
+const G3_PIN_TAIL = ' --no-concurrent-recompilation --no-allocation-site-pretenuring';
+// A1 on one D-LIT run, A3 on its dirs (the caller emits r.diag: g3LitOk has no t)
 function g3LitOk(r) {
-    assert.ok(r.status === 1 || r.status === 2, 'D-LIT exit ' + r.status + '\n' + r.out);
-    assert.equal(count(r.out, 'VERDICT ZERO'), 0, r.out);
-    assert.match(r.out, /^ {2}driver: run 1 young [1-9]/m, r.out);
-    assert.ok(r.L.some((l) => l.startsWith('mode    zero  runs 3  v8 flags ') && l.endsWith(' --no-concurrent-recompilation --no-allocation-site-pretenuring')), r.out);
+    assert.ok(r.status === 1 || r.status === 2, 'D-LIT exit ' + r.status + '\n' + r.msg);
+    assert.equal(count(r.out, 'VERDICT ZERO'), 0, r.msg);
+    assert.match(r.out, /^ {2}driver: run 1 young [1-9]/m, r.msg);
+    assert.ok(r.L.some((l) => l.startsWith(G3_PIN_HEAD) && l.endsWith(G3_PIN_TAIL)), r.msg);
     assert.deepEqual(r.left, [], 'left in TMPDIR');
     assert.deepEqual(r.drv, ['driver.js']);
 }
-test('allocation-diff Q-RL-PRETEN live L1 (A1 + A3): D-LIT (a pretenurable literal site) --zero --runs 3, 3 invocations -> each exit 1 or 2, never ZERO, run 1 young >= 1, the pin in the head; TMPDIR empty', { skip: G3_SKIP }, () => {
-    for (let k = 0; k < 3; k++) g3LitOk(g3Live(SCRIPT, G3_LIT, ['--zero', '--runs', '3']));
+test('allocation-diff Q-RL-PRETEN live L1 (A1 + A3): D-LIT (a pretenurable literal site) --zero --runs 3, 3 invocations -> each exit 1 or 2, never ZERO, run 1 young >= 1, the pin in the head; TMPDIR empty', { skip: G3_SKIP }, (t) => {
+    for (let k = 0; k < 3; k++) { const r = g3Live(SCRIPT, G3_LIT, ['--zero', '--runs', '3']); emitDiag(t, r); g3LitOk(r); }
 });
-test('allocation-diff Q-RL-PRETEN live L1 teeth (A5 mutant twin): the root minus the --no-allocation-site-pretenuring pin reads D-LIT as exit 0 VERDICT ZERO, and L1 fails on it', { skip: G3_SKIP || G3_V26 }, () => {
+test('allocation-diff Q-RL-PRETEN live L1 teeth (A5 mutant twin): the root minus the --no-allocation-site-pretenuring pin reads D-LIT as exit 0 VERDICT ZERO, and L1 fails on it', { skip: G3_SKIP || G3_V26 }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-g3t-'));
     try {
         const r = g3Live(variant(dir, 'M-preten-pin-live', M_PRETEN_PIN), G3_LIT, ['--zero', '--runs', '3']);
-        assert.equal(r.status, 0, r.out);
-        assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', r.out);
+        emitDiag(t, r);
+        assert.equal(r.status, 0, r.msg);
+        assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', r.msg);
         assert.throws(() => g3LitOk(r), assert.AssertionError);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-test('allocation-diff Q-RL-PRETEN live L2 (A2 control): D-F64 (no allocation in the window) --zero --runs 3 -> exit 0 VERDICT ZERO, young 0,0,0, old 0', { skip: G3_SKIP }, () => {
+// Q-B97-L2ROW (a): L2 passes on exit 0 ZERO, or on exit 2 whose ONLY NO-VERDICT is 'trace lost 1 GC line in run k (guard
+// count c, trace c-1)' with the counts line still young 0,0,0 / old 0 (the A2 control stays proven). Returns 'zero' or
+// 'guard1'; anything else throws AssertionError. Both branches: the head pin line, one counts line, A3.
+const L2_COUNTS = /^ {2}driver: run 1 young 0, old 0 in the window; .*; young per run 0,0,0$/;
+const L2_GUARD1 = /^ {2}NO-VERDICT -- driver: trace lost 1 GC line in run ([1-3]) \(guard count (\d+), trace (\d+)\)$/;
+function l2Ok(r) {
+    const m = r.msg === undefined ? r.out : r.msg;
+    assert.ok(r.L.some((l) => l.startsWith(G3_PIN_HEAD) && l.endsWith(G3_PIN_TAIL)), 'the head pin line\n' + m);
+    assert.equal(r.L.filter((l) => L2_COUNTS.test(l)).length, 1, 'one counts line, young 0,0,0 / old 0\n' + m);
+    assert.deepEqual([r.left, r.drv], [[], ['driver.js']], 'A3\n' + m);
+    const v = r.L.filter((l) => l.startsWith('VERDICT ')).join('|');
+    const nv = r.L.filter((l) => l.startsWith('  NO-VERDICT -- '));
+    if (r.status === 0) {
+        assert.equal(v, 'VERDICT ZERO', m);
+        assert.equal(nv.length, 0, m);
+        return 'zero';
+    }
+    if (r.status === 2) {
+        assert.equal(v, 'VERDICT NO-VERDICT', m);
+        assert.equal(nv.length, 1, 'exactly one NO-VERDICT line\n' + m);
+        const x = L2_GUARD1.exec(nv[0]);
+        assert.ok(x, 'the only NO-VERDICT is "trace lost 1 GC line"\n' + m);
+        assert.equal(Number(x[3]), Number(x[2]) - 1, 'trace = guard count - 1\n' + m);
+        return 'guard1';
+    }
+    assert.fail(`L2 exit ${r.status} (want 0 ZERO or 2 "trace lost 1 GC line")\n${m}`);
+}
+test('allocation-diff Q-RL-PRETEN live L2 (A2 control): D-F64 (no allocation in the window) --zero --runs 3 -> exit 0 VERDICT ZERO, or exit 2 whose only NO-VERDICT is "trace lost 1 GC line" (trace = count - 1; Q-B97-L2ROW (a)); young 0,0,0, old 0 either way', { skip: G3_SKIP }, (t) => {
     const r = g3Live(SCRIPT, G3_F64, ['--zero', '--runs', '3']);
+    emitDiag(t, r);
+    const how = l2Ok(r);
+    if (how === 'guard1') t.diagnostic('L2 accepted guard NO-VERDICT (Q-B97-L2ROW (a)): ' + r.L.find((l) => l.startsWith('  NO-VERDICT -- ')));
+});
+// the canned pin (no spawn): fixtures from the b96 CI sighting (.handoff/evidence/b96-ci/137420421262-ubuntu-node26-failed.log
+// :4928-4936, verbatim; its cut first line taken from a local node v26.8.2 run's head line 1)
+const L2_CI = ['allocation-diff  node v26.8.2  /opt/homebrew/bin/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)',
+    'driver  /tmp/ad-g3l-Rdz7Mc/drv/driver.js  sha256/8 157c4dc3',
+    'mode    zero  runs 3  v8 flags --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring',
+    '',
+    '  driver: run 1 young 0, old 0 in the window; 12 GC line(s) before the fence, 6 after end; young per run 0,0,0',
+    '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)',
+    '',
+    'VERDICT NO-VERDICT', ''].join('\n');
+const L2_CI_NV = '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)';
+const L2_CI_COUNTS = '  driver: run 1 young 0, old 0 in the window; 12 GC line(s) before the fence, 6 after end; young per run 0,0,0';
+// exact-once edits on a fixture text (split / join: no `$` expansion); an anchor matching 0 or > 1 times is a row error
+function l2Edit(text, edits) {
+    let s = text;
+    for (const [from, to] of edits) {
+        if (count(s, from) !== 1) throw new Error(`l2Edit anchor matched ${count(s, from)} times: ${from}`);
+        s = s.split(from).join(to);
+    }
+    return s;
+}
+const l2Fx = (status, edits = [], extra = {}) => { const out = l2Edit(L2_CI, edits); return { status, out, L: out.split('\n'), left: [], drv: ['driver.js'], ...extra }; };
+const L2_ZERO = [[L2_CI_NV, '  ZERO -- no young GC in the window (every run equal to run 1)'], ['VERDICT NO-VERDICT', 'VERDICT ZERO']];
+const l2Reason = (why) => [[L2_CI_NV, '  NO-VERDICT -- driver: ' + why]];
+const l2Young = (per) => [[L2_CI_COUNTS, L2_CI_COUNTS.replace('young per run 0,0,0', 'young per run ' + per)]];
+const L2_PASS = [
+    ['the CI sighting verbatim', l2Fx(2), 'guard1'],
+    ['run 3 (guard count 14, trace 13)', l2Fx(2, l2Reason('trace lost 1 GC line in run 3 (guard count 14, trace 13)')), 'guard1'],
+    ['a ZERO run', l2Fx(0, L2_ZERO), 'zero'],
+];
+const L2_FAIL = [
+    ['(i) old-generation reason', l2Fx(2, l2Reason('old-generation GC in the window in run 1 (Mark-Compact)'))],
+    ['(i) no guard count', l2Fx(2, l2Reason('no guard count in run 1'))],
+    ['(ii) trace lost 2 GC lines', l2Fx(2, l2Reason('trace lost 2 GC lines in run 1 (guard count 14, trace 12)'))],
+    ['(iii) young per run 1,0,0', l2Fx(2, l2Young('1,0,0'))],
+    ['(iii) young per run 0,1,0', l2Fx(2, l2Young('0,1,0'))],
+    ['(iii) young per run 0,0,1', l2Fx(2, l2Young('0,0,1'))],
+    ['(iii) run 1 young 1', l2Fx(2, [[L2_CI_COUNTS, L2_CI_COUNTS.replace('run 1 young 0, old 0', 'run 1 young 1 [Scavenge 1], old 0')]])],
+    ['(iii) run 1 old 1', l2Fx(2, [[L2_CI_COUNTS, L2_CI_COUNTS.replace('old 0 in the window', 'old 1 in the window')]])],
+    ['(iv) the guard did not count', l2Fx(2, l2Reason('1 GC line in run 1 the guard did not count (guard count 12, trace 13)'))],
+    ['trace != count - 1 (13, 11)', l2Fx(2, l2Reason('trace lost 1 GC line in run 1 (guard count 13, trace 11)'))],
+    ['status 1', l2Fx(1)],
+    ['status 2 with VERDICT ZERO', l2Fx(2, [['VERDICT NO-VERDICT', 'VERDICT ZERO']])],
+    ['the head pin line missing', l2Fx(2, [[' --no-concurrent-recompilation --no-allocation-site-pretenuring\n', ' --no-concurrent-recompilation\n']])],
+    ['left non-empty', l2Fx(2, [], { left: ['allocation-diff.Ab12Cd'] })],
+    ['drv not only driver.js', l2Fx(0, L2_ZERO, { drv: ['driver.js', 'x'] })],
+    ['status 0 with VERDICT NO-VERDICT (no NO-VERDICT line)', l2Fx(0, [L2_ZERO[0]])],
+    ['status 0, VERDICT ZERO, a NO-VERDICT line', l2Fx(0, [L2_ZERO[1]])],
+    ['two NO-VERDICT lines', l2Fx(2, [[L2_CI_NV, L2_CI_NV + '\n' + L2_CI_NV.replace('run 1 (guard count 13, trace 12)', 'run 2 (guard count 13, trace 12)')]])],
+];
+test(`allocation-diff Q-B97-L2ROW canned pin (no spawn): l2Ok -> ${L2_PASS.length} fixtures pass ('guard1' / 'zero'), ${L2_FAIL.length} throw AssertionError (another reason, 2 lines lost, young > 0, uncounted, trace != count - 1, status, verdict, head pin, A3, two NO-VERDICT)`, (t) => {
+    for (const [n, fx, want] of L2_PASS) assert.equal(l2Ok(fx), want, n);
+    for (const [n, fx] of L2_FAIL) {
+        assert.throws(() => l2Ok(fx), (e) => { t.diagnostic(`refused ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+    }
+});
+// parity: the HEAD ccd531f L2 body (test/allocation-diff.test.mjs :1330-1333), inlined: it fails the CI fixture the new row accepts
+function l2Strict(r) {
     assert.equal(r.status, 0, r.out);
     assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', r.out);
     assert.ok(r.L.some((l) => /^ {2}driver: run 1 young 0, old 0 in the window; .*; young per run 0,0,0$/.test(l)), r.out);
     assert.deepEqual([r.left, r.drv], [[], ['driver.js']]);
+}
+test('allocation-diff Q-B97-L2ROW parity (no spawn): the HEAD strict L2 body throws on the CI sighting and passes the ZERO fixture; l2Ok accepts both', () => {
+    assert.throws(() => l2Strict(l2Fx(2)), assert.AssertionError);
+    l2Strict(l2Fx(0, L2_ZERO));
+    assert.deepEqual([l2Ok(l2Fx(2)), l2Ok(l2Fx(0, L2_ZERO))], ['guard1', 'zero']);
 });
-// A8 (R20): the preload returns at once in a Worker (no fence, no count); the Worker's trace lines reach the trace only
+// guardNv pins (no spawn): judge()'s 3 guard grammars, singular and plural; the first guard line wins; others -> null
+const GNV_PARSE = [
+    ['  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)', { side: 'driver', k: 1, c: 13, g: 12 }],
+    ['  NO-VERDICT -- after: trace lost 2 GC lines in run 3 (guard count 14, trace 12)', { side: 'after', k: 3, c: 14, g: 12 }],
+    ['  NO-VERDICT -- before: 1 GC line in run 2 the guard did not count (guard count 12, trace 13)', { side: 'before', k: 2, c: 12, g: 13 }],
+    ['  NO-VERDICT -- driver: 3 GC lines in run 1 the guard did not count (guard count 0, trace 3)', { side: 'driver', k: 1, c: 0, g: 3 }],
+    ['  NO-VERDICT -- driver: no guard count in run 2', { side: 'driver', k: 2, c: null, g: null }],
+];
+const GNV_NULL = [
+    '  NO-VERDICT -- driver: old-generation GC in the window in run 1 (Mark-Compact)',
+    '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice',
+    '  NO-VERDICT -- driver: trace lost 1 GC lines in run 1 (guard count 13, trace 12)',
+    '  NO-VERDICT -- driver: trace lost 2 GC line in run 1 (guard count 14, trace 12)',
+    '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12',
+    '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12) x',
+    '  NO-VERDICT -- driver: 1 GC lines in run 1 the guard did not count (guard count 12, trace 13)',
+    '  NO-VERDICT -- driver: no guard count in run 2 ',
+    '   NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)',
+    '  driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)',
+];
+test(`allocation-diff guardNv pins (no spawn): ${GNV_PARSE.length} guard reasons parse (singular / plural, all 3 grammars), the first guard line wins, ${GNV_NULL.length} non-guard / near-miss lines -> null`, () => {
+    for (const [l, want] of GNV_PARSE) {
+        assert.deepEqual(guardNv(`head\n${l}\n\nVERDICT NO-VERDICT\n`), { ...want, reason: l.slice(l.indexOf(': ') + 2) }, l);
+    }
+    for (const l of GNV_NULL) assert.equal(guardNv(`head\n${l}\n\nVERDICT NO-VERDICT\n`), null, l);
+    const two = `${GNV_NULL[0]}\n${GNV_PARSE[1][0]}\n${GNV_PARSE[0][0]}\n`;
+    assert.equal(guardNv(two).side, 'after', 'the first GUARD line, after a non-guard one');
+    assert.equal(guardNv(''), null);
+});
+// A8 (R20): the preload returns at once in a Worker (no fence, no count); the Worker's trace lines reach the trace only.
+// No t.diagnostic of r.diag here (b98 U8c T3 exemption): "the guard did not count" is this row's EXPECTED reason (D-WORKER
+// by design), not a guard sighting; r.msg still carries the dump into a failure message.
 function g3WorkerOk(script) {
     const r = g3Live(script, G3_WORKER, ['--zero', '--runs', '2']);
-    assert.equal(r.status, 2, r.out);
+    assert.equal(r.status, 2, r.msg);
     const nv = r.L.filter((l) => l.startsWith('  NO-VERDICT -- driver: '));
-    assert.equal(nv.length, 1, r.out);
+    assert.equal(nv.length, 1, r.msg);
     assert.ok(nv[0].includes(' the guard did not count (guard count '), nv[0]);
     assert.equal(count(nv[0], '@@LITE-MARK gcn'), 0, nv[0]);
 }
@@ -1351,32 +1540,49 @@ test('allocation-diff R20 live: revert check (M-worker, the main-thread line del
         assert.throws(() => g3WorkerOk(p), (e) => { if (capErr(e)) throw e; t.diagnostic('M-worker: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+// b98 U8c T6: the dump reads the right --out file (D-WORKER's NO-VERDICT is a guard reason by design); control: an L2 run
+// that read ZERO has r.diag ''
+test('allocation-diff guard NO-VERDICT dump live (b98 U8c, Q-B97-L2FIX (a)): D-WORKER --zero --runs 2 -> r.diag has the header, "the guard did not count", a @@LITE-MARK end line and the counts line; an L2 ZERO run -> r.diag empty', { skip: G3_SKIP }, (t) => {
+    const r = g3Live(SCRIPT, G3_WORKER, ['--zero', '--runs', '2']);
+    assert.ok(r.diag.startsWith('guard NO-VERDICT dump ('), r.msg);
+    const D = r.diag.split('\n');
+    assert.ok(D[0].includes('the guard did not count'), r.msg);
+    assert.equal(D.filter((l) => l === '@@LITE-MARK end').length, 1, r.msg);
+    assert.equal(D.filter((l) => l.startsWith('GC lines: before start ')).length, 1, r.msg);
+    t.diagnostic('T6 dump (D-WORKER, the expected reason, not a sighting):\n' + r.diag);
+    const z = g3Live(SCRIPT, G3_F64, ['--zero', '--runs', '3']);
+    if (guardNv(z.stdout)) { emitDiag(t, z); t.skip('control not measured: this L2 run itself read a guard NO-VERDICT'); return; }
+    assert.equal(z.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT ZERO', z.msg);
+    assert.equal(z.diag, '', z.msg);
+});
 // A9 control: a fork() child's guard is a second main thread, with or without the R20 line (documented, unchanged)
-test('allocation-diff R20 live control (A9): D-FORK (fork() after end) -> exit 2, "@@LITE-MARK gcn given twice", on the root and on M-worker', { skip: G3_SKIP }, () => {
+test('allocation-diff R20 live control (A9): D-FORK (fork() after end) -> exit 2, "@@LITE-MARK gcn given twice", on the root and on M-worker', { skip: G3_SKIP }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-g3f-'));
     try {
         for (const p of [SCRIPT, variant(dir, 'M-worker-fork', M_WORKER)]) {
             const r = g3Live(p, G3_FORK, ['--zero', '--runs', '2']);
-            assert.equal(r.status, 2, r.out);
-            assert.equal(r.L.filter((l) => l === '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice').length, 1, r.out);
+            emitDiag(t, r);
+            assert.equal(r.status, 2, r.msg);
+            assert.equal(r.L.filter((l) => l === '  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: @@LITE-MARK gcn given twice').length, 1, r.msg);
         }
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 // A7 (R8, darwin): GREP_OPTIONS=-P with the host's real grep first on PATH; D-YOUNG (A1_LIVE_DRIVER) still NONZERO
-function g3GoptOk(script) {
+function g3GoptOk(script, t) {
     const r = g3Live(script, A1_LIVE_DRIVER, ['--zero', '--runs', '2'], { GREP_OPTIONS: '-P' });
-    assert.equal(r.status, 1, r.out);
-    assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT NONZERO', r.out);
-    assert.match(r.out, /^ {2}driver: run 1 young [1-9]\d* \[[^\]]*\], old 0 in the window; /m, r.out);
+    emitDiag(t, r);
+    assert.equal(r.status, 1, r.msg);
+    assert.equal(r.L.filter((l) => l.startsWith('VERDICT ')).join('|'), 'VERDICT NONZERO', r.msg);
+    assert.match(r.out, /^ {2}driver: run 1 young [1-9]\d* \[[^\]]*\], old 0 in the window; /m, r.msg);
 }
-test('allocation-diff R8 live (A7): GREP_OPTIONS=-P (grep -c exits 2) -> D-YOUNG --zero --runs 2 still exit 1 VERDICT NONZERO, old 0', { skip: G3_GOPT }, () => {
-    g3GoptOk(SCRIPT);
+test('allocation-diff R8 live (A7): GREP_OPTIONS=-P (grep -c exits 2) -> D-YOUNG --zero --runs 2 still exit 1 VERDICT NONZERO, old 0', { skip: G3_GOPT }, (t) => {
+    g3GoptOk(SCRIPT, t);
 });
 test('allocation-diff R8 live: revert check (M-r8, ycount back on grep -c: young read empty, ZERO) fails the row', { skip: G3_GOPT }, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-g3g-'));
     try {
         const p = variant(dir, 'M-r8-live', M_R8);
-        assert.throws(() => g3GoptOk(p), (e) => { if (capErr(e)) throw e; t.diagnostic('M-r8: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
+        assert.throws(() => g3GoptOk(p, t), (e) => { if (capErr(e)) throw e; t.diagnostic('M-r8: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('allocation-diff -h: the A4 Driver-contract paragraph (scalar replacement is not an allocation), each phrase once', { skip }, () => {
