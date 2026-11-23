@@ -22,8 +22,12 @@
 // for the .mjs, a duplicated step, a renamed step, a removed step, a run line with no name line, a key after run:
 // and a job-level if:.
 // npm runs as `process.execPath <npm-cli.js>`, never through PATH; no npm-cli.js = SKIP locally, FAIL under CI=true.
+// npm() asserts NPM before the spawn, so CI=true with no npm-cli.js fails by name, not as a TypeError (b96 U4, G-C TASK 7b).
 // The child env drops every npm_* key and NODE, sets NODE_V8_COVERAGE undefined (a delete is not a strip), strips the git /
-// editor steering keys, and points npm at a private cache, an empty userconfig and a dead registry (offline only).
+// editor steering keys, and points npm at a private cache, an empty userconfig and a dead registry (offline only); it sets
+// NODE_DISABLE_COMPILE_CACHE=1 and a private TMPDIR, so npm 11+ (lib/cli.js calls module.enableCompileCache()) leaves no
+// node-compile-cache dir in the shared os.tmpdir() (G-C TASK 7c; row "A1 compile cache").
+// pkgProblems pins files[] to the 10-entry FILES_FIELD (the 11 packed paths minus package.json, which npm always packs).
 // Every temp dir is `pack-*` under os.tmpdir(), removed in after(). Every spawn goes through capSync (S5 census).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,6 +54,11 @@ const MJS_ROOTS = ['alloc-per-op.mjs'];   // G3 TASK 6: the node roots build.sh 
 const DOCS = ['README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
 const WANT_FILES = ['CHANGELOG.md', 'LICENSE', 'README.md', 'alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh',
     'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh', 'llms.txt', 'package.json'];
+// package.json files[] exactly (G-C TASK 7a): WANT_FILES minus package.json, in the package.json order. A1 alone cannot
+// see an entry dropped from files[] when npm packs that file anyway: npm auto-includes every bin target (ic-diff.sh, ...)
+// and README.md (plus package.json and LICENSE), so A1 stays green on such a package.json; this pin is the gate for them.
+const FILES_FIELD = ['alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh',
+    'inlining-budget-diff.sh', 'README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
 const DECOYS = ['stray.sh', '.handoff/x', 'audit/x', 'src/x.sh', 'lib/x.sh', 'test/x.mjs', 'build.sh', 'LEDGER.md', 'ROADMAP.md',
     'src/alloc-per-op.mjs', 'stray.mjs', 'research/alloc-probe/x.mjs'];
 const WANT_BIN = {
@@ -108,10 +117,24 @@ function npmEnv() {
     e.npm_config_userconfig = join(d, 'npmrc');
     e.npm_config_update_notifier = 'false';
     e.npm_config_registry = 'http://127.0.0.1:9';
+    // G-C TASK 7c: no compile cache, and a private TMPDIR (removed with TOP), so nothing lands in the shared os.tmpdir()
+    e.NODE_DISABLE_COMPILE_CACHE = '1';
+    e.TMPDIR = join(d, 'tmp');
+    mkdirSync(e.TMPDIR);
     return e;
 }
+// r.tmpdir = the child's private TMPDIR
 function npm(args, cwd, what) {
-    return capSync(process.execPath, [NPM, ...args], { cwd, encoding: 'utf8', env: npmEnv(), maxBuffer: 1 << 26 }, NPM_CAP, what);
+    assert.ok(NPM, `${what}: npm-cli.js not found beside this node (and no $npm_execpath); under CI=true this is a failure, not a skip`);
+    const env = npmEnv();
+    const r = capSync(process.execPath, [NPM, ...args], { cwd, encoding: 'utf8', env, maxBuffer: 1 << 26 }, NPM_CAP, what);
+    r.tmpdir = env.TMPDIR;
+    return r;
+}
+// every entry (files and dirs, recursive) under <tmp>/node-compile-cache; an absent dir is 0
+function compileCacheEntries(tmp) {
+    const c = join(tmp, 'node-compile-cache');
+    return existsSync(c) ? readdirSync(c, { recursive: true }).length : 0;
 }
 
 // ---- the 861f3d3 package.json (history pin) ----
@@ -196,6 +219,7 @@ function pkgProblems(text) {
     if (/[^\x00-\x7f]/.test(text)) p.push('ascii: a non-ASCII byte');
     if (Object.hasOwn(o, 'private')) p.push('private: present');
     try { assert.deepEqual(o.bin, WANT_BIN); } catch { p.push('bin: ' + JSON.stringify(o.bin)); }
+    try { assert.deepEqual(o.files, FILES_FIELD); } catch { p.push('files: ' + JSON.stringify(o.files)); }
     if (!(o.repository && o.repository.type === 'git' && o.repository.url === REPO)) p.push('repository: ' + JSON.stringify(o.repository));
     if (o.homepage !== HOME) p.push('homepage: ' + JSON.stringify(o.homepage));
     if (!(o.bugs && o.bugs.url === BUGS)) p.push('bugs: ' + JSON.stringify(o.bugs));
@@ -317,6 +341,14 @@ test('A1 npm pack --dry-run --json lists exactly the 11 shipped paths; no decoy,
     assert.deepEqual(files, WANT_FILES);
     for (const f of DECOYS) assert.ok(!files.includes(f), `decoy ${f} packed`);
 });
+test('A1 compile cache: the A1 dry run leaves 0 node-compile-cache entries in its private TMPDIR (NODE_DISABLE_COMPILE_CACHE=1)', { skip: NPMSKIP }, () => {
+    const d = decoyCopy(LIVE_PKG());
+    const r = npm(['pack', '--dry-run', '--json', '--ignore-scripts', '--offline'], d, 'A1 compile cache pack --dry-run');
+    assert.equal(r.status, 0, `A1 compile cache: exit ${r.status}\n${r.stderr}`);
+    assert.deepEqual(packEntry(JSON.parse(r.stdout), JSON.parse(LIVE_PKG()).name, 'A1 compile cache'), WANT_FILES);
+    assert.ok(typeof r.tmpdir === 'string' && existsSync(r.tmpdir), `private TMPDIR ${r.tmpdir} missing`);
+    assert.equal(compileCacheEntries(r.tmpdir), 0, `${r.tmpdir}/node-compile-cache holds entries: ${existsSync(join(r.tmpdir, 'node-compile-cache')) ? readdirSync(join(r.tmpdir, 'node-compile-cache'), { recursive: true }).slice(0, 5).join(' ') + ' ...' : ''}`);
+});
 test(`A1 RED (history): the ${OLD_SHA} package.json in the same decoy copy packs src/ and test/ entries`, { skip: NPMSKIP || OLDSKIP }, () => {
     const files = dryRun(decoyCopy(oldPkg()), 'A1 RED pack --dry-run');
     assert.notDeepEqual(files, WANT_FILES);
@@ -347,6 +379,13 @@ test('A2 controls: a planted "./" bin path is rewritten by npm pkg fix; a plante
     delete p.repository;
     assert.deepEqual(pkgProblems(JSON.stringify(p, null, 2) + '\n'), ['private: present', 'repository: undefined']);
     assert.deepEqual(pkgProblems(LIVE_PKG().replace(/\n$/, '')), ['format: not 2-space JSON with one trailing newline']);
+    // G-C TASK 7a: files[] without ic-diff.sh (a bin target) or README.md still packs both (A1 green), so only the pin sees it
+    for (const drop of ['ic-diff.sh', 'README.md']) {
+        const q = JSON.parse(LIVE_PKG());
+        q.files = q.files.filter((f) => f !== drop);
+        assert.equal(q.files.length, FILES_FIELD.length - 1, `control anchor: live files[] holds ${drop} once`);
+        assert.deepEqual(pkgProblems(JSON.stringify(q, null, 2) + '\n'), ['files: ' + JSON.stringify(q.files)], `files[] without ${drop}`);
+    }
 });
 test(`A2 RED (history): the ${OLD_SHA} package.json is flagged (private true, no bin)`, { skip: OLDSKIP }, () => {
     const p = pkgProblems(oldPkg());

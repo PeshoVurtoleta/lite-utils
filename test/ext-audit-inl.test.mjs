@@ -27,7 +27,9 @@
 //     for the slowest CI leg (hosted macOS, LEDGER #40 / #73), not for this host. ALL-HANG BOUND: after the first run that
 //     times out every later ibd run refuses at once (HUNG), so those add at most ONE hung run (<= CAP, 180 s). selfRun (the
 //     --self-test rows) neither checks nor sets HUNG: each of its two runs (root + mutant) is bounded by SELFCAP (600 s) on its
-//     own, so the real worst case is 180 s + 2 x 600 s plus the runs that finished, inside the 3600 s per-file limit.
+//     own. A hangOk timeout (the two cwd000 rows: CAP 180 s live, 15 s mutant) is an observation and does not set HUNG
+//     either, so the real worst case is 180 s + 2 x 600 s + 180 s + 15 s = 1575 s plus the runs that finished and the
+//     30 s setup caps, inside the 7200 s per-file limit (package.json --test-timeout=7200000).
 //   * Env: GIT_* BASH_FUNC_* EDITOR VISUAL NODE_OPTIONS BASH_ENV ENV CDPATH SHELLOPTS BASHOPTS POSIXLY_CORRECT stripped,
 //     NODE_V8_COVERAGE set to undefined (delete is not a strip). macOS bash is 3.2, CI bash may be 5.x: bash 3.2 drops an
 //     inherited OLDPWD, 5.x keeps it; no row depends on OLDPWD.

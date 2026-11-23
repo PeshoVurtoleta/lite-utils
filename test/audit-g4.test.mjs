@@ -10,7 +10,7 @@
 //           over CYCLES (12) cycles of A1(TMPDIR) + A2 + A3 with a must-fail control (EXIT-trap rm -rf removed)
 // Own fake node (bash): logs argv, answers --version / --v8-options (tracked fixture), and for a trace run applies V8's
 // --logfile expansion (%% -> %, %p -> pid, %t -> time) and copies ./ic.log of its cwd to dirname/isolate-0x7508000000-<pid>-<base>.
-// Real-node rows (A1, A2): one attempt each. No timing assertions. Private dirs under one mkdtemp top, removed in after().
+// Real-node rows (A1, A2): one attempt each. No timing assertions but K1's kill-happened bound. Private dirs under one mkdtemp top, removed in after().
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -146,7 +146,7 @@ function mkCase() {
 // run ROOT in case c: args, cwd c.cwd unless o.cwd, TMPDIR c.tmp unless o.tmpdir (null = unset)
 function run(root, c, args, o = {}) {
     const env = cleanEnv({ PATH: `${o.pathPre ? o.pathPre + ':' : ''}${c.bin}:${process.env.PATH}`, ...(o.tmpdir === null ? {} : { TMPDIR: o.tmpdir || c.tmp }), ...(o.env || {}) });
-    return spawn(BASH, [root, ...args], { cwd: o.cwd || c.cwd, env }, `ic-diff.sh (${args.slice(0, 5).join(' ')})`, o.cap || 90000);
+    return spawn(BASH, [root, ...args], { cwd: o.cwd || c.cwd, env, killSignal: 'SIGKILL' }, `ic-diff.sh (${args.slice(0, 5).join(' ')})`, o.cap || 90000);
 }
 const ls = (d) => readdirSync(d);
 
@@ -410,4 +410,31 @@ test('A5 retention must-fail control: the fix root with its EXIT-trap rm -rf "$I
     const m = mutant('no-trap-rm', [['rm -rf \\"\\$IC_TMP\\"', 'true']]);
     const left = cycles(m, 3);
     for (let i = 0; i < 3; i++) assert.ok(left.some((l) => l.startsWith(`c${i} `)), `cycle ${i} left nothing: ${left.join(',')}`);
+});
+
+// ---- K1 (b96 G-C TASK 4): every ic-diff spawn (run()) is capped under killSignal SIGKILL ----
+// ic-diff traps TERM (sig_arm) and bash runs that trap only after the foreground step ends, so a SIGTERM cap cannot bound
+// a hung foreground step: the run returns when the step does (here after the 30 s sleep; the TERM trap's die then writes
+// to the pipes spawnSync has closed: "killed by SIGPIPE", as in LEDGER #73, .handoff/b96/U3/revert-audit-g4-K1.tap). The
+// fake node of this row hangs in the foreground --v8-options read (v8fl_read: a $( ) with stderr to /dev/null, so the
+// orphaned sleep holds no pipe of the spawn). The < 10 s bound is NOT a STATISTICAL timing claim: it only tells "the cap
+// killed bash" (~2 s) from "the run waited for the step" (~30 s), with a 5x margin over the 2000 ms cap for the slowest
+// CI leg. The orphaned sleep is then killed by its own pid (never by pattern).
+test('K1 SIGKILL cap: a fake node hung in a foreground sleep 30, cap 2000 -> throws "(killed by SIGKILL)" in < 10 s', { skip }, () => {
+    const c = mkCase();
+    const anchor = 'case "$1" in';
+    const txt = fakeText(c.dir);
+    assert.equal(txt.split(anchor).length - 1, 1, 'K1: the fake case anchor must match exactly once');
+    writeFileSync(c.node, txt.replace(anchor, () => `[ "$1" = --v8-options ] && { echo $$ > "$D/hang.pid"; exec sleep 30; }\n${anchor}`));
+    let err = null;
+    const t0 = Date.now();
+    try { run(TOOL, c, ['--node', c.node, '--fn', 'get', c.D.mono, c.D.mono2], { cap: 2000 }); } catch (e) { err = e; }
+    const ms = Date.now() - t0;
+    const pidf = join(c.dir, 'hang.pid');
+    const pid = existsSync(pidf) ? Number(rd(pidf).trim()) : NaN;
+    if (Number.isInteger(pid) && pid > 1) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+    assert.ok(Number.isInteger(pid) && pid > 1, 'K1: the fake node never reached the --v8-options hang');
+    assert.ok(err !== null, 'K1: the hung run did not throw');
+    assert.match(String(err.message), /^ic-diff\.sh \(.*\) timed out after 2000 ms \(killed by SIGKILL\)/, String(err.message));
+    assert.ok(ms < 10000, `K1: the cap took ${ms} ms (want < 10000: the kill, not the 30 s step, ends the run)`);
 });
