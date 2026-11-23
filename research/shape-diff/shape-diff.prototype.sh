@@ -3,34 +3,40 @@
 # Blueprint for LiteUtils (ROADMAP L2, scheduled last): src/shape-diff.sh.
 #
 # shape-diff.prototype.sh -- BEFORE vs AFTER V8 shape / elements-kind / field-representation
-# stability DIFF for NAMED functions, combining ALL THREE V8 shape streams in ONE run:
+# stability DIFF for NAMED functions across Node 22 / 24 / 26 / 27, combining ALL THREE V8
+# shape streams in ONE run:
 #   1. --log-maps --logfile=<abs>/run.log  (keeping map-details ON: separates
 #        HOLEY_ELEMENTS -> DICTIONARY_ELEMENTS from benign anonymous Symbol() transitions)
 #   2. --trace-elements-transitions (regular-file stdout, NEVER a pipe)
 #   3. --trace-generalization (regular-file stdout, NEVER a pipe)
 #
-# WHY NO `--stable` GATE MODE HERE (changed after live node v26.8.2 counterexample probes):
-#   Empirically proven in `probes/push-silent.mjs` (`--allow-natives-syntax`): `a.push(1.5)`
-#   transitions a JSArray from PACKED_SMI_ELEMENTS to PACKED_DOUBLE_ELEMENTS while emitting
-#   ZERO lines across --log-maps, --trace-elements-transitions, and --trace-generalization!
-#   Because V8 14.6's CSA/Torque Array.prototype.push path is completely silent to all three
-#   flags, an unqualified single-driver `VERDICT STABLE` gate would issue false positives and
-#   violate LiteUtils Q-AUDIT-RUBRIC ("Rubric by consequence").
-#
-# WHY AN UNATTRIBUTED-INSTABILITY DELTA GUARD IN `diff` MODE:
-#   Empirically proven in `probes/builtins-dirty.mjs`: `Reflect.deleteProperty(o, 'y')` logs
-#   `map,NormalizeCached` with pc in `Builtin:ReflectDeleteProperty` (line 0, col -1), and
-#   `a.splice(0, 1, 'str')` logs `in splice+0 at <unknown>:<unknown>`. Both are invisible to
-#   per-`--fn` attribution. Tracking the whole-process unattributed instability multiset lets
-#   `diff` fail closed to `NO-VERDICT` whenever attributed `--fn` sites look SAME while
-#   unattributed builtin instability changed between BEFORE and AFTER (preventing false SAME).
+# Key design decisions backed by 4-Node empirical probes (Node 22.23.5 / 24.22.3 / 26.8.2 / 27):
+#   - WHY `--no-sparkplug` in TRACE_FLAGS (fixes RECHECK N3 Node 22 exit 133 SIGTRAP crash):
+#       On Node 22 (V8 12.4), `--trace-generalization` inside a Sparkplug (CodeKind::BASELINE)
+#       frame hits a fatal C++ assertion `Check failed: kind(isolate) != CodeKind::BASELINE`
+#       in `AbstractCode::SourceStatementPosition` (`[^wrapConsole+121` under `--no-node-snapshot`).
+#       Passing `--no-sparkplug` eliminates the crash (rc 0) while KEEPING `--no-node-snapshot`
+#       so unresolved non-zero map pcs drop to 0 across ALL FOUR Node majors (22/24/26/27)!
+#   - WHY drop identical from->to GEN lines AND fold dual reason-pairs (fixes RECHECK N4 + D6):
+#       Node 22 (V8 12.4) and Node 24 (V8 13.6) emit repeated no-op boilerplate checks
+#       `a:s{Any;const}->s{Any;const} (uninitialized field)` where LHS == RHS; and all 4 majors
+#       print TWO lines per single in-place generalization (`(uninitialized field)` +
+#       `(field type generalization)`). Filtering `LHS == RHS` alongside `v{None;` and folding
+#       the redundant reason suffix fixes both false positives and double-counting across 22/24/26/27.
+#   - WHY track non-target user JS + Builtin + NONE instability in UM/UE (fixes RECHECK N1 + D1):
+#       `Reflect.deleteProperty` (Builtin:ReflectDeleteProperty), `splice` (<unknown>), and
+#       non-inlined user helpers (`function del(o){ delete o.a; }`) all sit outside `--fn`.
+#       Upgrading `SAME -> NO-VERDICT` whenever the whole-process unattributed/external
+#       instability multiset differs prevents false `VERDICT SAME` at any call count.
+#   - WHY NO `--stable` gate: a single cold call to `a.push(1.5)` transitions PACKED_SMI ->
+#       PACKED_DOUBLE with 0 lines across all 3 flags on Node 22/24/26/27 (200 calls emit 2 lines).
 #
 # Architectural note on promotion to src/shape-diff.sh:
-#   The [PROTOTYPE SHIMS] sections below stand in for build-time `# @include lib/*.sh`
-#   (prologue, msdiff, common, tracked, v8flags, args, stage) so this prototype runs standalone.
+#   The [PROTOTYPE SHIM] sections below match LiteUtils's real lib/*.sh fragments 1:1
+#   (`prologue.sh`, `msdiff.sh`, `common.sh`, `args.sh`, `v8flags.sh`, `nullctl.sh`).
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/prologue.sh` in src/shape-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/prologue.sh`
 # =============================================================================================
 set -euo pipefail
 shopt -u nocasematch 2>/dev/null || true
@@ -43,6 +49,7 @@ SIG_PID=""
 DRV_RC=0
 TMP_DIR=""
 REPORT=""
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 trap 'rc=$?; if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then rm -rf -- "$TMP_DIR"; fi; if [[ -z "$FINAL" ]]; then set +e; [[ -n "$DIED" ]] || printf "shape-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
 
 _sig() {
@@ -59,6 +66,21 @@ sig_arm() { trap '_sig INT' INT; trap '_sig TERM' TERM; trap '_sig HUP' HUP; }
 drv_wait() { SIG_PID=$!; DRV_RC=0; wait "$SIG_PID" || DRV_RC=$?; SIG_PID=""; }
 sig_arm
 
+# =============================================================================================
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/msdiff.sh` (MSDIFF_AWK ONLY)
+# =============================================================================================
+# shellcheck disable=SC2016
+MSDIFF_AWK='
+function key(s) { sub(/^ *[0-9]+ /, "", s); return s }
+function show(k,   u, l) { u = k; sub(/\t.*/, "", u); l = k; sub(/^[^\t]*\t/, "", l); return (u == "*") ? l : "[" u "] " l }
+FILENAME == ARGV[1] { k = key($0); b[k] = $1 + 0; all[k] = 1; next }
+{ k = key($0); a[k] = $1 + 0; all[k] = 1 }
+END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\n", b[k], a[k], show(k) }
+'
+
+# =============================================================================================
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/common.sh` (verbatim signatures!)
+# =============================================================================================
 die() {
   DIED=1
   printf 'shape-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
@@ -72,35 +94,68 @@ say() {
   else printf '%s\n' "$*"
   fi
 }
-
+multiset() { LC_ALL=C sort | LC_ALL=C uniq -c; }
 worst() {
-  case "$1:$2" in
-    *NO-VERDICT*) echo NO-VERDICT ;;
-    *DIFF*) echo DIFF ;;
-    *) echo "$2" ;;
-  esac
+  if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
+  elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
+  else echo SAME; fi
+}
+nl_refuse() {
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() {
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
+}
+rep_refuse() {
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
 }
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/msdiff.sh` in src/shape-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/args.sh` (verbatim!)
 # =============================================================================================
-multiset() { LC_ALL=C sort | LC_ALL=C uniq -c; }
-
-# shellcheck disable=SC2016
-MSDIFF_AWK='
-function key(s) { sub(/^ *[0-9]+ /, "", s); return s }
-function show(k,   u, l) { u = k; sub(/\t.*/, "", u); l = k; sub(/^[^\t]*\t/, "", l); return (u == "*") ? l : "[" u "] " l }
-FILENAME == ARGV[1] { k = key($0); b[k] = $1 + 0; all[k] = 1; next }
-{ k = key($0); a[k] = $1 + 0; all[k] = 1 }
-END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\n", b[k], a[k], show(k) }
-'
+need() {
+  if [[ -n "$v" ]]; then return 0; fi
+  [[ $# -ge 2 ]] || die "$a needs a value"
+  v="$2"; return 1
+}
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/v8flags.sh` in src/shape-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/v8flags.sh` (100% verbatim!)
 # =============================================================================================
-# WHY runtime `--v8-options` ALLOWLIST (LEDGER law 4 / MD-50..58), NEVER a denylist alone:
-#   Refuses node CLI options (--run, --test, --eval, --inspect, --cpu-prof), unknown flags,
-#   string-valued V8 flags, and log/trace/print/prof/dump/snapshot/file flags automatically.
 # shellcheck disable=SC2016
 V8FL_AWK='
 p != "" { if (match($0, /^ +type: [a-z0-9_]+/)) { t = substr($0, RSTART, RLENGTH); sub(/^ +type: /, "", t); print p " " t }; p = "" }
@@ -110,7 +165,7 @@ V8FL_RE='-(log|logfile|prof|profile|profiling|profiler|trace|print|perf|redirect
 V8FL_TAB=""
 v8fl_read() {
   local raw rows rc=0
-  raw=$(env -u NODE_OPTIONS -u NODE_V8_COVERAGE -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS "$1" --v8-options 2>/dev/null) || rc=$?
+  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?
   [[ $rc -eq 0 ]] || die "cannot run $1 --v8-options"
   [[ -n "$raw" ]] || die "$1 --v8-options printed nothing"
   rows=$(printf '%s\n' "$raw" | LC_ALL=C awk "$V8FL_AWK") || rows=""
@@ -137,7 +192,7 @@ v8fl_check() {
   local f
   v8fl_read "$1"
   for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node options, unknown flags, string flags, and log/trace/print/prof/dump/snapshot/file flags are refused)"
+    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)"
   done
 }
 
@@ -146,31 +201,20 @@ v8fl_check() {
 # =============================================================================================
 # Input:  -v fns="fn1,fn2"  -v inc_trans=0|1
 # Output:
-#   K <fn>                 fn had code-creation (~ or ^); compiled, NOT yet proof of execution!
-#   R <fn>                 fn had REAL execution evidence in --log-maps:
-#                            (a) optimizing-tier compile (+, +', o+, *, *', o*) OR
-#                            (b) >= 1 attributed `map` event (Transition/InitialMap/Normalize/...)
-#                          WHY separate K vs R (fixing compiled-but-uncalled guard bug):
-#                            Empirically proven in `probes/uncalled.mjs`: `(function f(){})`
-#                            emits Ignition `~` without ever running; `--no-lazy --always-sparkplug`
-#                            emits BOTH `~` AND `^` without ever running! Requiring R (or
-#                            stdout E/I execution evidence) prevents uncalled functions from
-#                            falsely passing the guard.
+#   K <fn>                 fn compiled (~ or ^); NOT execution proof alone.
+#   R <fn>                 fn has execution evidence (+/* optimizing compile OR >=1 attributed map event).
 #   M <fn><TAB><class><TAB><base:line:col><TAB><detail><TAB><hits>
-#                          Deduplicated per-site attributed instability record.
 #   T <fn><TAB><count>     REPORTED normal monomorphic Transition/InitialMap site count.
 #   UM <class><TAB><owner><TAB><detail>
-#                          Unattributed (Builtin:* or NONE/pc=0) instability event (one line
-#                          per event so multiset catches both 0->1 ReflectDeleteProperty and
-#                          4->5 ObjectSetPrototypeOf!). Used for the fail-closed unattributed
-#                          delta guard in diff mode.
+#     - Non-target instability event from ANY non-target owner (NONE, Builtin:*, user:<fn>,
+#       or node:<fn>). WHY include non-target user JS and node:* (Q-SD-OWNER (a), fixes RECHECK N1):
+#       When target `mk` calls non-target `function del(o){ delete o.a; }`, at 200 calls `del` is
+#       not inlined so `pc` resolves to `user:del` (at 20000 calls `del` inlines into `mk`).
+#       Recording `user:del` in UM turns false `SAME` into `NO-VERDICT` at 200 calls!
+#     - WHY owner tag uses `user:<fn>` (or `user:<anon>` for top-level Script, NEVER full path):
+#       An A/A comparison of two byte-identical drivers with different filenames (`a.mjs` vs
+#       `a-copy.mjs`) keeps identical `UM` tags and still reads `SAME`.
 #   X <why> at log line <n> [(+<m> more X line(s))]
-#
-# WHY parse map-details (and NOT pass --no-log-maps-details):
-#   Empirically proven in `probes/unstable-all.mjs` + `probes/clean-and-literal.mjs`:
-#   V8 emits BOTH `a[100000] = "dict"` (HOLEY -> DICTIONARY_ELEMENTS) AND benign
-#   `o[Symbol()] = 1` as `map,Transition,...,symbol(hash HEX)`. Reading `elements kind:`
-#   from `map-details` (`map_ek[$4] != map_ek[$5]`) separates them with zero hardcoded hashes.
 # shellcheck disable=SC2016
 MAP_AWK='
 function hex(s,   i, v) {
@@ -190,6 +234,18 @@ function owner(nm,   i, f, r) {
     }
   }
   return ""
+}
+function js_owner_tag(ty, nm,   p, fn_part, loc_part) {
+  if (ty == "Script") return "user:<script>"
+  if (ty == "Eval") return "user:<eval>"
+  # Split `<fn> <loc>` where <loc> starts with file:///, /, or node:
+  if (match(nm, / (file:\/\/\/|\/|node:)/)) {
+    fn_part = substr(nm, 1, RSTART - 1)
+    loc_part = substr(nm, RSTART + 1)
+    if (substr(loc_part, 1, 5) == "node:") return "node:" (fn_part != "" ? fn_part : "<anon>")
+    return "user:" (fn_part != "" ? fn_part : "<anon>")
+  }
+  return "user:<anon>"
 }
 function norm_key(k) {
   if (substr(k, 1, 7) == "symbol(") gsub(/hash [0-9a-fA-F]+/, "hash *", k)
@@ -213,7 +269,6 @@ BEGIN {
   split("JS Eval Script", t, " ")
   for (i in t) JSTY[t[i]] = 1
 
-  # All allowed $9 markers; OPT_MK marks tiers that require actual execution (excludes ~ and ^).
   mk["~"] = 1; mk["^"] = 1
   mk["+"] = 1; mk["+\047"] = 1; mk["o+"] = 1; mk["o+\047"] = 1
   mk["*"] = 1; mk["*\047"] = 1; mk["o*"] = 1; mk["o*\047"] = 1
@@ -253,7 +308,7 @@ $1 == "code-creation" {
     COMP[f] = 1
     if ($9 in opt_mk) EXEC[f] = 1
   }
-  add_code(hex($5), $6 + 0, f, BASE, SCR, "JS")
+  add_code(hex($5), $6 + 0, f, BASE, SCR, js_owner_tag($2, $7))
   next
 }
 $1 == "code-move" {
@@ -303,13 +358,10 @@ $1 == "map" {
     nkey = ""
   }
 
-  # Unattributed builtin / C++ runtime frame (e.g. Builtin:ReflectDeleteProperty or pc == 0):
-  # WHY record UM for Builtin:* and NONE (excluding normal Transition/InitialMap/ReplaceDescriptors):
-  #   Catches Reflect.deleteProperty(o, "y") and Object.setPrototypeOf() so diff mode fails
-  #   closed to NO-VERDICT instead of silently returning SAME.
+  # Any non-target instability (NONE, Builtin:*, non-target user:<fn>, or node:<fn>) -> UM (Q-SD-OWNER (a))
   if (!h || cf[h] == "") {
-    ow = (h ? ctag[h] : "NONE")
-    if ((ow == "NONE" || substr(ow, 1, 8) == "Builtin:") && (cls == "MAP_DEPRECATE" || cls == "MAP_NORMALIZE" || cls == "MAP_SLOW2FAST" || cls == "MAP_ELEM_DICT")) {
+    if (cls == "MAP_DEPRECATE" || cls == "MAP_NORMALIZE" || cls == "MAP_SLOW2FAST" || cls == "MAP_ELEM_DICT") {
+      ow = (h ? ctag[h] : "NONE")
       if (reason != "" && nkey != "") det = reason ":" nkey
       else if (reason != "") det = reason
       else if (nkey != "") det = nkey
@@ -366,25 +418,8 @@ END {
 # =============================================================================================
 # PARSER 2: SHAPE_STDOUT_AWK (single-pass POSIX awk over regular-file stdout trace)
 # =============================================================================================
-# Input:  -v fns="fn1,fn2"   (file = run.<k>.out, regular file, NEVER a pipe!)
-# Output:
-#   E <fn><TAB>ELEM<TAB><base:line><TAB><FROM -> TO><TAB><hits>
-#   E <fn><TAB>GEN<TAB><base:line><TAB><norm_detail><TAB><hits>
-#   I <fn><TAB><boilerplate_init_sites>
-#     - REPORTED count of monomorphic object-literal initializations (`:v{None;...}->`).
-#     - WHY exclude `:v{None;...}->` from instability `E`:
-#       Empirically proven in `probes/clean-and-literal.mjs`: a completely monomorphic
-#       `{ a: i, b: 2 }` emits `a:v{None;const}->s{Any;const}` once on first creation as V8
-#       populates the uninitialized literal boilerplate slot. That is normal one-time setup,
-#       NOT shape instability (and it still proves `fn` executed via `I <fn>`!).
-#     - WHY check `:v{None;...}->` instead of `(uninitialized field)`:
-#       Empirically proven in `probes/unstable-all.mjs`: V8 14.6 prints `(uninitialized field)`
-#       on real `x:d{Any;const}->d{Any;mutable}` and `y:h{Class(...);const}->t{Any;mutable}`
-#       generalizations too! Checking `v{None;` specifically targets only uninitialized slots.
-#   UE <ELEM|GEN><TAB><builtin_or_empty><TAB><norm_detail>
-#     - Unattributed (<unknown>:<unknown> or []) stdout instability line (e.g. `splice+0`).
-#       Used for the fail-closed unattributed delta guard in diff mode!
-#   X <why> at out line <n> [(+<m> more X line(s))]
+# Fixes RECHECK N4 (Node 22/24 no-op LHS == RHS GEN), D6 (fold dual reason-pair), N1 (non-target
+# user JS ELEM/GEN tracked in UE so unattributed/external delta guard prevents false SAME).
 # shellcheck disable=SC2016
 SHAPE_STDOUT_AWK='
 function failx(why) { if (!NX++) { XW = why; XL = NR } }
@@ -399,10 +434,27 @@ function strip_frame(fr,   s) {
   return s
 }
 function norm_gen(p) {
-  # Normalize per-run heap pointers in Class(0x...) and {symbol 0x...} (both observed on node v26.8.2)
   gsub(/Class\(0x[0-9a-fA-F]+\)/, "Class(0xADDR)", p)
   gsub(/\{symbol 0x[0-9a-fA-F]+\}/, "{symbol 0xADDR}", p)
+  # Fold V8 dual reason-pair into one canonical core record (Q-SD-GEN-INIT (a), fixes D6):
+  # preserves ` (+N maps)` deprecation counts while stripping redundant `(uninitialized field)`
+  # and `(field type generalization)` suffixes printed on consecutive lines for 1 event.
+  sub(/ \((uninitialized field|field type generalization)\)$/, "", p)
   return p
+}
+function is_noop_or_vnone(core,   arrow, lhs, rhs) {
+  # core shape: "<prop>:<LHS>-><RHS>[ (+N maps)]"
+  # 1. Initial uninitialized literal boilerplate slot: ":v{None;...}->" (Node 22/24/26/27)
+  if (core ~ /:v\{None;[^}]*\}->/) return 1
+  # 2. Node 22 & Node 24 no-op boilerplate verification: LHS == RHS (e.g. a:s{Any;const}->s{Any;const})
+  arrow = index(core, "->")
+  if (arrow <= 1) return 0
+  lhs = substr(core, 1, arrow - 1)
+  if (index(lhs, ":") <= 0) return 0
+  sub(/.*:/, "", lhs)
+  rhs = substr(core, arrow + 2)
+  sub(/ \(\+[0-9]+ maps\)$/, "", rhs)
+  return (lhs != "" && lhs == rhs)
 }
 function is_target(fn,   i) {
   for (i = 1; i <= NF_N; i++) if (FNS[i] == fn) return 1
@@ -454,9 +506,11 @@ BEGIN {
   if (substr(loc, 1, 1) != "/" && substr(loc, 1, 8) != "file:///") next
   if (loc !~ /:[0-9]+$/) { failx("malformed elements transition loc"); next }
 
+  if (fr !~ /\+[0-9]+$/) { failx("malformed elements transition frame"); next }
   fn = strip_frame(fr)
-  if (fn == "") { failx("malformed elements transition frame"); next }
+  if (fn == "") fn = "<anon>"
   if (is_target(fn)) record_e(fn, "ELEM", loc, kinds)
+  else UE_LIST[++NUE] = "ELEM\tuser:" fn "\t" kinds
   next
 }
 /^\[generalizing\]/ {
@@ -473,11 +527,11 @@ BEGIN {
   bracket = substr(line, pos + 2, length(line) - pos - 2)
   if (payload == "") { failx("malformed generalizing line (empty payload)"); next }
 
-  npayload = norm_gen(payload)
-  is_vnone = (npayload ~ /:v\{None;[^}]*\}->/)
+  core = norm_gen(payload)
+  noop = is_noop_or_vnone(core)
 
   if (bracket == "") {
-    if (!is_vnone) UE_LIST[++NUE] = "GEN\t<runtime>\t" npayload
+    if (!noop) UE_LIST[++NUE] = "GEN\t<runtime>\t" core
     next
   }
   atp = index(bracket, " at ")
@@ -486,26 +540,29 @@ BEGIN {
   loc = substr(bracket, atp + 4)
 
   if (loc == "<unknown>:<unknown>" || loc == "<unknown>") {
-    if (!is_vnone) {
+    if (!noop) {
       bfr = strip_frame(fr)
       if (bfr == "") bfr = fr
-      UE_LIST[++NUE] = "GEN\t" bfr "\t" npayload
+      UE_LIST[++NUE] = "GEN\t" bfr "\t" core
     }
     next
   }
   if (substr(loc, 1, 1) != "/" && substr(loc, 1, 8) != "file:///") next
   if (loc !~ /:[0-9]+$/) { failx("malformed generalizing loc"); next }
 
+  if (fr !~ /\+[0-9]+$/) { failx("malformed generalizing frame"); next }
   fn = strip_frame(fr)
-  if (fn == "") { failx("malformed generalizing frame"); next }
+  if (fn == "") fn = "<anon>"
 
   if (is_target(fn)) {
-    if (is_vnone) {
-      ik = fn SUBSEP loc SUBSEP npayload
+    if (noop) {
+      ik = fn SUBSEP loc SUBSEP core
       if (!(ik in ISEEN)) { ISEEN[ik] = 1; ICNT[fn]++ }
     } else {
-      record_e(fn, "GEN", loc, npayload)
+      record_e(fn, "GEN", loc, core)
     }
+  } else if (!noop) {
+    UE_LIST[++NUE] = "GEN\tuser:" fn "\t" core
   }
   next
 }
@@ -528,36 +585,33 @@ END {
 '
 
 # =============================================================================================
-# RECORD EXTRACTORS & VERDICT JUDGE
+# RECORD EXTRACTORS, JUDGE, AND DIFF_FN (space-formatted, 0 raw TABs, lib/nullctl.sh pattern)
 # =============================================================================================
 s_ms() { # combined_recs fn (null control: keeps loc)
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t" }
-    substr($0, 1, length(pm)) == pm { print "*\t" $2 "\t" $3 "\t" $4 }
-    substr($0, 1, length(pe)) == pe { print "*\t" $2 "\t" $3 "\t" $4 }
+    substr($0, 1, length(pm)) == pm { printf "*\t%s  %s  %s\n", $2, $3, $4 }
+    substr($0, 1, length(pe)) == pe { printf "*\t%s  %s  %s\n", $2, $3, $4 }
   ' | multiset
 }
 
-v_ms() { # combined_recs fn (cross-side diff: strips loc)
+v_ms() { # combined_recs fn (cross-side diff: strips loc, 0 raw TABs in display key)
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t" }
-    substr($0, 1, length(pm)) == pm { print "*\t" fn "\t" $2 "\t" $4 }
-    substr($0, 1, length(pe)) == pe { print "*\t" fn "\t" $2 "\t" $4 }
+    substr($0, 1, length(pm)) == pm { printf "*\t%s  %s  %s\n", fn, $2, $4 }
+    substr($0, 1, length(pe)) == pe { printf "*\t%s  %s  %s\n", fn, $2, $4 }
   ' | multiset
 }
 
-# Whole-process unattributed builtin instability multiset (UM + UE)
-u_ms() { # combined_recs
+u_ms() { # combined_recs (whole-process unattributed / non-target instability multiset, 0 raw TABs)
   printf '%s\n' "$1" | awk '
-    /^UM / { print "*\tUNATTR\t" substr($0, 4) }
-    /^UE / { print "*\tUNATTR\t" substr($0, 4) }
+    BEGIN { FS = "\t" }
+    /^UM / { printf "*\tUNATTR  %s  %s  %s\n", substr($1, 4), $2, $3 }
+    /^UE / { printf "*\tUNATTR  %s  %s  %s\n", substr($1, 4), $2, $3 }
   ' | multiset
 }
 
-# Execution guard check -> "<compiled_flag> <executed_flag>"
-# WHY: compiled (K) alone is NOT execution proof; executed requires R (opt compile or map event)
-# OR any attributed E (ELEM/GEN) or I (v{None} literal init) event.
-exec_state() { # combined_recs fn
+exec_state() { # combined_recs fn -> "<compiled_flag> <executed_flag>"
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; wk = "K " fn; wr = "R " fn; pe = "E " fn "\t"; pi = "I " fn "\t"; c = 0; e = 0 }
     $0 == wk { c = 1 }
@@ -568,7 +622,7 @@ exec_state() { # combined_recs fn
   '
 }
 
-count_instab() { # combined_recs fn
+count_instab() {
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t" }
     substr($0, 1, length(pm)) == pm || substr($0, 1, length(pe)) == pe { n++ }
@@ -576,7 +630,7 @@ count_instab() { # combined_recs fn
   '
 }
 
-reported_fn_meta() { # combined_recs fn -> "<normal_trans> <lit_vnone_inits>"
+reported_fn_meta() {
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; pt = "T " fn "\t"; pi = "I " fn "\t"; tr = 0; li = 0 }
     substr($0, 1, length(pt)) == pt { tr = $2 + 0 }
@@ -585,8 +639,10 @@ reported_fn_meta() { # combined_recs fn -> "<normal_trans> <lit_vnone_inits>"
   '
 }
 
-judge_side() { # fn: sets JV (OK|NO-VERDICT) and JWHY from JRC[], JLOG[], JREC[]
-  local fn="$1" n i x first nk dl st comp ran
+# judge_side FN MSDIR SIDE: checks driver rc, log integrity, global X, lib/nullctl.sh file cmp -s,
+# AND execution guard on EVERY run 1..N (fixes RECHECK D12 where guard checked run 1 only!).
+judge_side() {
+  local fn="$1" msdir="$2" side="$3" n i x f1 fk dl st comp ran safe_fn
   JV=NO-VERDICT; JWHY=""
   n=${#JRC[@]}
   for ((i = 0; i < n; i++)); do
@@ -597,51 +653,114 @@ judge_side() { # fn: sets JV (OK|NO-VERDICT) and JWHY from JRC[], JLOG[], JREC[]
     x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X / && !n++ { print substr($0, 3) }')
     if [[ -n "$x" ]]; then JWHY="unreadable shape trace in run $((i + 1)): $x"; return 0; fi
   done
-  first=$(s_ms "${JREC[0]}" "$fn")
+  safe_fn=${fn// /_}
+  f1="$msdir/$safe_fn.$side.1.txt"
+  s_ms "${JREC[0]}" "$fn" >"$f1"
   for ((i = 1; i < n; i++)); do
-    nk=$(s_ms "${JREC[$i]}" "$fn")
-    if [[ "$nk" != "$first" ]]; then
-      dl=$(awk "$MSDIFF_AWK" <(printf '%s\n' "$first") <(printf '%s\n' "$nk") | sort -k3 \
+    fk="$msdir/$safe_fn.$side.$((i + 1)).txt"
+    s_ms "${JREC[$i]}" "$fn" >"$fk"
+    if ! cmp -s "$f1" "$fk"; then
+      dl=$(awk "$MSDIFF_AWK" "$f1" "$fk" | sort -k3 \
         | awk -v k="$((i + 1))" '{ n++; if (n == 1) { l = $0; sub(/^  before=[0-9]+ after=[0-9]+  /, "", l); a = $1; b = $2
             sub(/^before=/, "", a); sub(/^after=/, "", b); f = "run 1 x" a " | run " k " x" b "  " l } }
           END { printf "%d record(s) differ, first: %s", n, f }')
       JWHY="null control: run $((i + 1)) differs from run 1 ($dl)"; return 0
     fi
   done
-  st=$(exec_state "${JREC[0]}" "$fn")
-  comp=${st%% *}; ran=${st#* }
-  if [[ "$ran" != 1 ]]; then
-    if [[ "$comp" == 1 ]]; then
-      JWHY="compiled (~ or ^) only with 0 attributed map/shape events and 0 optimizing compiles for '$fn' in run 1 (cannot distinguish compiled-but-uncalled from cold non-object execution)"
-    else
-      JWHY="no execution evidence for '$fn' in run 1 (no such name or never called)"
+  # D12 fix: verify execution evidence on EVERY run 1..N, not just run 1!
+  for ((i = 0; i < n; i++)); do
+    st=$(exec_state "${JREC[$i]}" "$fn")
+    comp=${st%% *}; ran=${st#* }
+    if [[ "$ran" != 1 ]]; then
+      if [[ "$comp" == 1 ]]; then
+        JWHY="compiled (~ or ^) only with 0 attributed map/shape events and 0 optimizing compiles for '$fn' in run $((i + 1)) (warm up more until optimizing compile, or function was never called)"
+      else
+        JWHY="no execution evidence for '$fn' in run $((i + 1)) (no such name or never called)"
+      fi
+      return 0
     fi
-    return 0
-  fi
+  done
   JV=OK
 }
 
-# Check null control on unattributed builtin instability for one side -> "" if stable, else reason
-unattr_nullctl() { # uses JREC[]
-  local n=${#JREC[@]} i first nk
-  first=$(u_ms "${JREC[0]}")
+unattr_nullctl() { # msdir side (reads JREC[])
+  local msdir="$1" side="$2" n=${#JREC[@]} i f1 fk
+  f1="$msdir/_unattr.$side.1.txt"
+  u_ms "${JREC[0]}" >"$f1"
   for ((i = 1; i < n; i++)); do
-    nk=$(u_ms "${JREC[$i]}")
-    if [[ "$nk" != "$first" ]]; then
-      echo "unattributed builtin instability varied between run 1 and run $((i + 1))"
+    fk="$msdir/_unattr.$side.$((i + 1)).txt"
+    u_ms "${JREC[$i]}" >"$fk"
+    if ! cmp -s "$f1" "$fk"; then
+      echo "unattributed/external instability varied between run 1 and run $((i + 1))"
       return 0
     fi
   done
   echo ""
 }
 
+compute_unattr_diff() { # msdir (reads REB[], REA[]; sets UNATTR_DIFF)
+  local msdir="$1" ucb uca
+  JREC=("${REB[@]}"); ucb=$(unattr_nullctl "$msdir" before)
+  JREC=("${REA[@]}"); uca=$(unattr_nullctl "$msdir" after)
+  UNATTR_DIFF=""
+  if [[ -n "$ucb" ]]; then
+    UNATTR_DIFF="before: $ucb"
+  elif [[ -n "$uca" ]]; then
+    UNATTR_DIFF="after: $uca"
+  else
+    u_ms "${REB[0]}" >"$msdir/_unattr.b1.txt"
+    u_ms "${REA[0]}" >"$msdir/_unattr.a1.txt"
+    if ! cmp -s "$msdir/_unattr.b1.txt" "$msdir/_unattr.a1.txt"; then
+      UNATTR_DIFF=$(awk "$MSDIFF_AWK" "$msdir/_unattr.b1.txt" "$msdir/_unattr.a1.txt" | sort -k3)
+    fi
+  fi
+}
+
+# diff_fn FN MSDIR: judges both sides, compares V multisets, enforces unattributed-delta guard
+# on SAME (sets FV and folds into VERDICT). Extracted so --self-test tests it directly (N5 fix!).
+diff_fn() {
+  local fn="$1" msdir="$2" VB VA WB WA NB NA MSB MSA MB MA l
+  JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge_side "$fn" "$msdir" before; VB=$JV; WB=$JWHY
+  JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge_side "$fn" "$msdir" after;  VA=$JV; WA=$JWHY
+  if [[ "$VB" == NO-VERDICT || "$VA" == NO-VERDICT ]]; then
+    FV=NO-VERDICT
+    [[ "$VB" != NO-VERDICT ]] || say "  $fn: NO-VERDICT -- before: $WB"
+    [[ "$VA" != NO-VERDICT ]] || say "  $fn: NO-VERDICT -- after: $WA"
+  else
+    NB=$(count_instab "${REB[0]}" "$fn"); NA=$(count_instab "${REA[0]}" "$fn")
+    MSB=$(v_ms "${REB[0]}" "$fn"); MSA=$(v_ms "${REA[0]}" "$fn")
+    if [[ "$MSB" == "$MSA" ]]; then
+      if [[ -n "$UNATTR_DIFF" ]]; then
+        FV=NO-VERDICT
+        say "  $fn: NO-VERDICT -- attributed sites identical (before $NB | after $NA), but unattributed/external shape instability differs:"
+        while IFS= read -r l; do say "    $l"; done <<< "$UNATTR_DIFF"
+      else
+        FV=SAME
+        say "  $fn: SAME -- identical shape-instability multiset (before $NB | after $NA site(s))"
+      fi
+    else
+      FV=DIFF
+      say "  $fn: DIFF -- shape-instability multiset differs (before $NB | after $NA site(s))"
+      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$MSB") <(printf '%s\n' "$MSA") | sort -k3)
+    fi
+    MB=$(reported_fn_meta "${REB[0]}" "$fn"); MA=$(reported_fn_meta "${REA[0]}" "$fn")
+    say "    REPORTED normal-transitions: before=${MB%% *} after=${MA%% *}  boilerplate-noop-inits: before=${MB#* } after=${MA#* }"
+  fi
+  VERDICT=$(worst "$VERDICT" "$FV")
+}
+
 # =============================================================================================
 # SINGLE TRACE RUNNER
 # =============================================================================================
+# WHY `--no-sparkplug` (fixes Node 22.23.5 exit 133 SIGTRAP crash while keeping `--no-node-snapshot`!):
+#   On Node 22 (V8 12.4), `--trace-generalization` inside a Sparkplug (CodeKind::BASELINE) frame
+#   hits `Check failed: kind(isolate) != CodeKind::BASELINE` in AbstractCode::SourceStatementPosition.
+#   Adding `--no-sparkplug` achieves rc=0 AND 0 unresolved non-zero map pcs across Node 22/24/26/27.
 TRACE_FLAGS=(
   --log-maps
   --trace-elements-transitions
   --trace-generalization
+  --no-sparkplug
   --no-concurrent-recompilation
   --no-concurrent-sparkplug
   --no-node-snapshot
@@ -654,7 +773,6 @@ run_side() { # side dir base k
   local -a LF
   outf="$rd/run.$4.out"
   rd_esc=${rd//%/%%}
-  # Regular file redirection (`>"$outf" 2>&1`), NEVER a pipe!
   ( cd "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd_esc/run.log" "./$3" ) \
     >"$outf" 2>&1 <&0 &
   drv_wait; rc=$DRV_RC
@@ -678,12 +796,15 @@ run_side() { # side dir base k
 }
 
 # =============================================================================================
-# --self-test: canned traces through MAP_AWK + SHAPE_STDOUT_AWK + judge + v8fl_ok allowlist
+# --self-test: canned traces + diff_fn + unattr guard + N1/N4/N5/N6/D8/D9/D11/D12 checks
 # =============================================================================================
 self_test() {
-  local oks=0 fails=0 H L1 L2 L3 L4 OUT1 OUT2
-  local -a JRC JLOG JREC
-  local JV="" JWHY=""
+  local oks=0 fails=0 H L1 L2 L3 L4 OUT1 OUT2 ST_D msdir
+  local -a JRC JLOG JREC RCB RCA LGB LGA REB REA
+  local JV="" JWHY="" FV="" VERDICT="" UNATTR_DIFF="" REPORT=/dev/null
+  ST_D=$(mktemp -d "${TMPDIR:-/tmp}/sd-st.XXXXXX") || { echo "FAIL self-test: mktemp -d"; FINAL=1; exit 1; }
+  TMP_DIR="$ST_D"
+  msdir="$ST_D/ms"; mkdir "$msdir"
   check() {
     if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"
     else fails=$((fails + 1)); echo "FAIL $1: got [$2] want [$3]"
@@ -701,21 +822,24 @@ code-creation,JS,10,210,0x200000500,64,uncalled file:///w/d.mjs:5:1,0x300000005,
 code-creation,JS,11,215,0x200000600,88,uncalled file:///w/d.mjs:5:1,0x300000005,^
 code-creation,JS,13,300,0x200001000,256,optDel file:///w/d.mjs:10:1,0x300000002,*
 code-creation,JS,10,400,0x200002000,64,dictArr file:///w/d.mjs:20:1,0x300000003,~
+code-creation,JS,10,450,0x200003000,64,helperDel file:///w/d.mjs:30:1,0x300000004,~
 EOF
   H=${H%$'\n'}
 
-  # Test 1: clean fn with map Transition has K+R+T, 0 instability; uncalled (~ and ^ only) has K ONLY (no R!)
+  # Test 1: clean fn -> K+R+T; compiled-but-uncalled (~ and ^) -> K only (no R)
   L1="$H"$'\n''map,Transition,220,0x101,0x102,0x200000010,2,5,,x'
   check "MAP_AWK: clean mono fn -> K+R+T; compiled-but-uncalled (~ and ^) -> K only (no R)" \
     "$(mrec 'clean,uncalled' "$L1")" "K clean;R clean;T clean|1;K uncalled;"
 
-  # Test 2: TurboFan pc allowed + Normalize/NormalizeCached collapse; ReflectDeleteProperty goes to UM
+  # Test 2: TurboFan pc allowed + Normalize collapse + Builtin:ReflectDeleteProperty + NONE pc=0 + N1 non-target user:helperDel -> UM!
   L2="$H"$'\n''map,Normalize,310,0x201,0x202,0x200001040,12,3,DeletingProperty,'
   L2="$L2"$'\n''map,NormalizeCached,320,0x201,0x202,0x200001040,12,3,DeletingProperty,'
   L2="$L2"$'\n''map,NormalizeCached,330,0x201,0x202,0x100000040,0,-1,DeletingProperty,'
-  check "MAP_AWK: TurboFan pc allowed + Normalize collapse + Builtin:ReflectDeleteProperty -> UM" \
+  L2="$L2"$'\n''map,Normalize,340,0x201,0x202,0x000000000000,-1,-1,DeletingProperty,'
+  L2="$L2"$'\n''map,Normalize,350,0x201,0x202,0x200003010,30,10,DeletingProperty,'
+  check "MAP_AWK (N1 + N5 NONE-owner): Builtin:ReflectDeleteProperty + NONE + user:helperDel all -> UM" \
     "$(mrec optDel "$L2")" \
-    "K optDel;R optDel;M optDel|MAP_NORMALIZE|d.mjs:12:3|DeletingProperty|2;UM MAP_NORMALIZE|Builtin:ReflectDeleteProperty|DeletingProperty;"
+    "K optDel;R optDel;M optDel|MAP_NORMALIZE|d.mjs:12:3|DeletingProperty|2;UM MAP_NORMALIZE|Builtin:ReflectDeleteProperty|DeletingProperty;UM MAP_NORMALIZE|NONE|DeletingProperty;UM MAP_NORMALIZE|user:helperDel|DeletingProperty;"
 
   # Test 3: HOLEY -> DICTIONARY_ELEMENTS detected via map-details; benign Symbol() stays normal T
   L3="$H"
@@ -730,40 +854,67 @@ EOF
     "$(mrec dictArr "$L3")#$(mrec dictArr "$L4")" \
     "K dictArr;R dictArr;M dictArr|MAP_ELEM_DICT|d.mjs:22:7|HOLEY_ELEMENTS -> DICTIONARY_ELEMENTS|1;#K dictArr;R dictArr;T dictArr|1;"
 
-  # Test 4: SHAPE_STDOUT_AWK -- {a: i, b: 2} v{None} excluded to I (NOT E!); real d->d;mutable kept;
-  # Class(0xADDR) + {symbol 0xADDR} normalized; splice -> UE
+  # Test 4: N4 + D6 + N1 in SHAPE_STDOUT_AWK:
+  #   - Node 26 v{None} -> I (not E)
+  #   - Node 22/24 no-op a:s{Any;const}->s{Any;const} -> I (not E)
+  #   - Dual reason-pair for fieldGen folds into ONE E site (hits=2)!
+  #   - Class(0xADDR) + {symbol 0xADDR} normalized
+  #   - splice+1700 (Node 22 offset) -> UE ELEM|splice
+  #   - non-target user fn `otherElem` -> UE ELEM|user:otherElem (N1)
   IFS= read -r -d '' OUT1 <<'EOF' || true
-[generalizing]a:v{None;const}->s{Any;const} (uninitialized field) [~makeLit+19 at file:///w/s.mjs:4]
-[generalizing]a:v{None;const}->s{Any;const} (field type generalization) [~makeLit+19 at file:///w/s.mjs:4]
+[generalizing]a:v{None;const}->s{Any;const} (uninitialized field) [~makeLit+18 at file:///w/s.mjs:4]
+[generalizing]a:v{None;const}->s{Any;const} (field type generalization) [~makeLit+18 at file:///w/s.mjs:4]
+[generalizing]a:s{Any;const}->s{Any;const} (uninitialized field) [~makeLit+11 at file:///w/s.mjs:4]
 [generalizing]x:d{Any;const}->d{Any;mutable} (uninitialized field) [~fieldGen+7 at file:///w/s.mjs:9]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~fieldGen+7 at file:///w/s.mjs:9]
 [generalizing]child:h{Class(0x20f29521bc09);const}->h{Any;const} (field type generalization) [new ~Holder+2 at file:///w/s.mjs:18]
 [generalizing]{symbol 0x3c473b527679}:h{Any;const}->h{Any;mutable} (field type generalization) [~fieldGen+15 at file:///w/s.mjs:10]
-elements transition [PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS] in splice+0 at <unknown>:<unknown> for 0x1111 <JSArray[4]> from 0x2222 <FixedDoubleArray[22]> to 0x3333 <FixedArray[22]>
-elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+63 at file:///w/s.mjs:42 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>
+elements transition [PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS] in splice+1700 at <unknown>:<unknown> for 0x1111 <JSArray[4]> from 0x2222 <FixedDoubleArray[22]> to 0x3333 <FixedArray[22]>
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~otherElem+9 at file:///w/s.mjs:50 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>
 EOF
   OUT1=${OUT1%$'\n'}
-  check "SHAPE_STDOUT_AWK: v{None}->I (not E), real GEN kept, Class+{symbol} normalized, splice->UE" \
-    "$(srec "makeLit,fieldGen,Holder,work" "$OUT1")" \
-    "I makeLit|2;E fieldGen|GEN|s.mjs:9|x:d{Any;const}->d{Any;mutable} (uninitialized field)|1;E Holder|GEN|s.mjs:18|child:h{Class(0xADDR);const}->h{Any;const} (field type generalization)|1;E fieldGen|GEN|s.mjs:10|{symbol 0xADDR}:h{Any;const}->h{Any;mutable} (field type generalization)|1;E work|ELEM|s.mjs:42|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS|1;UE ELEM|splice|PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS;"
+  check "SHAPE_STDOUT_AWK (N4+D6+N1): v{None} & Node22/24 s->s -> I; dual pair folded (hits=2); splice+1700 & user:otherElem -> UE" \
+    "$(srec "makeLit,fieldGen,Holder" "$OUT1")" \
+    "I makeLit|2;E fieldGen|GEN|s.mjs:9|x:d{Any;const}->d{Any;mutable}|2;E Holder|GEN|s.mjs:18|child:h{Class(0xADDR);const}->h{Any;const}|1;E fieldGen|GEN|s.mjs:10|{symbol 0xADDR}:h{Any;const}->h{Any;mutable}|1;UE ELEM|splice|PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS;UE ELEM|user:otherElem|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS;"
 
   # Test 5: malformed stdout generalizing line -> X
   OUT2='[generalizing]broken line without bracket'
   check "SHAPE_STDOUT_AWK: malformed generalizing line -> X" \
     "$(srec Point "$OUT2")" "X malformed generalizing line (no trailing ]) at out line 1;"
 
-  # Test 6: judge_side rejects compiled-but-uncalled (~ and ^ only!) as NO-VERDICT, passes clean
-  local REC_MIX; REC_MIX=$(printf '%s\n' "$L1" | awk -v fns="clean,uncalled,typo" -v inc_trans=0 "$MAP_AWK")
-  JRC=(0 0); JLOG=("" ""); JREC=("$REC_MIX" "$REC_MIX")
-  judge_side clean
-  check "guard: clean fn with R execution evidence -> OK" "$JV" "OK"
-  judge_side uncalled
-  check "guard: compiled-but-uncalled (~ and ^ only) -> NO-VERDICT" "$JV:${JWHY%%:*}" \
-    "NO-VERDICT:compiled (~ or ^) only with 0 attributed map/shape events and 0 optimizing compiles for 'uncalled' in run 1 (cannot distinguish compiled-but-uncalled from cold non-object execution)"
-  judge_side typo
-  check "guard: missing fn -> NO-VERDICT" "$JV:$JWHY" \
-    "NO-VERDICT:no execution evidence for 'typo' in run 1 (no such name or never called)"
+  # Test 6: D12 guard checks EVERY run (run 1 has R, run 2 has K only -> NO-VERDICT!)
+  local REC_R REC_K
+  REC_R=$(printf '%s\n' "$L1" | awk -v fns="clean" -v inc_trans=0 "$MAP_AWK")
+  REC_K="K clean"
+  JRC=(0 0); JLOG=("" ""); JREC=("$REC_R" "$REC_R")
+  judge_side clean "$msdir" g_ok
+  check "guard: clean fn with R in runs 1..2 -> OK" "$JV" "OK"
+  JRC=(0 0); JLOG=("" ""); JREC=("$REC_R" "$REC_K")
+  judge_side clean "$msdir" g_r2
+  check "D12 guard: run 1 R, run 2 K-only -> NO-VERDICT" "$JV:${JWHY% (*}" \
+    "NO-VERDICT:compiled (~ or ^) only with 0 attributed map/shape events and 0 optimizing compiles for 'clean' in run 2"
 
-  # Test 7: LEDGER law 4 v8fl_ok allowlist checks
+  # Test 7: N5 headline fix! diff_fn upgrades SAME -> NO-VERDICT when UNATTR_DIFF non-empty (and stays SAME when empty)
+  local REC_CLEAN="$REC_R"
+  local REC_WITH_UM="$REC_R"$'\n'"UM MAP_NORMALIZE"$'\t'"Builtin:ReflectDeleteProperty"$'\t'"DeletingProperty"
+  RCB=(0 0); RCA=(0 0); LGB=("" ""); LGA=("" "")
+  REB=("$REC_CLEAN" "$REC_CLEAN"); REA=("$REC_CLEAN" "$REC_CLEAN")
+  compute_unattr_diff "$msdir"
+  VERDICT=SAME; diff_fn clean "$msdir" >/dev/null
+  check "N5 diff_fn: clean vs clean (empty UNATTR_DIFF) -> SAME" "$VERDICT" "SAME"
+
+  REB=("$REC_CLEAN" "$REC_CLEAN"); REA=("$REC_WITH_UM" "$REC_WITH_UM")
+  compute_unattr_diff "$msdir"
+  VERDICT=SAME; diff_fn clean "$msdir" >/dev/null
+  check "N5 headline fix: attributed SAME + UM Builtin:ReflectDeleteProperty delta -> NO-VERDICT" "$VERDICT" "NO-VERDICT"
+
+  # Test 8: N5 UE null-control check (run 1 UE != run 2 UE -> non-empty unattr_nullctl reason!)
+  local REC_UE1="$REC_R"$'\n'"UE ELEM"$'\t'"splice"$'\t'"PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS"
+  JREC=("$REC_CLEAN" "$REC_UE1")
+  check "N5 UE nullctl: run 1 != run 2 UE -> flagged" "$(unattr_nullctl "$msdir" uetest)" \
+    "unattributed/external instability varied between run 1 and run 2"
+
+  # Test 9: D8 verbatim v8fl_ok allowlist checks
   V8FL_TAB=$'\nmaglev bool\nno-lazy bool\nlazy bool\nmax-inlined-bytecode-size int\nsparkplug-filter string\nlog-maps bool\n'
   local ok1=0 ok2=0 b1=0 b2=0 b3=0 b4=0 b5=0
   v8fl_ok --no-maglev && ok1=1
@@ -773,8 +924,23 @@ EOF
   v8fl_ok --unknown-flag || b3=1
   v8fl_ok --sparkplug-filter=x || b4=1
   v8fl_ok --log-maps || b5=1
-  check "v8fl_ok allowlist: valid flags accepted; node opts, unknown, string, log refused" \
+  check "D8 v8fl_ok allowlist: valid flags accepted; node opts, unknown, string, log refused" \
     "$ok1$ok2$b1$b2$b3$b4$b5" "1111111"
+
+  # Test 10: CLI refusals (N6 --fn 'mk,', D11 --fn=mk, D9 newline in driver path)
+  local dummy="$ST_D/d.mjs"; printf '1;\n' >"$dummy"
+  local rc=0 msg=""
+  rc=0; msg=$(/bin/bash "$SELF" --fn "mk," "$dummy" "$dummy" 2>&1) || rc=$?
+  check "N6: --fn 'mk,' trailing comma refused exit 2" "$rc:${msg%%$'\n'*}" "2:shape-diff: --fn must not have an empty entry"
+  rc=0; msg=$(/bin/bash "$SELF" --fn= "$dummy" "$dummy" 2>&1) || rc=$?
+  check "D11: --fn= empty refused exit 2" "$rc:${msg%%$'\n'*}" "2:shape-diff: --fn must not be empty"
+  rc=0; msg=$(/bin/bash "$SELF" --fn=mk --runs=99 "$dummy" "$dummy" 2>&1) || rc=$?
+  check "D11: --fn=mk and --runs=99 parsed cleanly via need()" "$rc:${msg%%$'\n'*}" "2:shape-diff: --runs must be 2..20, got '99'"
+  local nldir="$ST_D/x"$'\n'"VERDICT SAME"
+  mkdir -p "$nldir"; printf '1;\n' >"$nldir/d.mjs"
+  rc=0; msg=$(/bin/bash "$SELF" --fn mk "$nldir/d.mjs" "$dummy" 2>&1) || rc=$?
+  local forged=0; case "$msg" in *"VERDICT SAME"*) forged=1 ;; esac
+  check "D9: newline in DRIVER path refused exit 2 with 0 forged lines" "$rc:$forged" "2:0"
 
   echo
   if [[ $fails -eq 0 ]]; then
@@ -787,7 +953,7 @@ EOF
 }
 
 # =============================================================================================
-# CLI PARSING & VALIDATION
+# CLI PARSING & VALIDATION (uses lib/args.sh need(), nl_refuse, --out symlink check)
 # =============================================================================================
 usage() {
   cat >&2 <<'EOF'
@@ -798,27 +964,28 @@ Usage:
   shape-diff.prototype.sh --self-test
 
 Options:
-  --fn LIST              comma-separated short function names (e.g. Point,work,makeLit)
+  --fn LIST              comma-separated short function names (supports --fn=LIST)
   --include-transitions  also diff normal monomorphic Transition/InitialMap sites
   --runs N               runs per side, 2..20 (default: 3)
   --node BIN             node binary (default: $NODE or node)
   --v8-flags STR         extra V8 tuning flags (validated against `node --v8-options` allowlist)
   --out DIR              keep DIR/report.txt and DIR/raw/<side>/run.<k>.{log,out}
-  --self-test            run canned checks on MAP_AWK, SHAPE_STDOUT_AWK, judge_side, v8fl_ok
+  --self-test            run canned + diff_fn + CLI refusal checks (exit 0 / 1)
   -h, --help             this text (exit 2)
 
 Verdict:
-  0 SAME        identical attributed shape-instability multisets AND identical unattributed
-                builtin instability multisets (known V8 limit: CSA Array.prototype.push is
-                silent in V8 14.6 -- see RESEARCH.md).
+  0 SAME        identical attributed shape-instability multisets AND identical unattributed /
+                non-target instability multisets (known limit: a single cold call to
+                Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27).
   1 DIFF        attributed shape-instability multiset differs for >= 1 target fn.
   2 NO-VERDICT  refusal, trace parse error, null-control failure, missing execution evidence,
-                or unattributed builtin instability (e.g. Reflect.deleteProperty, splice)
-                changed while attributed sites looked SAME.
+                or unattributed/external instability (Reflect.deleteProperty, splice, non-target
+                user helper) changed while attributed sites looked SAME.
 EOF
   DIED=1; exit 2
 }
 
+SEEN_FN=0; SEEN_INC=0; SEEN_RUNS=0; SEEN_NODE=0; SEEN_V8=0; SEEN_OUT=0
 FNLIST=""
 INC_TRANS=0
 RUNS=3
@@ -828,56 +995,81 @@ OUT=""
 POS=()
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
+  a="$1"; v=""
+  if [[ "$a" == --*=* ]]; then
+    v=${a#*=}; a=${a%%=*}
+    case "$a" in
+      --help|--self-test|--include-transitions) die "$a takes no =value" ;;
+      *) [[ -n "$v" ]] || die "$a must not be empty" ;;
+    esac
+  fi
+  nl_refuse "option name" "$a"
+  case "$a" in
     -h|--help) usage ;;
-    --self-test) self_test ;;
-    --include-transitions) INC_TRANS=1; shift ;;
-    --fn) [[ $# -ge 2 ]] || die "--fn needs a value"; FNLIST="$2"; shift 2 ;;
-    --runs) [[ $# -ge 2 ]] || die "--runs needs a value"; RUNS="$2"; shift 2 ;;
-    --node) [[ $# -ge 2 ]] || die "--node needs a value"; NODE_BIN="$2"; shift 2 ;;
-    --v8-flags) [[ $# -ge 2 ]] || die "--v8-flags needs a value"; V8FLAGS="$2"; shift 2 ;;
-    --out) [[ $# -ge 2 ]] || die "--out needs a value"; OUT="$2"; shift 2 ;;
+    --self-test) [[ $# -eq 1 && ${#POS[@]} -eq 0 && $SEEN_FN -eq 0 ]] || die "--self-test takes no other argument"; self_test ;;
+    --include-transitions) [[ $SEEN_INC -eq 0 ]] || die "--include-transitions given more than once"; SEEN_INC=1; INC_TRANS=1; shift ;;
+    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; FNLIST="$v"; shift ;;
+    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; RUNS="$v"; shift ;;
+    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; NODE_BIN="$v"; shift ;;
+    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; V8FLAGS="$v"; shift ;;
+    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; OUT="$v"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POS+=("$1"); shift; done ;;
-    -*) die "unknown option: $1 (see --help)" ;;
+    -*) die "unknown option: $a (see --help)" ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--fn" "$FNLIST"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--node" "$NODE_BIN"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"
+
 RE_INT='^[0-9]+$'
 [[ "$RUNS" =~ $RE_INT && "$RUNS" -ge 2 && "$RUNS" -le 20 ]] || die "--runs must be 2..20, got '$RUNS'"
 [[ -n "$FNLIST" ]] || die "--fn LIST is required"
+case ",$FNLIST," in *,,*) die "--fn must not have an empty entry" ;; esac
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 IFS=',' read -r -a TARGETS <<< "$FNLIST"
+SEEN_F=","
 for fn in "${TARGETS[@]}"; do
   [[ "$fn" =~ $FN_RE ]] || die "invalid function name in --fn: '$fn'"
+  [[ "$SEEN_F" != *",$fn,"* ]] || die "duplicate function name in --fn: '$fn'"
+  SEEN_F="${SEEN_F}${fn},"
 done
 
 [[ ${#POS[@]} -eq 2 ]] || die "requires exactly 2 drivers (DRIVER_BEFORE DRIVER_AFTER), got ${#POS[@]}"
 [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER_BEFORE not readable: ${POS[0]}"
 [[ -f "${POS[1]}" && -r "${POS[1]}" ]] || die "DRIVER_AFTER not readable: ${POS[1]}"
 
-# Early syntactic/conflict refusals BEFORE spawn; full allowlist runs via v8fl_check
+# Split --v8-flags with noglob (`set -f`, D8)
 V8_EXTRA=()
-if [[ -n "$V8FLAGS" ]]; then
+if [[ $SEEN_V8 -eq 1 ]]; then
+  [[ -n "$V8FLAGS" ]] || die "--v8-flags must not be empty"
+  set -f
   # shellcheck disable=SC2206
   V8_EXTRA=($V8FLAGS)
+  set +f
   [[ ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
   for f in "${V8_EXTRA[@]}"; do
     [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
     g=${f//_/-}
     case "$g" in
-      *stress-concurrent-inlining*|*concurrent-recompilation*|*concurrent-sparkplug*)
-        die "--v8-flags must not set $f: conflicts with synchronous compilation flags" ;;
+      *stress-concurrent-inlining*|*concurrent-recompilation*|*sparkplug*)
+        die "--v8-flags must not set $f: conflicts with script's synchronous --no-sparkplug / --no-concurrent-recompilation flags" ;;
       --require*|--import*|--loader*|--experimental-loader*|--env-file*|--experimental-config-file*|--experimental-default-config-file*|--eval*|--print*)
         die "--v8-flags must not set $f: node preload/eval/print flag is refused" ;;
     esac
   done
 fi
 
-# --out validation BEFORE any spawn or write (mirrors src/ic-diff.sh)
+# --out validation BEFORE any spawn or write (D9: includes symlink check on --out itself + nl_dir!)
 if [[ -n "$OUT" ]]; then
   [[ "$OUT" != -* ]] || OUT="./$OUT"
+  [[ ! -L "$OUT" ]] || die "--out: $OUT is a symlink (refused)"
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
@@ -888,13 +1080,12 @@ if [[ -n "$OUT" ]]; then
   if [[ -e "$OUT/report.txt" ]]; then
     RL=$(find "$OUT/report.txt" -links +1 2>/dev/null || true)
     [[ -z "$RL" ]] || die "--out: $OUT/report.txt has another hard link (refused)"
-    for inp in "${POS[@]}"; do
-      [[ ! "$OUT/report.txt" -ef "$inp" ]] || die "--out: $OUT/report.txt is an input file of this run"
-    done
   fi
   OUT_UP="$OUT/raw/before"
   while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
   [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw/{before,after} ($OUT_UP is not a writable directory)"
+  nl_dir "--out (resolved)" "$OUT"
+  rep_refuse "${POS[@]}"
 fi
 
 NODE_RES=$NODE_BIN
@@ -903,8 +1094,19 @@ if [[ "$NODE_RES" != */* ]]; then
 fi
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH: $NODE_BIN -> $NODE_RES"
 [[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not executable: $NODE_RES"
-NODE_DIR=$(cd -- "$(dirname -- "$NODE_RES")" && pwd)
-NODE_RES="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve directory of $NODE_RES"
+NODE_C="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_C" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_RES=$NODE_C
+nl_refuse "--node (resolved)" "$NODE_RES"
+[[ "$NODE_RES" != *=* ]] || die "node binary: an = is not allowed in the resolved path: $NODE_RES"
+
+DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
+DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+[[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"
+[[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"
+nl_refuse "DRIVER (resolved)" "$DRV_B_DIR/$DRV_B_BASE" "$DRV_A_DIR/$DRV_A_BASE"
 
 GOT_VER=$("${PROBE_ENV[@]}" "$NODE_RES" --version 2>/dev/null) || die "cannot run $NODE_RES --version"
 v8fl_check "$NODE_RES"
@@ -912,18 +1114,19 @@ v8fl_check "$NODE_RES"
 if [[ -n "$OUT" ]]; then
   mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" || die "--out: cannot create $OUT/raw/{before,after}"
   OUT=$(cd -- "$OUT" && pwd)
+  nl_refuse "--out (resolved)" "$OUT"
   REPORT="$OUT/report.txt"
   { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
   RUNROOT="$OUT/raw"
+  TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/shape-diff-ms.XXXXXX") || die "cannot create temp ms dir"
+  MSDIR="$TMP_DIR"
 else
   TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/shape-diff.XXXXXX") || die "cannot create temp dir"
   TMP_DIR=$(cd -- "$TMP_DIR" && pwd)
-  mkdir "$TMP_DIR/before" "$TMP_DIR/after"
+  mkdir "$TMP_DIR/before" "$TMP_DIR/after" "$TMP_DIR/ms"
   RUNROOT="$TMP_DIR"
+  MSDIR="$TMP_DIR/ms"
 fi
-
-DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
-DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
 
 say "shape-diff (prototype)  node $GOT_VER  $NODE_RES  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
 say "mode    diff  runs $RUNS  v8 flags ${V8FLAGS:+$V8FLAGS }${TRACE_FLAGS[*]}"
@@ -941,56 +1144,13 @@ for k in $(seq 1 "$RUNS"); do
   run_side after  "$DRV_A_DIR" "$DRV_A_BASE" "$k"; RCA+=("$RUN_RC"); LGA+=("$RUN_LOG"); REA+=("$RUN_REC")
 done
 
-# Pre-compute whole-process unattributed instability null control and delta (for fail-closed guard on SAME)
-JREC=("${REB[@]}"); UNCTL_B=$(unattr_nullctl)
-JREC=("${REA[@]}"); UNCTL_A=$(unattr_nullctl)
-UMSB=$(u_ms "${REB[0]}")
-UMSA=$(u_ms "${REA[0]}")
-UNATTR_DIFF=""
-if [[ -n "$UNCTL_B" ]]; then
-  UNATTR_DIFF="before: $UNCTL_B"
-elif [[ -n "$UNCTL_A" ]]; then
-  UNATTR_DIFF="after: $UNCTL_A"
-elif [[ "$UMSB" != "$UMSA" ]]; then
-  UNATTR_DIFF=$(awk "$MSDIFF_AWK" <(printf '%s\n' "$UMSB") <(printf '%s\n' "$UMSA") | sort -k3)
-fi
+compute_unattr_diff "$MSDIR"
 
 VERDICT=SAME
-for fn in "${TARGETS[@]}"; do
-  JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge_side "$fn"; VB=$JV; WB=$JWHY
-  JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge_side "$fn"; VA=$JV; WA=$JWHY
-  if [[ "$VB" == NO-VERDICT || "$VA" == NO-VERDICT ]]; then
-    FV=NO-VERDICT
-    [[ "$VB" != NO-VERDICT ]] || say "  $fn: NO-VERDICT -- before: $WB"
-    [[ "$VA" != NO-VERDICT ]] || say "  $fn: NO-VERDICT -- after: $WA"
-  else
-    NB=$(count_instab "${REB[0]}" "$fn"); NA=$(count_instab "${REA[0]}" "$fn")
-    MSB=$(v_ms "${REB[0]}" "$fn"); MSA=$(v_ms "${REA[0]}" "$fn")
-    if [[ "$MSB" == "$MSA" ]]; then
-      if [[ -n "$UNATTR_DIFF" ]]; then
-        # WHY fail closed from SAME -> NO-VERDICT when unattributed builtin instability changed:
-        #   Reflect.deleteProperty() and Array.prototype.splice() emit unattributed builtin
-        #   instability lines. Returning SAME when those changed would be a false negative.
-        FV=NO-VERDICT
-        say "  $fn: NO-VERDICT -- attributed sites identical (before $NB | after $NA), but unattributed builtin shape instability differs:"
-        while IFS= read -r l; do say "    $l"; done <<< "$UNATTR_DIFF"
-      else
-        FV=SAME
-        say "  $fn: SAME -- identical shape-instability multiset (before $NB | after $NA site(s))"
-      fi
-    else
-      FV=DIFF
-      say "  $fn: DIFF -- shape-instability multiset differs (before $NB | after $NA site(s))"
-      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$MSB") <(printf '%s\n' "$MSA") | sort -k3)
-    fi
-    MB=$(reported_fn_meta "${REB[0]}" "$fn"); MA=$(reported_fn_meta "${REA[0]}" "$fn")
-    say "    REPORTED normal-transitions: before=${MB%% *} after=${MA%% *}  boilerplate-vNone-inits: before=${MB#* } after=${MA#* }"
-  fi
-  VERDICT=$(worst "$VERDICT" "$FV")
-done
+for fn in "${TARGETS[@]}"; do diff_fn "$fn" "$MSDIR"; done
 
 say ""
-say "NOTE: CSA Array.prototype.push transitions are silent in V8 14.6 (0 lines in all 3 flags); see RESEARCH.md."
+say "NOTE: a single cold call to Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27 (200 calls emit unattributed push+0); see RESEARCH.md."
 say ""
 say "VERDICT $VERDICT"
 FINAL=1

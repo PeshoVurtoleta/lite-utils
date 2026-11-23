@@ -1,65 +1,69 @@
 # Research: `code-size-diff` (ROADMAP L4, target 1.3.0)
 
-Status: research note + reproducible probes + runnable prototype (not a shipped script or adopted plan).
-Host / runtime probed: `darwin-arm64`, `node v26.8.2` (`V8 14.6.202.34-node.28`), `/bin/bash 3.2.57`, BSD awk.
-Reproducible probe runner: `probes/run-probes.sh` (runs 8 committed `.mjs` drivers under `env -u NODE_OPTIONS -u NODE_V8_COVERAGE -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS`, untimed, **REPORTED** tier).
+Status: research drop (INTAKE + self-checking probes + runnable prototype; not a shipped script).
+Provenance: 2026-11-22T23:49Z-23:51Z, `darwin-arm64`, `/bin/bash 3.2.57(1)-release`, BSD awk,
+load1 `3.86-4.30` (PRELIMINARY shared host; untimed, **REPORTED** tier), 4 env vars stripped
+(`NODE_OPTIONS`, `NODE_V8_COVERAGE`, `NODE_COMPILE_CACHE`, `NODE_REDIRECT_WARNINGS`).
+Node binaries probed on this host:
+- `v22.23.5` (`V8 12.4.254.21-node.57`)
+- `v24.22.3` (`V8 13.6.233.17-node.63`)
+- `v26.8.2` (`V8 14.6.202.34-node.28`)
+- `v27.0.0-alpha.0.1.0` (`V8 15.6.75.50-node.11`)
 
-> **Coverage gap (UNCONFIRMED):** Only `node v26.8.2` on `darwin-arm64` is installed on this host.
-> **No Node 22, Node 24, or Linux x64 run has been performed yet.** Every cross-Node or Linux x64
-> expectation below is explicitly marked **UNCONFIRMED** and must be verified in a pre-planning TASK 0
-> run before 1.3.0 is planned.
+Self-checking probe runner: [probes/run-probes.sh](file:///Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteUtils/research/code-size-diff/probes/run-probes.sh) (exits 0 iff all assertions pass; exits 1 on any drift).
+Runnable blueprint: [code-size-diff.prototype.sh](file:///Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteUtils/research/code-size-diff/code-size-diff.prototype.sh).
 
----
-
-## 1. Point of View (Why 1.3.0 Is the Right Slot)
-
-`code-size-diff` is the cleanest, highest-signal post-1.0 script in the LiteUtils pipeline after `import-audit`:
-
-1. **It closes the exact blind spot left by `bytecode-budget` and `inlining-budget-diff`.**
-   - `bytecode-budget` measures Ignition bytecode length (`--print-bytecode`). On `probes/bloat-before.mjs` vs `probes/bloat-after.mjs`, `hot` grew from `38 B -> 72 B` in Ignition, while Maglev grew `824 B -> 1144 B` (`+320 B`) and TurboFan grew `596 B -> 644 B` (`+48 B`).
-   - `inlining-budget-diff` tracks whether a callee was inlined and bytecode budget spent, not the emitted native machine-code footprint or deopt-recompile churn (`probes/deopt-reopt.mjs`).
-2. **It fits the LiteUtils 7-law template cleanly.**
-   - `--log-code --logfile=<abs>/run.log` writes structured CSV into a dedicated file, never mixing with driver stdout/stderr (no pipe truncation, no forging via `console.log`).
-   - Reuses the `ic-diff.sh` / `lib/*.sh` architecture verbatim (`prologue`, `msdiff`, `common`, `tracked`, `v8flags`, `args`, plus `stage` if ref/file mode is added).
-3. **Hypothesis for avoiding `ic-diff`'s V8-14-only `CodeKind` lock-in (UNCONFIRMED on Node 22/24):**
-   - `ic-diff.sh` gates on V8's numeric `CodeKind` enum in CSV field `$3` (`10/11/12/13`), which causes `NO-VERDICT` on Node 22/24 where V8 12/13 used different enum numbers (`LEDGER.md #110, #128`).
-   - `code-size-diff` does not need numeric `$3` to classify tiers: field `$9` carries V8's symbolic tier marker (`~`, `^`, `+`, `+'`, `o+`, `*`, `*'`, `o*`). Keying on `$9` *should* work across Node 22/24/26/27+ without a version-keyed enum table, **subject to verifying `$9` markers and `NF == 9` on real Node 22 and Node 24 binaries**.
-4. **Three concrete hazards already proven on `node v26.8.2`:**
-   - **Hazard 1 -- `--concurrent-sparkplug` is ON by default independently of `--no-concurrent-recompilation`.** Must pass `--no-concurrent-sparkplug` too (section 2.4).
-   - **Hazard 2 -- `--turbolev` reuses TurboFan's `JS,13,*'` marker** while changing machine-code size (`344 B -> 336 B` on `probes/deopt-reopt.mjs`). Must refuse `--turbolev` / `--turbolev-future` by exact name AND refuse default-on Turbolev via `--v8-options` (`LEDGER.md #107 G5c`).
-   - **Hazard 3 -- `--max` on native code size MUST pin CPU/OS (`--platform-arch`), not only `--node-version`.** A byte limit measured on Apple ARM (`darwin-arm64`) gives a wrong `WITHIN` or `OVER` verdict on `linux-x64` CI legs unless mismatched platform-arch exits `2 NO-VERDICT`.
+> **Coverage gap (UNCONFIRMED):** Only `darwin-arm64` was run here. **Linux x64** (variable-length x64
+> instruction encoding under ASLR, mawk/gawk, and Ubuntu uutils `cmp`/`tail -c`/`seq`) is **UNCONFIRMED**
+> and must be captured on one CI leg before 1.3.0 ships.
 
 ---
 
-## 2. Empirical V8 Probe Findings (`node v26.8.2`, `darwin-arm64`)
+## 1. INTAKE Ladder, Kill Rules, and LEDGER Law Mapping
 
-All outputs below were produced verbatim by:
-```sh
-/bin/bash research/code-size-diff/probes/run-probes.sh
-```
-(Paths shortened only where noted by `<REPO>` = `/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteUtils`.)
+### 1.1 Question & Ladder
+Question: Can a standalone bash + POSIX awk script compare V8 optimized machine-code byte sizes per named
+function BEFORE vs AFTER using `--log-code` CSV, across Node 22 / 24 / 26 / 27+, obeying LiteUtils's
+fail-closed template (ROADMAP section 1 items 1-7) and all applicable LEDGER laws?
 
-### 2.1 CSV Schema & Event Inventory (`probes/bloat-before.mjs`)
+| Rung | Gate / criterion | Kill rule | Status on darwin-arm64 |
+| --- | --- | --- | --- |
+| R1 Schema | `--log-code` emits parseable CSV with 0 empty `$9` tier markers across Node 22/24/26/27 | Kill `$9` keying if any supported Node emits `""` in `$9` on JS/Eval/Script | **PASS** (0 empty across all 4 majors) |
+| R2 Determinism | Same driver byte-identical across runs (ASLR heap constants 8/8, S-8 natives 20/20) | Kill if native code size varies across ASLR runs on the same binary | **PASS arm64** (8/8 ASLR, 20/20 natives); **x64 UNCONFIRMED** |
+| R3 Signal | Catches native inlining bloat (`bloat-before` vs `bloat-after`) and deopt-recompile churn (`deopt-reopt`) while staying `SAME` on line-shifted twins | Kill if line shifts DIFF or bloat reads SAME | **PASS** across Node 22/24/26/27 |
+| R4 Guard & Honesty | Ambiguous same-named fn across two files -> `NO-VERDICT` (never swapped `SAME`); `--max` pins node + arch (or dropped per `Q-CSD-MODES`); Turbolev refused | Kill `--max` if sizes vary across CI legs without a build fingerprint (`Q-CSD-MODES`) | **PASS** (all refusals & guards verified) |
+| R5 Linux x64 CI | Same probes green on Ubuntu x64 (x64 ASLR, mawk/gawk, uutils coreutils) | Hold release if x64 ASLR varies sizes | **OPEN** (1 CI capture needed) |
 
-Exact field-1 event counts observed on `bloat-before.mjs`:
-```text
-  2843  code-creation
-   659  code-source-info
-    80  script-source
-    36  new
-    28  delete
-     1  v8-version
-     1  v8-platform
-     1  heap-capacity
-     1  heap-available
-```
-(Plus `code-move` and `sfi-move` in GC-heavy runs.)
+### 1.2 LEDGER Law Mapping
+- **LEDGER law 3 (refuse before first spawn or write):** All CLI conflicts (D4 `--report` + `--max`), empty/trailing-comma lists (D5), newline/CR paths (`nl_refuse` / `nl_dir`, D6), `--out` symlink/hardlink/non-empty/input-collision checks, and `--v8-flags` preload/eval/print checks exit `2` with `0` spawns; runtime allowlist (`MD-46` / `MD-50..58`) exits `2` after one `--v8-options` read.
+- **LEDGER law 4 (allowlist, never denylist; MD-46):** Prototype embeds `lib/v8flags.sh` verbatim (`v8fl_check` against `node --v8-options`), refusing all Node options (`--inspect`, `--eval`, `--run`, `--cpu-prof`), unknown flags, and string flags (`--sparkplug-filter=...`).
+- **LEDGER law 5 (resolve once to one absolute path):** `NODE_RES` resolved once from caller cwd; `-`-led `--out` normalized to `./$OUT`.
+- **LEDGER law 6 (test the tests -- every gate fails on old code):** `--self-test` (27 checks; 8/8 mutants killed) includes dedicated failing-on-old-code rows for Defect 1 (ambiguous fn), D2 (`get,get value` order), D3 (`v8fl_ok`), D4 (mode conflicts both orders), D5 (empty/trailing comma), D6 (newline path, existing and missing), D7 (`Q-CSD-KEY (a)` numeric tripwire), D8 (0 raw TABs), and D9 (nullctl drift); plus `probes/run-probes.sh` runs S-8 must-SAME and must-DIFF pairs end-to-end through the prototype.
+- **LEDGER law 7 (portable oracles):** NUL check (`tr -d '\000' | cmp -s`), octal `\047` and `length($6) > 9` in POSIX awk, `FILENAME == ARGV[1]`, `set -f` around `V8_EXTRA` word-splitting. Linux mawk/gawk + uutils remains a CI LEAD.
 
-`code-creation` field counts:
-- **7 fields** for non-JS code (`Builtin`, `BytecodeHandler`, `RegExp`, ...): `code-creation,<type>,<kind_num>,<ts>,<addr>,<size>,<name>`
-- **9 fields** for JS code (`JS`, `Eval`, `Script`): `code-creation,<type>,<kind_num>,<ts>,<addr>,<size>,<name_and_loc>,<sfi_addr>,<marker>`
+---
 
-Verbatim `node v26.8.2` lines from `probes/markers.mjs` and `probes/getter-order.mjs`:
+## 2. Empirical 4-Node Probe Results (`darwin-arm64`)
+
+All results below were verified by running [probes/run-probes.sh](file:///Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteUtils/research/code-size-diff/probes/run-probes.sh) on all four Node binaries (22/22 ok on `v22.23.5`, 22/22 ok on `v24.22.3`, 23/23 ok on `v26.8.2`, 23/23 ok on `v27.0.0-alpha.0.1.0`):
+
+### 2.1 Cross-Node CSV Schema & Numeric `CodeKind` (`$3`) vs Symbolic Marker (`$9`)
+
+| Node version | V8 version | `Builtin` `$3` | `RegExp` `$3` | `~` (Ign) `$3` | `^` (SP) `$3` | `+`/`+'`/`o+` `$3` | `*`/`*'`/`o*` `$3` | Observed `$9` markers (`markers.mjs`) | Empty `$9`? |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `v22.23.5` | `12.4.254.21` | `2` (NF=7) | `3` (NF=7) | `9` | `10` | *(Maglev off by def)* | `12` | `~ ^ *` (OSR prints `*`, no `'`) | **0** |
+| `v24.22.3` | `13.6.233.17` | `2` (NF=7) | `3` (NF=7) | `9` | `10` | `11` (`+`, `+'`) | `12` (`*`, `*'`) | `~ ^ + +' * *'` (OSR prints `+`/`*`) | **0** |
+| `v26.8.2` | `14.6.202.34` | `3` (NF=7) | `4` (NF=7) | `10` | `11` | `12` (`+`, `+'`, `o+`) | `13` (`*`, `*'`, `o*`) | `~ ^ + +' o+ * *' o*` (8 of 10) | **0** |
+| `v27.0.0-alpha.0.1.0` | `15.6.75.50` | `3` (NF=7) | `4` (NF=7) | `10` | `11` | `12` (`+`, `+'`, `o+`) | `13` (`*`, `*'`, `o*`) | `~ ^ + +' o+ * *' o*` (8 of 10) | **0** |
+
+Key takeaways:
+1. This directly explains why `ic-diff.sh` (`LEDGER.md #83, #110`) returns `NO-VERDICT` on Node 22/24 (`Builtin,2` and `JS,9/10/11/12` instead of `Builtin,3` and `JS,10/11/12/13`), and resolves `R2-L4-1` (`MINORS-PLAN.md` item 4) without hardcoding V8 enum tables!
+2. **`Q-CSD-KEY (a)` version-free tripwire holds on all 4 majors:** within any single log, each base tier (`ignition`, `sparkplug`, `maglev`, `turbo`) maps to **exactly one** numeric `$3`, and distinct base tiers map to **distinct** numeric `$3`. Any violation fails closed (`X`).
+3. **Unobserved markers (`o+'`, `o*'`):** Never emitted on any of the 4 Node majors (even `osrCaptures()` capturing a mutable module `let` emitted `o+` / `o*` on Node 26/27 and `+` / `*` on Node 22/24). Kept in the closed allowlist defensively; any truly unknown marker triggers `X`.
+4. **Event `$1` inventory (identical 9 events on all 4 Node majors):** `code-creation`, `code-source-info`, `script-source`, `new`, `delete`, `v8-version`, `v8-platform`, `heap-capacity`, `heap-available` (plus `code-move` under GC; `sfi-move` and `code-deopt` were not observed in these runs and stay in the allowlist only defensively).
+
+### 2.2 Verbatim Real Trace Lines (`node v26.8.2`, `probes/markers.mjs` & `probes/deopt-reopt.mjs`)
+
 ```text
 code-creation,JS,10,75116,0x3e3b7ba1efd0,36,modHot file://<REPO>/research/code-size-diff/probes/markers.mjs:8:16,0xd0cdce90d30,~
 code-creation,JS,11,76011,0x115886e60,416,modHot file://<REPO>/research/code-size-diff/probes/markers.mjs:8:16,0xd0cdce90d30,^
@@ -69,99 +73,91 @@ code-creation,JS,12,76950,0x11584a2e0,780,modOsr file://<REPO>/research/code-siz
 code-creation,JS,13,75951,0x115849be0,528,multiCtx file://<REPO>/research/code-size-diff/probes/markers.mjs:27:27,0xd0cdce93df8,*
 code-creation,JS,13,76363,0x11584a080,536,modHot file://<REPO>/research/code-size-diff/probes/markers.mjs:8:16,0xd0cdce90d30,*'
 code-creation,JS,13,75109,0x122e4cd60,552,modOsr file://<REPO>/research/code-size-diff/probes/markers.mjs:14:16,0x3f7583290d68,o*
-code-creation,JS,12,75360,0x119949500,340,get file://<REPO>/research/code-size-diff/probes/getter-order.mjs:6:13,0x2cf2acf10a40,+'
-code-creation,JS,13,76024,0x1199498a0,220,get value file://<REPO>/research/code-size-diff/probes/getter-order.mjs:4:12,0x2cf2acf10af0,*'
 ```
 
-### 2.2 Comma Escaping in File Paths (`run-probes.sh` section 6)
+### 2.3 Key Behavioral Measurements (Reproduced by `probes/run-probes.sh`)
+- **Inlining bloat (`bloat-before.mjs` vs `bloat-after.mjs`, `v26.8.2`):** `hot` Ignition `38 -> 72 B`, Maglev `824 -> 1144 B`, TurboFan `596 -> 644 B` -> `DIFF` (`rc 1`, `0` raw TABs). Line-shifted twin (`bloat-shifted.mjs`) -> `SAME` (`rc 0`).
+- **Ambiguous same-named function (`ambig-before.mjs` vs `ambig-after.mjs`):** Two modules (`ambig-small.mjs`, `ambig-big.mjs`) each define `hot`; swapping import order returns **`NO-VERDICT` (`rc 2`)** across all 4 Node majors (never false `SAME`).
+- **Deopt-recompile churn & `--turbolev` (`deopt-reopt.mjs`, `v26.8.2`):** Default logs `~ 6`, `+' 348`, `*' 204`, `+' 392`, `*' 344` (plus top-level `o+ 796`). With `--turbolev`, final compile logs identical `JS,13,*'` at `336 B` (`344 -> 336`). Prototype refuses `--turbolev` / `--turbolev-future` by exact name and refuses default-on Turbolev via `--v8-options` (`LEDGER #107 G5c`).
+- **ASLR heap-constant repeatability (`aslr-const.mjs`, arm64):** `8/8` identical on all 4 Node majors (`v26.8.2`: `aslrHot:~:63  +':880  *':680`). **x64 UNCONFIRMED.**
+- **Sparkplug (`sparkplug-10x.mjs`):** `--no-concurrent-sparkplug` accepted on all 4 Node majors and `10/10` identical. Sparkplug stays opt-in (default `--tiers turbo,maglev`) because its emission depends on `--baseline-batch-compilation-threshold=4096` (coupling to unrelated functions in the driver: `bloat-before` emits `0` `^`, `bloat-after` emits `^`) and tier path, and it is a non-inlining baseline compiler.
+- **Comma escaping (`a,b/drv.mjs`):** Escaped as `a\x2Cb/drv.mjs` (`NF=9`, `0` raw commas) on all 4 Node majors.
+- **S-8 natives control (`natives-ctrl.mjs` vs `natives-diff.mjs`):** `must-SAME` (`rc 0`), `must-DIFF` (`rc 1`), and `20/20` identical across all 4 Node majors (`v22`: `~12 *244`; `v24`: `~12 *'220`; `v26`: `~12 *'220`; `v27`: `~12 *'212`).
 
-Copying `bloat-before.mjs` into `<tmp>/a,b/drv.mjs` produced strictly `NF=9` with `\x2C` escaping:
-```text
-NF=9  code-creation,Script,10,75504,0xcb6bf11d3b8,115, file:///private/var/folders/.../a\x2Cb/drv.mjs:1:1,0x3733ce810960,~
-NF=9  code-creation,JS,10,75916,0xcb6bf11ed18,38,hot file:///private/var/folders/.../a\x2Cb/drv.mjs:3:13,0x3733ce810a88,~
-```
-`FS = ","` does not split paths containing commas.
+---
 
-### 2.3 Symbolic Tier Marker Table (`$9`) -- Observed vs Unobserved
+## 3. Architecture, Exit Table, and Shared `lib/*.sh` Reuse Map
 
-| `$9` marker | Tier | OSR? | Context-specialized? | Observed live on `node v26.8.2`? |
+### 3.1 Exit Table per Mode
+
+| Mode | Invocation | Exit `0` | Exit `1` | Exit `2` |
 | --- | --- | --- | --- | --- |
-| `~` | `ignition` | no | no | **OBSERVED** (`probes/markers.mjs`: `modHot`, 36 B) |
-| `^` | `sparkplug` | no | no | **OBSERVED** (`probes/markers.mjs`: `modHot`, 416 B) |
-| `+` | `maglev` | no | no | **OBSERVED** (`probes/markers.mjs`: `multiCtx`, 756 B) |
-| `+'` | `maglev` | no | yes | **OBSERVED** (`probes/markers.mjs`: `modHot`, 768 B) |
-| `o+` | `maglev-osr` | yes | no | **OBSERVED** (`probes/markers.mjs`: `modOsr` 780 B, `osrCaptures` 940 B) |
-| `o+'` | `maglev-osr` | yes | yes | **UNOBSERVED** (`osrCaptures` capturing outer `let` emitted `o+`, not `o+'`; kept defensively) |
-| `*` | `turbo` | no | no | **OBSERVED** (`probes/markers.mjs`: `multiCtx`, 528 B) |
-| `*'` | `turbo` | no | yes | **OBSERVED** (`probes/markers.mjs`: `modHot`, 536 B) |
-| `o*` | `turbo-osr` | yes | no | **OBSERVED** (`probes/markers.mjs` + `--no-maglev`: `modOsr` 552 B, `osrCaptures` 740 B) |
-| `o*'` | `turbo-osr` | yes | yes | **UNOBSERVED** (`osrCaptures` + `--no-maglev` emitted `o*`, not `o*'`; kept defensively) |
-| anything else | UNKNOWN | -- | -- | **FAIL CLOSED (`X`)** |
+| `diff` (default) | `--fn LIST BEFORE AFTER` | `VERDICT SAME` | `VERDICT DIFF` | `VERDICT NO-VERDICT` (refusal, parse `X`, ambiguous `A`, nullctl, guard) |
+| `report` | `--report --fn LIST DRIVER` | `VERDICT OK` | *(never)* | `VERDICT NO-VERDICT` |
+| `gate` *(if `Q-CSD-MODES (b)`)* | `--max fn=N --node-version vX.Y.Z --platform-arch OS-ARCH DRIVER` | `VERDICT WITHIN` | `VERDICT OVER` | `VERDICT NO-VERDICT` (incl. version or platform-arch mismatch) |
+| `self-test` | `--self-test` | all checks ok | `>= 1` check FAILED | unexpected error / bad extra arg |
+| `help` | `-h \| --help` | *(never)* | *(never)* | usage text printed to stderr |
 
-**8 of 10** markers are empirically confirmed on `node v26.8.2`; **2 (`o+'`, `o*'`)** were never emitted by V8 14.6 even for an OSR loop capturing a mutable module-scoped variable. Keeping them in the closed allowlist is harmless (they map to `maglev-osr` / `turbo-osr`), and any truly unknown marker still triggers `X`.
+### 3.2 Exact `lib/*.sh` Reuse Map (Verified Against Live `lib/`)
+- `lib/prologue.sh`: strict mode, `nocasematch`, `posix`, `FINAL`/`DIED` fail-closed EXIT trap, `_sig`, `sig_arm`, `drv_wait`, `LC_ALL=C`.
+- `lib/msdiff.sh`: `MSDIFF_AWK` only.
+- `lib/common.sh`: `die`, `say`, `sha8`, `usage`, `multiset` (`sort | uniq -c`), `worst` (`SAME/DIFF/NO-VERDICT` for `diff` mode), `nl_refuse`, `nl_dir`, `rep_refuse`.
+  - Note: report/gate modes use a local `vworst()` lattice (`OK/WITHIN/OVER/NO-VERDICT`), matching `src/bytecode-budget.sh:304`, because `lib/common.sh`'s `worst()` knows only `SAME/DIFF/NO-VERDICT`.
+- `lib/args.sh`: `need()` (supports both `--opt val` and `--opt=val`, refusing empty `--opt=`).
+- `lib/v8flags.sh`: **verbatim** `V8FL_AWK`, `V8FL_RE`, `v8fl_read`, `v8fl_ok`, `v8fl_check` (zero edits to `lib/v8flags.sh`; Turbolev check stays local per `Q-CSD-TLLIB (a)`).
+- `lib/nullctl.sh`: file-based `cmp -s` + `MSDIFF_AWK` null-control pattern over run 1..N multiset files in `$MSDIR`.
+- `lib/tracked.sh` + `lib/stage.sh`: only if `Q-CSD-REF (b)` is ruled (driver-mode only recommended for 1.3.0).
 
-### 2.4 Sparkplug (`^`): Concurrency & Batch-Threshold Truth (`probes/sparkplug-10x.mjs`)
-
-Earlier speculation that Sparkplug is "timing noise" was **incorrect / incomplete**. Probing `node --v8-options` and `probes/sparkplug-10x.mjs` revealed two concrete V8 14.6 mechanisms:
-
-1. **`--concurrent-sparkplug` is ON by default AND independent of `--no-concurrent-recompilation`:**
-   ```text
-   --concurrent-sparkplug (compile Sparkplug code in a background thread)
-         type: bool  default: --concurrent-sparkplug
-   --baseline-batch-compilation-threshold (the estimated instruction size of a batch to trigger compilation)
-         type: int   default: --baseline-batch-compilation-threshold=4096
-   ```
-   - Without `--no-concurrent-sparkplug`, `sparkplug-10x.mjs` showed **9/10** identical in one 10-run pass (and 10/10 and 20/20 in two other passes) because the Sparkplug background thread raced main-thread logging, and flushed `^` after Maglev/TurboFan (`medFn:+':900 ... medFn:*':720 medFn:^:576`).
-   - With **`--no-concurrent-sparkplug`**, Sparkplug compiles synchronously on the main thread (`10/10` identical, script `^` flushed first: `sparkplug-10x.mjs:1:1:^:1128 medFn:^:576 smallFn:^:112 noLoop:^:200`).
-   - **Action:** `TRACE_FLAGS` MUST include `--no-concurrent-sparkplug` alongside `--no-concurrent-recompilation`, and `--v8-flags` must refuse `*concurrent-sparkplug*`.
-2. **Why `^` still stays out of default `--tiers turbo,maglev` (even with `--no-concurrent-sparkplug`):**
-   - Because of `--baseline-batch-compilation-threshold=4096`, whether `fn` emits `^` depends on total bytecode accumulated across *unrelated* functions in the driver (`bloat-before.mjs` stayed below 4096 -> 0 `^` lines; `bloat-after.mjs` crossed 4096 -> `^` flushed for `h1`, `h2`, `h3`, `hot`, and script).
-   - Sparkplug is a non-inlining 1:1 baseline template compiler (its size tracks Ignition bytecode rather than inlining bloat). Defaulting to `--tiers turbo,maglev` matches `inlining-budget-diff.sh`, while `~` and `^` stay visible in `REPORTED`.
-
-### 2.5 ASLR Repeatability, Deopt Churn, `--turbolev`, and S-8 Control
-
-- **ASLR heap-constant stability (`probes/aslr-const.mjs`, 8 runs):**
-  `8/8` byte-identical: `aslrHot:~:63  aslrHot:+':880  aslrHot:*':680`.
-  (On arm64 fixed-width instructions + V8 pointer compression, heap address randomization did not change emitted byte size. **UNCONFIRMED on Linux x64.**)
-- **Inlining bloat (`probes/bloat-before.mjs` vs `probes/bloat-after.mjs`):**
-  `hot`: Ignition `38 -> 72 B`, Maglev `824 -> 1144 B` (`+320 B`), TurboFan `596 -> 644 B` (`+48 B`).
-- **Deopt-recompile churn & `--turbolev` collision (`probes/deopt-reopt.mjs`):**
-  - Default flags: `~ 6 B`, `+' 348 B`, `*' 204 B`, `+' 392 B`, `*' 344 B` (multiset retains BOTH Maglev and BOTH TurboFan compiles; `max`/`last` would hide churn).
-  - With `--turbolev`: `~ 6 B`, `+' 348 B`, `*' 204 B`, `+' 392 B`, **`*' 336 B`** -- identical `JS,13,*'` marker, different byte size (`344 -> 336`). Hence exact-name `--turbolev` / `--turbolev-future` refusal + `--v8-options` default-on check.
-- **S-8 natives control (`probes/natives-ctrl.mjs`, `--allow-natives-syntax`):**
-  Emits exactly two lines for `natFn`: `~ 12 B` and `*' 220 B`.
+### 3.3 Alternatives That Lost
+- **`max` or `last` size instead of multiset:** Loses because deopt-recompile churn (`Maglev 348 -> TurboFan 204 -> Maglev 392 -> TurboFan 344`) collapses to a single number and hides recompilation regressions.
+- **Builtin-relative numeric `$3` (`MINORS-PLAN` item 4 / `DRAFT`) instead of `$9` + tripwire:** Loses because `$9` directly encodes OSR (`o+`/`o*`), context specialization (`+'`/`*'`), and tier across Node 22/24/26/27 without enum arithmetic, while the `Q-CSD-KEY (a)` tripwire preserves the numeric-consistency fail-closed invariant.
+- **Allowing ambiguous same-named functions across files (`--fn hot` merging `a.mjs` + `b.mjs`):** Loses because swapping sizes between `a.mjs` and `b.mjs` produces a false `VERDICT SAME` (exit 0). Refusing >1 definition location fails closed (`NO-VERDICT`).
+- **Folding OSR (`o+`/`o*`) into non-OSR (`+`/`*`):** Loses because an OSR loop compile replacing a regular entry compile (or vice versa) is a meaningful compilation-tier change.
+- **Modifying `lib/v8flags.sh` to share one `--v8-options` capture with Turbolev:** Loses because touching `lib/v8flags.sh` moves the sha256 of every 1.0.0 root script and breaks LiteSignal's S-11 vendored pin.
 
 ---
 
-## 3. Proposed Architecture (`src/code-size-diff.sh` & Prototype Decisions)
+## 4. Maintainer Rulings Needed (`Q-CSD-*`, Recommended Option First)
 
-See runnable blueprint: [code-size-diff.prototype.sh](file:///Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteUtils/research/code-size-diff/code-size-diff.prototype.sh).
-
-1. **LEDGER law 4 `--v8-flags` runtime allowlist:**
-   - Reuses `lib/v8flags.sh` (`V8FL_AWK`, `V8FL_RE`, `v8fl_read`, `v8fl_ok`, `v8fl_check`): reads `node --v8-options` ONCE, allows ONLY known non-string, non-logging/tracing V8 tuning flags of that binary in valid bool/numeric form, and refuses every Node CLI option (`--eval`, `--inspect`, `--run`, `--test`), unknown flag, and string flag (`--sparkplug-filter=...`).
-   - Reuses that same `--v8-options` capture for `TURBOLEV_AWK` (0 extra spawns).
-2. **Order-independent prefix ownership (`--fn 'get,get value'` bug fix):**
-   - `CODESIZE_AWK` checks `substr(name_loc, 1, pl) == fn " "` AND `rest` starts with `/` or `file:///`, putting `break` **inside** the `rest` path match. Verified on `probes/getter-order.mjs` with both `--fn 'get,get value'` (`get: 340B`, `get value: 416B/220B`) and `--fn 'get value,get'` (identical results).
-3. **`--max` gate pins BOTH `--node-version` AND `--platform-arch`:**
-   - Probes `node -p 'process.version + " " + process.platform + "-" + process.arch'` from the resolved `NODE_RES` binary itself (avoiding `uname -m` vs Rosetta mismatches).
-   - Mismatch on either `--node-version` OR `--platform-arch` exits `2 NO-VERDICT` before any measured run, so an `arm64` baseline can never produce a false `WITHIN` or `OVER` on `linux-x64` CI.
-4. **`--out DIR` parity with `ic-diff.sh`:**
-   - Refuses symlinks (`DIR/raw`, `DIR/report.txt`), non-empty `DIR/raw`, hardlinked `DIR/report.txt`, or `DIR/report.txt` equal to an input driver BEFORE any spawn; writes `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`.
-5. **Verdict & guard:**
-   - Null control on selected-tier `S` multiset (`tier, size, base:line:col`); cross-side diff on `V` multiset (`fn, tier, size`, stripping line:col so line shifts never false-DIFF).
-   - Guard requires >= 1 compile in selected `--tiers`; tells the user if Ignition `~` was seen (`warm up more`) vs never compiled (`no such name or never called`).
-
----
-
-## 4. Open Maintainer Decisions & Known Limits
-
-### Open Questions Before Planning 1.3.0
-- **`Q-CSD-MODES`:** Ship `diff` + `--report` + `--max` (requiring `--node-version` + `--platform-arch`), OR ship `diff` + `--report` only (omitting `--max` because native byte ceilings must be maintained per OS/arch/Node leg)?
-- **`Q-CSD-CTX`:** Strip context-specialization `'` from the verdict tier key (prototype default) or keep `'` in the verdict key?
-- **`Q-CSD-REF`:** Include ref/file staging (`lib/stage.sh`) in 1.3.0, or driver-mode only like `ic-diff` 1.0.0?
-
-### Unconfirmed / Pre-Planning TASK 0 Gaps
-1. **Node 22 and Node 24 (`--log-code` CSV schema & `$9` markers):** UNCONFIRMED. Must run `probes/run-probes.sh` on real Node 22 and Node 24 binaries to confirm `NF == 9`, `$9` symbolic markers, `--no-concurrent-sparkplug` availability, and event allowlist.
-2. **Linux x64 (and x64 ASLR repeatability):** UNCONFIRMED. Must run `probes/aslr-const.mjs` (8+ runs) on Linux x64 to verify x64 variable-length instruction encoding does not vary byte sizes across ASLR runs.
-3. **Unobserved markers `o+'` and `o*'`:** Never emitted by `node v26.8.2` (`V8 14.6`). Confirm in V8 source whether OSR ever sets context-specialization, or whether removing them tightens the allowlist.
-4. **Pointer compression / build flags:** Two Node binaries with the same `--node-version` and `--platform-arch` but different V8 build flags (e.g. pointer compression off) would have different code sizes; `--max` only guarantees same release binary target.
+- **`Q-CSD-INTAKE`:** How to proceed into 1.3.0.
+  - **(a) (Recommended)** Run one CI capture of `probes/run-probes.sh` on Ubuntu x64 (Node 22/24/26/latest) to close Rung R5, adopt the ruled `Q-CSD-*` answers into a PROPOSAL, then brief planner.
+  - (b) Go straight to planner now and put the Ubuntu x64 capture in G0 TASK 0.
+  - (c) Shelve and start from the earlier DRAFT.
+- **`Q-CSD-MODES`:** Which verdict modes ship in 1.3.0.
+  - **(a) (Recommended)** `diff` + `--report` only (no `--max`). Aligns with S-5 (user-driver code size is STATISTICAL with no statistical host) and avoids per-OS/arch/build-flag ceiling maintenance.
+  - (b) `diff` + `--report` + `--max`, pinned to `--node-version`, `--platform-arch`, AND a build fingerprint (`--v8-options` sha + pointer-compression/sandbox config), only after an S-6-style 20-run settle across all CI legs.
+  - (c) `--max` with `--node-version` + `--platform-arch` only (current prototype; still exposed if two binaries share version+arch with different build flags).
+- **`Q-CSD-MAXQ` (only if `Q-CSD-MODES (b)`):** What `--max` bounds.
+  - **(a) (Recommended)** Per tier (`--max fn:turbo=N`), missing tier -> `NO-VERDICT`.
+  - (b) Max across selected tiers (prototype).
+  - (c) Sum across multiset.
+- **`Q-CSD-KEY`:** How tiers are classified.
+  - **(a) (Recommended, implemented in prototype)** `$9` symbolic marker + version-free tripwire (1:1 mapping between base tier and numeric `$3` within each log, else `X`). Verified on Node 22/24/26/27.
+  - (b) `$9` marker only (no `$3` consistency tripwire).
+  - (c) Builtin-relative numeric `$3` (`R2-L4-1`).
+- **`Q-CSD-NAME`:** Same-named function defined at >1 location (`file:line:col`).
+  - **(a) (Recommended, implemented in prototype)** Ambiguous name -> `NO-VERDICT` (exit 2), preventing swapped-file false `SAME`.
+  - (b) Key `V` on `fn + basename` (still merges two `index.mjs` files in different dirs).
+  - (c) Document as known limit (retains wrong verdict).
+- **`Q-CSD-SPARK`:** Sparkplug (`^`) in default verdict.
+  - **(a) (Recommended, implemented in prototype)** Default `--tiers turbo,maglev`, `sparkplug` opt-in; pass `--no-concurrent-sparkplug` for synchronous compilation; documented reason = batch threshold (`4096`) + tier-path dependence + non-inlining baseline.
+  - (b) Include `sparkplug` in default `--tiers`.
+  - (c) Never selectable (REPORTED only).
+- **`Q-CSD-TLLIB`:** Where the Turbolev check lives.
+  - **(a) (Recommended, implemented in prototype)** Local in `src/code-size-diff.sh` with one extra `--v8-options` spawn (0 changes to `lib/v8flags.sh` or 1.0.0 root shas).
+  - (b) Extract `lib/turbolev.sh` and update `inlining-budget-diff.sh` (moves 1.0.0 root sha; S-11 drift).
+- **`Q-CSD-CTX`:** Context-specialization apostrophe (`+'` vs `+`, `*'` vs `*`).
+  - **(a) (Recommended, implemented in prototype)** Strip `'` from verdict key; keep `ctx` column for REPORTED.
+  - (b) Keep `'` in verdict key (specialization gain/loss at equal size -> `DIFF`).
+  - (c) Strip `'` and print a REPORTED note if `ctx` differs across sides.
+- **`Q-CSD-OSR`:** OSR compiles (`o+`, `o*`).
+  - **(a) (Recommended, implemented in prototype)** Separate keys (`maglev-osr`, `turbo-osr`) inside their base tier's `--tiers` selection.
+  - (b) Fold OSR into `maglev` / `turbo`.
+  - (c) Exclude OSR unless explicitly listed in `--tiers`.
+- **`Q-CSD-REF`:** Ref / file staging (`lib/stage.sh`).
+  - **(a) (Recommended)** Driver mode only in 1.3.0 (matching `ic-diff` 1.0.0; staging parity deferred to LEAD-1).
+  - (b) Include `lib/stage.sh` ref/file modes in 1.3.0.
+- **`Q-CSD-TL`:** Turbolev handling.
+  - **(a) (Recommended, verified live)** Refuse `--turbolev` / `--turbolev-future` by exact name (any `-`/`_`, any `=value`) after `v8fl_check`, and refuse a default-on node (`LEDGER #107 G5c`).
+  - (b) Allow and tag header.
+  - (c) Opt-in flag to allow.

@@ -8,44 +8,34 @@
 #   - report mode (--report): per-tier sizes for one driver (exit 0 OK, 2 NO-VERDICT)
 #   - gate mode (--max fn=N[,fn=N] --node-version vX.Y.Z --platform-arch OS-ARCH):
 #       max size in selected tiers <= N; version or platform-arch mismatch -> 2 NO-VERDICT
-#   - self-test (--self-test): canned --log-code traces through CODESIZE_AWK, judge,
-#       TURBOLEV_AWK, and lib/v8flags.sh v8fl_ok allowlist checks
+#   - self-test (--self-test): canned --log-code traces + CLI/refusal checks covering every
+#       fix in RECHECK-code-size-diff.md (Defect 1 ambiguous fn, D1-D9, Q-CSD-KEY tripwire)
 #
 # Architectural note on promotion to src/code-size-diff.sh:
-#   The [PROTOTYPE SHIMS] sections below stand in for LiteUtils's build-time `# @include lib/*.sh`
-#   fragments (prologue, msdiff, common, tracked, v8flags, args, stage) so this prototype runs
-#   standalone directly from research/code-size-diff/.
+#   The [PROTOTYPE SHIM] sections below match LiteUtils's real lib/*.sh fragment boundaries
+#   1:1 (`prologue.sh`, `msdiff.sh`, `common.sh`, `args.sh`, `v8flags.sh`, `nullctl.sh`) so
+#   promotion replaces shims with `# @include lib/<name>.sh` without altering any 1.0.0 lib file.
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/prologue.sh` in src/code-size-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/prologue.sh`
 # =============================================================================================
-# WHY strict mode + nocasematch + posix + LC_ALL=C:
-#   - `shopt -u nocasematch` prevents inherited BASHOPTS=nocasematch (bash >= 4.1) from folding
-#     uppercase/lowercase keys into false SAME (LEDGER #121 / ic-fable-1).
-#   - `set +o posix` (only when set) restores `<( )` process substitution on bash 3.2 without
-#     disabling expand_aliases unconditionally.
-#   - `LC_ALL=C` enforces byte-wise sort / awk / regex ranges across macOS and Linux locales.
 set -euo pipefail
 shopt -u nocasematch 2>/dev/null || true
 [[ ! -o posix ]] || set +o posix
 export LC_ALL=C
 
-# WHY fail-closed EXIT trap (LiteUtils Law #5):
-#   Every planned exit 0 (SAME / WITHIN / OK) or exit 1 (DIFF / OVER) sets FINAL=1 first.
-#   Any unplanned abort -- including bash 3.2's quirk where `set -u` can exit 0 -- is coerced
-#   to exit 2 (NO-VERDICT) so a script error can NEVER masquerade as SAME or DIFF.
+# Fail-closed EXIT trap (ROADMAP template item 5; LEDGER law 3):
+# Every planned exit 0 or 1 sets FINAL=1 first. Unplanned exits (including bash 3.2 `set -u`
+# exit 0) become exit 2 NO-VERDICT.
 FINAL=""
 DIED=""
 SIG_PID=""
 DRV_RC=0
 TMP_DIR=""
 REPORT=""
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 trap 'rc=$?; if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then rm -rf -- "$TMP_DIR"; fi; if [[ -z "$FINAL" ]]; then set +e; [[ -n "$DIED" ]] || printf "code-size-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
 
-# WHY SIGINT / SIGTERM / SIGHUP kills only the active driver pid (never bare `wait`):
-#   On bash >= 5, bare `wait` also waits for open `< <( )` subshells that nobody drains inside
-#   the trap, causing a hang (LEDGER lib-opus-c-1). SIGKILLing $SIG_PID + $(jobs -pr) guarantees
-#   a bounded exit and ensures partial driver output is never parsed.
 _sig() {
   [[ -z "$FINAL" ]] || return 0
   trap '' INT TERM HUP
@@ -60,6 +50,21 @@ sig_arm() { trap '_sig INT' INT; trap '_sig TERM' TERM; trap '_sig HUP' HUP; }
 drv_wait() { SIG_PID=$!; DRV_RC=0; wait "$SIG_PID" || DRV_RC=$?; SIG_PID=""; }
 sig_arm
 
+# =============================================================================================
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/msdiff.sh` (MSDIFF_AWK ONLY; multiset is in lib/common.sh)
+# =============================================================================================
+# shellcheck disable=SC2016
+MSDIFF_AWK='
+function key(s) { sub(/^ *[0-9]+ /, "", s); return s }
+function show(k,   u, l) { u = k; sub(/\t.*/, "", u); l = k; sub(/^[^\t]*\t/, "", l); return (u == "*") ? l : "[" u "] " l }
+FILENAME == ARGV[1] { k = key($0); b[k] = $1 + 0; all[k] = 1; next }
+{ k = key($0); a[k] = $1 + 0; all[k] = 1 }
+END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\n", b[k], a[k], show(k) }
+'
+
+# =============================================================================================
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/common.sh` (verbatim signatures!)
+# =============================================================================================
 die() {
   DIED=1
   printf 'code-size-diff: %s\nVERDICT NO-VERDICT\n' "$*" >&2
@@ -73,45 +78,80 @@ say() {
   else printf '%s\n' "$*"
   fi
 }
-
-# WHY worst() lattice: NO-VERDICT dominates DIFF/OVER, which dominates SAME/WITHIN/OK.
-worst() {
-  case "$1:$2" in
-    *NO-VERDICT*) echo NO-VERDICT ;;
-    *DIFF*|*OVER*)
-      case "$1" in DIFF|OVER) echo "$1" ;; *) echo "$2" ;; esac ;;
-    *) echo "$2" ;;
-  esac
+multiset() { LC_ALL=C sort | LC_ALL=C uniq -c; }   # lib/common.sh:28 (never sort -u)
+worst() { # lib/common.sh:112 verbatim: SAME / DIFF / NO-VERDICT only
+  if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
+  elif [[ $1 == DIFF || $2 == DIFF ]]; then echo DIFF
+  else echo SAME; fi
+}
+# WHY local vworst() instead of modifying lib/common.sh worst() (matches src/bytecode-budget.sh:304):
+#   lib/common.sh worst() only knows SAME/DIFF/NO-VERDICT; report/gate modes use OK/WITHIN/OVER.
+vworst() {
+  if [[ $1 == NO-VERDICT || $2 == NO-VERDICT ]]; then echo NO-VERDICT
+  elif [[ $1 == OVER || $2 == OVER ]]; then echo OVER
+  elif [[ $1 == WITHIN || $2 == WITHIN ]]; then echo WITHIN
+  else echo OK; fi
+}
+nl_refuse() { # lib/common.sh:117 verbatim (LEDGER law 3: refuse before spawn/write; never print value)
+  local l="$1" s
+  shift
+  for s in "$@"; do
+    case "$s" in *$'\n'*|*$'\r'*) die "$l: a newline or a CR is not allowed (it would forge report lines)" ;; esac
+  done
+}
+nl_dir() { # lib/common.sh:125 verbatim
+  local x e t c cur new p="" lg=""
+  nl_refuse "$1" "$2"
+  t="$2"; [[ $t == /* ]] || t="$PWD/$t"
+  while [[ -n $t ]]; do
+    c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+    case "$c" in ""|.) ;; ..) lg=${lg%/*} ;; *) lg="$lg/$c" ;; esac
+  done
+  for x in "$2" "${lg:-/}"; do
+    [[ $x != -* ]] || x="./$x"
+    e=$x; while [[ ! -e "$e" && ! -L "$e" && "$e" != . ]]; do e=$(dirname -- "$e"); done
+    if [[ $e == . ]]; then t=$x; else t=${x#"$e"}; fi
+    cur=$(CDPATH= cd -P -- "$e" 2>/dev/null && pwd -P) || break
+    new=""
+    while [[ -n $t ]]; do
+      c=${t%%/*}; if [[ $t == */* ]]; then t=${t#*/}; else t=""; fi
+      case "$c" in
+        ""|.) ;;
+        ..) if [[ -n $new ]]; then new=${new%/*}; else cur=${cur%/*}; fi ;;
+        *) if [[ -z $new && ( -e "$cur/$c" || -L "$cur/$c" ) ]]; then cur=$(CDPATH= cd -P -- "$cur/$c" 2>/dev/null && pwd -P) || break 2
+           else new="$new/$c"; fi ;;
+      esac
+    done
+    cur="${cur%/}$new"; [[ -n $cur ]] || cur=/
+    if [[ -z $p ]]; then p=$cur; elif [[ $cur == "$p" ]]; then p=${lg:-/}; fi
+  done
+  [[ -z $p ]] || nl_refuse "$1" "$p"
+}
+rep_refuse() { # lib/common.sh:103 verbatim
+  local x n
+  for n in report.txt ${OUT_NAMES-}; do
+    for x in "$@"; do
+      [[ -z "$x" || ! "$OUT/$n" -ef "$x" ]] || die "--out: $OUT/$n is an input file of this run ($x): the run would overwrite it"
+    done
+  done
 }
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/msdiff.sh` in src/code-size-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/args.sh` (verbatim!)
 # =============================================================================================
-# WHY multiset (`sort | uniq -c`, never `sort -u`, LiteUtils Law #2):
-#   A function that compiles Maglev 348 B once vs one that compiles Maglev 348 B, deopts, and
-#   recompiles Maglev 392 B MUST produce a DIFF. Collapsing to `max` / `last` hides recompile churn.
-multiset() { LC_ALL=C sort | LC_ALL=C uniq -c; }
-
-# WHY FILENAME == ARGV[1] (never FNR == NR): empty BEFORE file must not hijack AFTER lines.
-# Matches lib/msdiff.sh verbatim.
-# shellcheck disable=SC2016
-MSDIFF_AWK='
-function key(s) { sub(/^ *[0-9]+ /, "", s); return s }
-function show(k,   u, l) { u = k; sub(/\t.*/, "", u); l = k; sub(/^[^\t]*\t/, "", l); return (u == "*") ? l : "[" u "] " l }
-FILENAME == ARGV[1] { k = key($0); b[k] = $1 + 0; all[k] = 1; next }
-{ k = key($0); a[k] = $1 + 0; all[k] = 1 }
-END { for (k in all) if (b[k] + 0 != a[k] + 0) printf "  before=%d after=%d  %s\n", b[k], a[k], show(k) }
-'
+need() { # value from --opt=value (returns 0) or from next arg (returns 1: caller shifts)
+  if [[ -n "$v" ]]; then return 0; fi
+  [[ $# -ge 2 ]] || die "$a needs a value"
+  v="$2"; return 1
+}
 
 # =============================================================================================
-# [PROTOTYPE SHIMS] -- replaced by `# @include lib/v8flags.sh` in src/code-size-diff.sh
+# [PROTOTYPE SHIM] -- replaced by `# @include lib/v8flags.sh` (100% VERBATIM -- zero local edits!)
 # =============================================================================================
-# WHY runtime `--v8-options` ALLOWLIST (LEDGER law 4 / MD-50..58), NEVER a denylist alone:
-#   A denylist silently accepts unknown flags, node CLI options (--run, --test, --eval,
-#   --inspect, --cpu-prof), string-valued V8 flags (--sparkplug-filter=...), and non-bool
-#   --no-* flags. Reading `node --v8-options` once and allowing ONLY known non-string,
-#   non-tracing V8 tuning flags of THIS node binary fails closed by default.
-# Matches lib/v8flags.sh verbatim; also saves V8_OPTS_RAW so TURBOLEV_AWK reuses the same spawn.
+# WHY keep lib/v8flags.sh 100% verbatim (Q-CSD-TLLIB (a), RECHECK New Defect 2):
+#   Touching lib/v8flags.sh would move the root sha256 of every 1.0.0 shipped script and break
+#   LiteSignal's S-11 pin. Therefore v8fl_check stays unmodified, and the Turbolev exact-name
+#   refusal + --v8-options default-on check live locally in code-size-diff right after v8fl_check.
 # shellcheck disable=SC2016
 V8FL_AWK='
 p != "" { if (match($0, /^ +type: [a-z0-9_]+/)) { t = substr($0, RSTART, RLENGTH); sub(/^ +type: /, "", t); print p " " t }; p = "" }
@@ -119,17 +159,16 @@ p != "" { if (match($0, /^ +type: [a-z0-9_]+/)) { t = substr($0, RSTART, RLENGTH
 '
 V8FL_RE='-(log|logfile|prof|profile|profiling|profiler|trace|print|perf|redirect|dump|stats|verbose|snapshot|gdbjit|counters|help|abort|fuzzing|file|logger)-'
 V8FL_TAB=""
-V8_OPTS_RAW=""
-v8fl_read() { # NODE: sets V8_OPTS_RAW and V8FL_TAB from ONE `NODE --v8-options` capture
-  local rows rc=0
-  V8_OPTS_RAW=$(env -u NODE_OPTIONS -u NODE_V8_COVERAGE -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS "$1" --v8-options 2>/dev/null) || rc=$?
+v8fl_read() {
+  local raw rows rc=0
+  raw=$(env -u NODE_OPTIONS -u NODE_COMPILE_CACHE "$1" --v8-options 2>/dev/null) || rc=$?
   [[ $rc -eq 0 ]] || die "cannot run $1 --v8-options"
-  [[ -n "$V8_OPTS_RAW" ]] || die "$1 --v8-options printed nothing"
-  rows=$(printf '%s\n' "$V8_OPTS_RAW" | LC_ALL=C awk "$V8FL_AWK") || rows=""
+  [[ -n "$raw" ]] || die "$1 --v8-options printed nothing"
+  rows=$(printf '%s\n' "$raw" | LC_ALL=C awk "$V8FL_AWK") || rows=""
   [[ -n "$rows" ]] || die "$1 --v8-options lists no V8 flag"
   V8FL_TAB=$'\n'"$rows"$'\n'
 }
-v8fl_ok() { # TOKEN: 0 iff TOKEN is a known V8 tuning flag in V8FL_TAB in its valid value form
+v8fl_ok() {
   local nl=$'\n' g b t re v=0 neg=0
   g=${1//_/-}
   [[ "$g" == --* ]] || return 1
@@ -145,45 +184,30 @@ v8fl_ok() { # TOKEN: 0 iff TOKEN is a known V8 tuning flag in V8FL_TAB in its va
   if [[ $neg -eq 1 && "$t" != bool && "$t" != maybe_bool ]]; then return 1; fi
   case "$t" in bool|maybe_bool) [[ $v -eq 0 ]] ;; *) [[ $v -eq 1 ]] ;; esac
 }
-v8fl_check() { # NODE: one read (also with empty V8_EXTRA, MD-56), then die on first refused token
-  local f g
+v8fl_check() {
+  local f
   v8fl_read "$1"
   for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node options, unknown flags, string flags, and log/trace/print/prof/dump/snapshot/file flags are refused)"
-    # Tool-specific exact-name refusals AFTER allowlist (LEDGER #107 G5c):
-    # WHY exact-name (not *turbolev* glob): allows --no-turbolev and --max-turbolev-inline-depth.
-    g=${f//_/-}
-    case "$g" in
-      --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)
-        die "--v8-flags must not set $f: Turbolev logs identical *' markers to TurboFan in --log-code" ;;
-    esac
+    v8fl_ok "$f" || die "--v8-flags must not set $f: only V8 tuning flags of this node binary are accepted (node's own options, and V8 flags that log, trace, print, profile, dump or take a file or path, are refused)"
   done
 }
 
 # =============================================================================================
 # CORE PARSER: CODESIZE_AWK (single-pass POSIX awk over one V8 --log-code CSV file)
 # =============================================================================================
-# Input:  -v fns="fn1,fn2"   (comma-separated exact target short names)
+# Input:  -v fns="fn1,fn2"
 # Output:
 #   C <fn><TAB><tier><TAB><base_tier><TAB><size><TAB><loc><TAB><ctx>
-#     - Emits ALL tiers for target functions so ONE awk pass feeds BOTH the gated selected-tier
-#       verdict AND the REPORTED all-tier summary.
+#   A <fn><TAB><n_locs><TAB><loc1><TAB><loc2>
+#     - Emitted when a target `fn` compiled from > 1 distinct full definition location
+#       (`<full_script>:<line>:<col>`). WHY (RECHECK Defect 1, Q-CSD-NAME (a)):
+#       If a.mjs defines small `hot` and b.mjs defines big `hot`, and AFTER swaps them, a key
+#       without file identity reads `hot: SAME` (exit 0) -- a WRONG VERDICT. Refusing any
+#       ambiguous `--fn` to NO-VERDICT fails closed without breaking cross-side line-shift invariance.
 #   X <why> at log line <n> [(+<m> more X line(s))]
-#     - Global fail-closed parse/integrity error.
-#
-# WHY key on symbolic field $9 instead of numeric field $3 (V8 CodeKind enum):
-#   - `ic-diff.sh` gates on V8-14/15 numeric $3 (`10/11/12/13`), causing NO-VERDICT on Node 22/24
-#     (LEDGER #110, #128). Field $9 carries V8's symbolic CodeKindToMarker() string directly.
-#   - EMPIRICAL NOTE (node v26.8.2 darwin-arm64): 8 of the 10 markers below (`~`, `^`, `+`, `+'`,
-#     `o+`, `*`, `*'`, `o*`) were observed live in `probes/markers.mjs`; `o+'` and `o*'` were NOT
-#     emitted by V8 14.6 (even for OSR closures capturing outer `let`) and are kept defensively.
-#     Node 22/24 and Linux x64 are NOT yet tested (see RESEARCH.md section 5).
-#
-# WHY `break` MUST be INSIDE the `if (rest starts with / or file:///)` guard:
-#   - Subtle order-dependence bug if `break` sits outside: given `--fn 'get,get value'`, a line
-#     for `get value file:///...` starts with `get `, fails the `rest` path check (`value ...`),
-#     and an unconditional `break` would abort the loop BEFORE checking `i=2` (`get value`),
-#     silently dropping `get value`! Putting `break` inside the path match fixes both orders.
+#     - Includes the Q-CSD-KEY (a) version-free numeric tripwire: within ONE log, every base
+#       tier (`ignition`, `sparkplug`, `maglev`, `turbo`) must map to exactly ONE numeric `$3`,
+#       and distinct base tiers must map to DISTINCT numeric `$3` (verified on Node 22/24/26/27!).
 # shellcheck disable=SC2016
 CODESIZE_AWK='
 BEGIN {
@@ -194,8 +218,8 @@ BEGIN {
     fn_len[i] = length(f)
     fn_pfx[i] = f " "
   }
-  # Tight allowlist of non-code-creation events observed under
-  # `--log-code --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot` (node v26.8.2).
+  # Observed non-code-creation events across Node 22/24/26/27 + GC (`code-move`).
+  # `sfi-move` and `code-deopt` kept defensively (matching ic-diff.sh allowlist).
   ok_ev["v8-version"] = 1
   ok_ev["v8-platform"] = 1
   ok_ev["new"] = 1
@@ -208,7 +232,6 @@ BEGIN {
   ok_ev["sfi-move"] = 1
   ok_ev["code-deopt"] = 1
 
-  # Non-JS code-creation $2 types (7 fields).
   nonjs["Builtin"] = 1
   nonjs["BytecodeHandler"] = 1
   nonjs["RegExp"] = 1
@@ -216,14 +239,12 @@ BEGIN {
   nonjs["Handler"] = 1
   nonjs["Wasm"] = 1
 
-  # JS code-creation $2 types (9 fields, carry symbolic marker in $9).
   js_ty["JS"] = 1
   js_ty["Eval"] = 1
   js_ty["Script"] = 1
 
   # Closed map of V8 CodeKindToMarker() ($9) -> "<tier> <base_tier> <ctx>"
-  # WHY octal \047 (never \x27): POSIX / BSD awk guarantees octal escapes in string literals.
-  # Observed on node v26.8.2: ~ ^ + +\047 o+ * *\047 o*  (o+\047 and o*\047 unobserved; defensive)
+  # Verified live on Node 22/24/26/27: ~ ^ + +\047 o+ * *\047 o*  (o+\047 and o*\047 unobserved; defensive)
   mk["~"]      = "ignition ignition 0"
   mk["^"]      = "sparkplug sparkplug 0"
   mk["+"]      = "maglev maglev 0"
@@ -270,8 +291,6 @@ function loc_base(rest,   p, i, c) {
     next
   }
   if (NF != 9) { failx("JS code-creation not 9 fields (" ty ", NF=" NF ")"); next }
-  # WHY length($6) <= 9 (never {1,9} regex interval, which older mawk rejects):
-  # exact in awk doubles and bash integer arithmetic (< 10^9 bytes).
   if ($3 !~ /^[0-9]+$/ || $5 !~ /^0x[0-9a-fA-F]+$/ || $6 !~ /^[0-9]+$/ || length($6) > 9 || $8 !~ /^0x[0-9a-fA-F]+$/) {
     failx("JS code-creation does not parse (" ty ")")
     next
@@ -280,6 +299,24 @@ function loc_base(rest,   p, i, c) {
     failx("unknown code tier marker " $9)
     next
   }
+
+  # Q-CSD-KEY (a) version-free numeric tripwire:
+  # Every base tier maps to exactly ONE numeric $3 within a log, and each numeric $3 maps
+  # to exactly ONE base tier. Catches any V8 schema change without a version-keyed enum table!
+  split(mk[$9], mparts, " ")
+  bt = mparts[2]
+  knum = $3
+  if ((bt in tier_to_k) && tier_to_k[bt] != knum) {
+    failx("tier-marker/CodeKind conflict: " bt " seen with kinds " tier_to_k[bt] " and " knum)
+    next
+  }
+  if ((knum in k_to_tier) && k_to_tier[knum] != bt) {
+    failx("tier-marker/CodeKind conflict: kind " knum " seen for both " k_to_tier[knum] " and " bt)
+    next
+  }
+  tier_to_k[bt] = knum
+  k_to_tier[knum] = bt
+
   if (ty != "JS") next
 
   name_loc = $7
@@ -289,13 +326,28 @@ function loc_base(rest,   p, i, c) {
     if (substr(name_loc, 1, pl) != pfx) continue
     rest = substr(name_loc, pl + 1)
     if (substr(rest, 1, 1) == "/" || substr(rest, 1, 8) == "file:///") {
-      split(mk[$9], mparts, " ")
-      printf "C %s\t%s\t%s\t%d\t%s\t%s\n", flist[i], mparts[1], mparts[2], ($6 + 0), loc_base(rest), mparts[3]
+      lb = loc_base(rest)
+      f = flist[i]
+      # Track distinct full definition locations per target fn (RECHECK Defect 1)
+      dk = f SUBSEP rest
+      if (!(dk in seen_def)) {
+        seen_def[dk] = 1
+        def_n[f]++
+        if (def_n[f] == 1) def_l1[f] = lb
+        else if (def_n[f] == 2) def_l2[f] = lb
+      }
+      printf "C %s\t%s\t%s\t%d\t%s\t%s\n", f, mparts[1], bt, ($6 + 0), lb, mparts[3]
       break
     }
   }
 }
 END {
+  for (i = 1; i <= nf; i++) {
+    f = flist[i]
+    if (def_n[f] + 0 > 1) {
+      printf "A %s\t%d\t%s\t%s\n", f, def_n[f], def_l1[f], def_l2[f]
+    }
+  }
   if (NX > 0) {
     printf "X %s at log line %d%s\n", XW, XL, (NX > 1 ? " (+" (NX - 1) " more X line(s))" : "")
   }
@@ -303,11 +355,8 @@ END {
 '
 
 # =============================================================================================
-# TURBOLEV DEFAULT-ON CHECK (ported from inlining-budget-diff.sh, LEDGER #107 G5c)
+# LOCAL TURBOLEV DEFAULT-ON CHECK (LEDGER #107 G5c; Q-CSD-TLLIB (a))
 # =============================================================================================
-# WHY check node --v8-options default from V8_OPTS_RAW (0 extra spawns):
-#   Probed in `probes/deopt-reopt.mjs`: `--turbolev` logs `JS,13,*'` identically to TurboFan
-#   while changing code size (344 B -> 336 B). Must refuse default-on Turbolev too.
 # shellcheck disable=SC2016
 TURBOLEV_AWK='
 { sub(/\r$/, "") }
@@ -336,19 +385,22 @@ END {
 '
 
 # =============================================================================================
-# RECORD EXTRACTORS & VERDICT JUDGE
+# RECORD EXTRACTORS & VERDICT JUDGE (uses lib/nullctl.sh temp-file cmp -s pattern, D9!)
 # =============================================================================================
+# WHY space-formatted display keys in s_ms / v_ms (fixing D8 raw TABs in DIFF output):
+#   MSDIFF_AWK strips only the leading "*\t" unit prefix. Formatting the payload with two
+#   spaces (`fn  tier  sizeB`) prints clean, TAB-free DIFF lines: `before=0 after=1  hot  maglev  1144B`.
 s_ms() { # records fn tiers (null control: keeps loc)
   printf '%s\n' "$1" | awk -v fn="$2" -v ts="$3" '
     BEGIN { FS = "\t"; p = "C " fn "\t"; n = split(ts, a, ","); for (i = 1; i <= n; i++) wt[a[i]] = 1 }
-    substr($0, 1, length(p)) == p && ($3 in wt) { print "*\t" $2 "\t" $4 "\t" $5 }
+    substr($0, 1, length(p)) == p && ($3 in wt) { printf "*\t%s  %sB  %s\n", $2, $4, $5 }
   ' | multiset
 }
 
 v_ms() { # records fn tiers (cross-side diff: strips loc so comment/line edits never false-DIFF)
   printf '%s\n' "$1" | awk -v fn="$2" -v ts="$3" '
     BEGIN { FS = "\t"; p = "C " fn "\t"; n = split(ts, a, ","); for (i = 1; i <= n; i++) wt[a[i]] = 1 }
-    substr($0, 1, length(p)) == p && ($3 in wt) { print "*\t" fn "\t" $2 "\t" $4 }
+    substr($0, 1, length(p)) == p && ($3 in wt) { printf "*\t%s  %s  %sB\n", fn, $2, $4 }
   ' | multiset
 }
 
@@ -385,8 +437,11 @@ reported_summary() {
   '
 }
 
-judge() { # fn tiers
-  local fn="$1" tiers="$2" n i x first nk dl counts sel ign
+# judge_side FN TIERS MS_DIR SIDE: inspects JRC[], JLOG[], JREC[] for one side.
+# Writes run 1..N multiset files to MS_DIR and checks them with cmp -s + MSDIFF_AWK
+# (matching lib/nullctl.sh's exact file-based null-control pattern, D9).
+judge_side() {
+  local fn="$1" tiers="$2" msdir="$3" side="$4" n i x amb counts sel ign f1 fk dl
   JV=NO-VERDICT; JWHY=""
   n=${#JRC[@]}
   for ((i = 0; i < n; i++)); do
@@ -397,11 +452,20 @@ judge() { # fn tiers
     x=$(printf '%s\n' "${JREC[$i]}" | awk '/^X / && !n++ { print substr($0, 3) }')
     if [[ -n "$x" ]]; then JWHY="unreadable code log in run $((i + 1)): $x"; return 0; fi
   done
-  first=$(s_ms "${JREC[0]}" "$fn" "$tiers")
+  # Defect 1 (RECHECK): ambiguous function name (>1 distinct definition location -> NO-VERDICT)
+  for ((i = 0; i < n; i++)); do
+    amb=$(printf '%s\n' "${JREC[$i]}" | awk -v fn="$fn" 'BEGIN { FS = "\t"; p = "A " fn "\t" } substr($0, 1, length(p)) == p { printf "%s definition locations (%s, %s)", $2, $3, $4; exit }')
+    if [[ -n "$amb" ]]; then JWHY="ambiguous function name '$fn' in run $((i + 1)): compiled at $amb"; return 0; fi
+  done
+  # [PROTOTYPE SHIM for `# @include lib/nullctl.sh`] -- cmp -s over run 1..N multiset files
+  local safe_fn=${fn// /_}
+  f1="$msdir/$safe_fn.$side.1.txt"
+  s_ms "${JREC[0]}" "$fn" "$tiers" >"$f1"
   for ((i = 1; i < n; i++)); do
-    nk=$(s_ms "${JREC[$i]}" "$fn" "$tiers")
-    if [[ "$nk" != "$first" ]]; then
-      dl=$(awk "$MSDIFF_AWK" <(printf '%s\n' "$first") <(printf '%s\n' "$nk") | sort -k3 \
+    fk="$msdir/$safe_fn.$side.$((i + 1)).txt"
+    s_ms "${JREC[$i]}" "$fn" "$tiers" >"$fk"
+    if ! cmp -s "$f1" "$fk"; then
+      dl=$(awk "$MSDIFF_AWK" "$f1" "$fk" | sort -k3 \
         | awk -v k="$((i + 1))" '{ n++; if (n == 1) { l = $0; sub(/^  before=[0-9]+ after=[0-9]+  /, "", l); a = $1; b = $2
             sub(/^before=/, "", a); sub(/^after=/, "", b); f = "run 1 x" a " | run " k " x" b "  " l } }
           END { printf "%d record(s) differ, first: %s", n, f }')
@@ -426,10 +490,8 @@ judge() { # fn tiers
 # SINGLE TRACE RUNNER
 # =============================================================================================
 # WHY `--no-concurrent-sparkplug` alongside `--no-concurrent-recompilation`:
-#   Empirically verified on node v26.8.2 (`probes/sparkplug-10x.mjs`): `--no-concurrent-recompilation`
-#   does NOT disable `--concurrent-sparkplug` (default on in V8 14.6), leaving a background Sparkplug
-#   thread that raced the log (9/10 repeatability in one 10-run pass). Disabling both makes all
-#   compilation synchronous on the main thread.
+#   V8's `--concurrent-sparkplug` is ON by default independently of `--no-concurrent-recompilation`.
+#   Verified on Node 22/24/26/27: all four accept `--no-concurrent-sparkplug` cleanly (exit 0).
 TRACE_FLAGS=(--log-code --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot)
 PROBE_ENV=(env -u NODE_OPTIONS -u NODE_V8_COVERAGE -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS)
 
@@ -457,12 +519,16 @@ run_side() { # side dir base k
 }
 
 # =============================================================================================
-# --self-test: canned --log-code traces + judge + TURBOLEV_AWK + v8fl_ok allowlist checks
+# --self-test: canned traces + judge + TURBOLEV_AWK + v8fl_ok + CLI refusals (Defect 1, D1-D9)
 # =============================================================================================
 self_test() {
-  local oks=0 fails=0 SQ="'" H B1 B2 OSR DEOPT BOTH_GET BAD_MK BAD_NF BAD_EV GOT
+  local oks=0 fails=0 SQ="'" H B1 B2 OSR DEOPT BOTH_GET AMBIG BAD_MK BAD_NF BAD_EV BAD_K1 BAD_K2 GOT
+  local ST_D msdir
   local -a JRC JLOG JREC
   local JV="" JWHY=""
+  ST_D=$(mktemp -d "${TMPDIR:-/tmp}/csd-st.XXXXXX") || { echo "FAIL self-test: mktemp -d"; FINAL=1; exit 1; }
+  TMP_DIR="$ST_D"
+  msdir="$ST_D/ms"; mkdir "$msdir"
   check() {
     if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"
     else fails=$((fails + 1)); echo "FAIL $1: got [$2] want [$3]"
@@ -486,12 +552,24 @@ EOF
   B1="$B1"$'\n''code-creation,JS,12,98600,0x114c09680,824,hot file:///w/drv.mjs:2:13,0x29a78805a970,+'$SQ
   B1="$B1"$'\n''code-creation,JS,13,98700,0x114c09b40,596,hot file:///w/drv.mjs:2:13,0x29a78805a970,*'$SQ
 
-  B2=$(printf '%s\n' "$B1" | sed -e 's/,JS,10,/,JS,8,/g' -e 's/,JS,12,/,JS,14,/g' -e 's/,JS,13,/,JS,15,/g')
+  # Node 22/24 CodeKind shift (9/11/12 instead of 10/12/13)
+  B2=$(printf '%s\n' "$B1" | sed -e 's/,Script,10,/,Script,9,/g' -e 's/,JS,10,/,JS,9,/g' -e 's/,JS,12,/,JS,11,/g' -e 's/,JS,13,/,JS,12,/g')
   check "records: normal hot fn ignores node:internal and parses ~, +', *'" \
     "$(rec hot "$B1")" \
     "C hot|ignition|ignition|38|drv.mjs:2:13|0;C hot|maglev|maglev|824|drv.mjs:2:13|1;C hot|turbo|turbo|596|drv.mjs:2:13|1;"
-  check "numeric CodeKind (\$3) shift independence via \$9 markers" \
+  check "cross-Node: shifted numeric CodeKind (\$3: 9/11/12 vs 10/12/13) yields identical records" \
     "$(rec hot "$B2")" "$(rec hot "$B1")"
+
+  # Q-CSD-KEY (a) tripwire: same base tier with two different $3, or same $3 with two different base tiers -> X
+  BAD_K1="$B1"$'\n''code-creation,JS,14,98750,0x114c09c00,596,hot file:///w/drv.mjs:2:13,0x29a78805a970,*'
+  BAD_K2="$H"$'\n''code-creation,JS,12,98600,0x114c09680,824,hot file:///w/drv.mjs:2:13,0x29a78805a970,+'
+  BAD_K2="$BAD_K2"$'\n''code-creation,JS,12,98700,0x114c09b40,596,hot file:///w/drv.mjs:2:13,0x29a78805a970,^'
+  check "tripwire Q-CSD-KEY(a): base tier with two numeric kinds -> X" \
+    "$(printf '%s\n' "$BAD_K1" | awk -v fns=hot "$CODESIZE_AWK" | awk '/^X / { print }')" \
+    "X tier-marker/CodeKind conflict: turbo seen with kinds 13 and 14 at log line 12"
+  check "tripwire Q-CSD-KEY(a): one numeric kind for two base tiers -> X" \
+    "$(printf '%s\n' "$BAD_K2" | awk -v fns=hot "$CODESIZE_AWK" | awk '/^X / { print }')" \
+    "X tier-marker/CodeKind conflict: kind 12 seen for both maglev and sparkplug at log line 10"
 
   OSR="$H"$'\n''code-creation,JS,12,98800,0x114c0a100,780,loop file:///tmp/a\x2Cb/drv.mjs:5:1,0x29a78805aa10,o+'
   OSR="$OSR"$'\n''code-creation,JS,13,98900,0x114c0a500,552,loop file:///tmp/a\x2Cb/drv.mjs:5:1,0x29a78805aa10,o*'
@@ -499,26 +577,51 @@ EOF
     "$(rec loop "$OSR")" \
     "C loop|maglev-osr|maglev|780|drv.mjs:5:1|0;C loop|turbo-osr|turbo|552|drv.mjs:5:1|0;"
 
-  # Regression check for --fn 'get,get value' vs --fn 'get value,get' (order independence!)
+  # D2: order-independent prefix matching for 'get,get value' vs 'get value,get'
   BOTH_GET="$H"$'\n''code-creation,JS,12,98940,0x114c0a600,340,get file:///w/g.mjs:6:13,0x29a78805ab00,+'$SQ
   BOTH_GET="$BOTH_GET"$'\n''code-creation,JS,13,98950,0x114c0a800,220,get value file:///w/g.mjs:4:12,0x29a78805ab10,*'$SQ
-  check "fn order: 'get,get value' matches BOTH (no early break drop)" \
+  check "D2 fn order: 'get,get value' matches BOTH" \
     "$(rec 'get,get value' "$BOTH_GET")" \
     "C get|maglev|maglev|340|g.mjs:6:13|1;C get value|turbo|turbo|220|g.mjs:4:12|1;"
-  check "fn order: 'get value,get' matches BOTH identically" \
+  check "D2 fn order: 'get value,get' matches BOTH identically" \
     "$(rec 'get value,get' "$BOTH_GET")" \
     "C get|maglev|maglev|340|g.mjs:6:13|1;C get value|turbo|turbo|220|g.mjs:4:12|1;"
-  check "exact prefix: 'get' alone ignores 'get value'" \
+  check "D2 exact prefix: 'get' alone ignores 'get value'" \
     "$(rec get "$BOTH_GET")" \
     "C get|maglev|maglev|340|g.mjs:6:13|1;"
 
+  # Defect 1 (RECHECK): two files defining `hot` -> A record -> judge_side NO-VERDICT (NEVER SAME!)
+  AMBIG="$H"$'\n''code-creation,JS,12,98600,0x114c09680,824,hot file:///w/a.mjs:3:13,0x29a78805a970,+'$SQ
+  AMBIG="$AMBIG"$'\n''code-creation,JS,12,98700,0x114c09b40,1144,hot file:///w/b.mjs:3:13,0x29a78805a990,+'$SQ
+  local AMBIG_REC; AMBIG_REC=$(printf '%s\n' "$AMBIG" | awk -v fns=hot "$CODESIZE_AWK")
+  JRC=(0 0); JLOG=("" ""); JREC=("$AMBIG_REC" "$AMBIG_REC")
+  judge_side hot "turbo,maglev" "$msdir" ambig
+  check "Defect 1: same-named fn in two files -> NO-VERDICT (ambiguous)" "$JV:$JWHY" \
+    "NO-VERDICT:ambiguous function name 'hot' in run 1: compiled at 2 definition locations (a.mjs:3:13, b.mjs:3:13)"
+
+  # D8: DIFF output has NO raw TAB characters + churn multiset retains both Maglev compiles
   DEOPT="$H"$'\n''code-creation,JS,12,99000,0x114c0b000,348,churn file:///w/d.mjs:1:1,0x29a78805ac00,+'
   DEOPT="$DEOPT"$'\n''code-creation,JS,13,99010,0x114c0b200,204,churn file:///w/d.mjs:1:1,0x29a78805ac00,*'
   DEOPT="$DEOPT"$'\n''code-creation,JS,12,99020,0x114c0b400,392,churn file:///w/d.mjs:1:1,0x29a78805ac00,+'
-  check "deopt-recompile churn multiset retains both Maglev compiles" \
-    "$(v_ms "$(printf '%s\n' "$DEOPT" | awk -v fns=churn "$CODESIZE_AWK")" churn "turbo,maglev" | sed 's/^ *//' | tr '\t\n' '|;')" \
-    "1 *|churn|maglev|348;1 *|churn|maglev|392;1 *|churn|turbo|204;"
+  local diff_out
+  diff_out=$(awk "$MSDIFF_AWK" <(v_ms "$(printf '%s\n' "$B1" | awk -v fns=churn "$CODESIZE_AWK")" churn "turbo,maglev") \
+    <(v_ms "$(printf '%s\n' "$DEOPT" | awk -v fns=churn "$CODESIZE_AWK")" churn "turbo,maglev") | sort -k3)
+  local has_tab=0
+  case "$diff_out" in *$'\t'*) has_tab=1 ;; esac
+  check "D8 + churn multiset: space-formatted DIFF lines (0 raw TABs, both Maglev sizes kept)" \
+    "$has_tab:$(printf '%s' "$diff_out" | tr '\n' ';')" \
+    "0:  before=0 after=1  churn  maglev  348B;  before=0 after=1  churn  maglev  392B;  before=0 after=1  churn  turbo  204B"
 
+  # D9: null-control catches run 1 != run 2 via file cmp -s
+  local R1_REC R2_REC
+  R1_REC=$(printf '%s\n' "$B1" | awk -v fns=hot "$CODESIZE_AWK")
+  R2_REC=$(printf '%s\n' "$B1" | sed 's/,824,/,900,/' | awk -v fns=hot "$CODESIZE_AWK")
+  JRC=(0 0); JLOG=("" ""); JREC=("$R1_REC" "$R2_REC")
+  judge_side hot "turbo,maglev" "$msdir" nctl
+  check "D9 nullctl: run 2 size drift -> NO-VERDICT" "$JV:${JWHY%% (*}" \
+    "NO-VERDICT:null control: run 2 differs from run 1"
+
+  # Sparkplug excluded from default turbo,maglev verdict
   local SP="$B1"$'\n''code-creation,JS,11,98650,0x114c09800,616,hot file:///w/drv.mjs:2:13,0x29a78805a970,^'
   check "Sparkplug excluded from default turbo,maglev verdict" \
     "$(v_ms "$(printf '%s\n' "$SP" | awk -v fns=hot "$CODESIZE_AWK")" hot "turbo,maglev")" \
@@ -535,10 +638,10 @@ EOF
   local COLD="$H"$'\n''code-creation,JS,10,98500,0x3bcd762b6900,38,cold file:///w/drv.mjs:2:13,0x29a78805a970,~'
   local COLD_REC; COLD_REC=$(printf '%s\n' "$COLD" | awk -v fns="cold,ghost" "$CODESIZE_AWK")
   JREC=("$COLD_REC" "$COLD_REC")
-  judge cold "turbo,maglev"
+  judge_side cold "turbo,maglev" "$msdir" guard1
   check "guard: ignition-only fn -> NO-VERDICT with warmup hint" "$JV:${JWHY%%:*}" \
     "NO-VERDICT:no compile of 'cold' in selected tiers (turbo,maglev) in run 1 (saw ignition bytecode x1"
-  judge ghost "turbo,maglev"
+  judge_side ghost "turbo,maglev" "$msdir" guard2
   check "guard: never-compiled fn -> NO-VERDICT missing hint" "$JV:$JWHY" \
     "NO-VERDICT:no compile of 'ghost' in run 1 (no such name or never called)"
 
@@ -547,7 +650,7 @@ EOF
   GOT=$(printf '  --turbolev (use maglev)\n        type: bool  default: --turbolev\n' | awk "$TURBOLEV_AWK")
   check "turbolev check: default on detected" "$GOT" "on absent"
 
-  # LEDGER law 4 allowlist unit tests (canned V8FL_TAB -- no node spawn)
+  # D3: LEDGER law 4 verbatim v8fl_ok allowlist checks
   V8FL_TAB=$'\nmaglev bool\nmax-inlined-bytecode-size int\nsparkplug-filter string\nlog-code bool\nturbolev bool\n'
   local ok_m=0 ok_i=0 bad_ev=0 bad_ins=0 bad_unk=0 bad_str=0 bad_log=0 bad_neg=0
   v8fl_ok --no-maglev && ok_m=1
@@ -558,8 +661,30 @@ EOF
   v8fl_ok --sparkplug-filter=hot || bad_str=1
   v8fl_ok --log-code || bad_log=1
   v8fl_ok --no-max-inlined-bytecode-size=100 || bad_neg=1
-  check "v8fl_ok allowlist: valid bool/int accepted; node opts, unknown, string, log, neg-int refused" \
+  check "D3 v8fl_ok allowlist: valid bool/int accepted; node opts, unknown, string, log, neg-int refused" \
     "$ok_m$ok_i$bad_ev$bad_ins$bad_unk$bad_str$bad_log$bad_neg" "11111111"
+
+  # CLI refusal checks (D4 mode conflict both orders, D5 empty/trailing-comma tiers & fn, D6 newline in driver path)
+  local dummy="$ST_D/d.mjs"; printf '1;\n' >"$dummy"
+  local rc=0 msg=""
+  msg=$(/bin/bash "$SELF" --report --max hot=100 --node-version v26.8.2 --platform-arch darwin-arm64 "$dummy" 2>&1) || rc=$?
+  check "D4: --report --max refused exit 2" "$rc:${msg%%$'\n'*}" "2:code-size-diff: --report and --max are mutually exclusive"
+  rc=0; msg=$(/bin/bash "$SELF" --max hot=100 --report --node-version v26.8.2 --platform-arch darwin-arm64 "$dummy" 2>&1) || rc=$?
+  check "D4: --max --report refused exit 2" "$rc:${msg%%$'\n'*}" "2:code-size-diff: --report and --max are mutually exclusive"
+  rc=0; msg=$(/bin/bash "$SELF" --report --fn hot --tiers "" "$dummy" 2>&1) || rc=$?
+  check "D5: --tiers '' refused cleanly (no set -u abort)" "$rc:${msg%%$'\n'*}" "2:code-size-diff: --tiers must not be empty"
+  rc=0; msg=$(/bin/bash "$SELF" --report --fn hot --tiers "turbo," "$dummy" 2>&1) || rc=$?
+  check "D5: --tiers 'turbo,' trailing comma refused" "$rc:${msg%%$'\n'*}" "2:code-size-diff: --tiers must not have an empty entry"
+  rc=0; msg=$(/bin/bash "$SELF" --report --fn "hot," "$dummy" 2>&1) || rc=$?
+  check "D5: --fn 'hot,' trailing comma refused" "$rc:${msg%%$'\n'*}" "2:code-size-diff: --fn must not have an empty entry"
+  local nldir="$ST_D/x"$'\n'"VERDICT SAME"
+  mkdir -p "$nldir"; printf '1;\n' >"$nldir/d.mjs"
+  rc=0; msg=$(/bin/bash "$SELF" --report --fn hot "$nldir/d.mjs" 2>&1) || rc=$?
+  local forged=0; case "$msg" in *"VERDICT SAME"*) forged=1 ;; esac
+  check "D6: newline in existing DRIVER path refused exit 2 with 0 forged lines" "$rc:$forged" "2:0"
+  rc=0; msg=$(/bin/bash "$SELF" --report --fn hot "$nldir/missing.mjs" 2>&1) || rc=$?
+  forged=0; case "$msg" in *"VERDICT SAME"*) forged=1 ;; esac
+  check "D6: newline in missing DRIVER path refused before readability error (0 forged lines)" "$rc:$forged" "2:0"
 
   echo
   if [[ $fails -eq 0 ]]; then
@@ -572,7 +697,7 @@ EOF
 }
 
 # =============================================================================================
-# CLI PARSING & VALIDATION
+# CLI PARSING & VALIDATION (uses lib/args.sh need(); refuses duplicates, conflicts, empty items, NL/CR)
 # =============================================================================================
 usage() {
   cat >&2 <<'EOF'
@@ -596,13 +721,15 @@ Options:
   --node BIN               node binary (default: $NODE or node)
   --v8-flags STR           extra V8 tuning flags (validated against `node --v8-options` allowlist)
   --out DIR                keep DIR/report.txt and DIR/raw/<side>/run.<k>.{log,out}
-  --self-test              run canned checks on CODESIZE_AWK, judge, TURBOLEV_AWK, v8fl_ok
+  --self-test              run canned checks + CLI refusal checks (exit 0 / 1)
   -h, --help               this text (exit 2)
 EOF
   DIED=1; exit 2
 }
 
 MODE="diff"
+SEEN_REPORT=0; SEEN_MAX=0; SEEN_FN=0; SEEN_TIERS=0; SEEN_VER=0; SEEN_PA=0
+SEEN_RUNS=0; SEEN_NODE=0; SEEN_V8=0; SEEN_OUT=0
 FNLIST=""
 TIERS="turbo,maglev"
 MAXSPEC=""
@@ -615,64 +742,102 @@ OUT=""
 POS=()
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
+  a="$1"; v=""
+  if [[ "$a" == --*=* ]]; then
+    v=${a#*=}; a=${a%%=*}
+    case "$a" in
+      --help|--self-test|--report) die "$a takes no =value" ;;
+      *) [[ -n "$v" ]] || die "$a must not be empty" ;;
+    esac
+  fi
+  nl_refuse "option name" "$a"
+  case "$a" in
     -h|--help) usage ;;
-    --self-test) self_test ;;
-    --report) MODE="report"; shift ;;
-    --fn) [[ $# -ge 2 ]] || die "--fn needs a value"; FNLIST="$2"; shift 2 ;;
-    --tiers) [[ $# -ge 2 ]] || die "--tiers needs a value"; TIERS="$2"; shift 2 ;;
-    --max) [[ $# -ge 2 ]] || die "--max needs a value"; MODE="gate"; MAXSPEC="$2"; shift 2 ;;
-    --node-version) [[ $# -ge 2 ]] || die "--node-version needs a value"; WANT_VER="$2"; shift 2 ;;
-    --platform-arch) [[ $# -ge 2 ]] || die "--platform-arch needs a value"; WANT_PA="$2"; shift 2 ;;
-    --runs) [[ $# -ge 2 ]] || die "--runs needs a value"; RUNS="$2"; shift 2 ;;
-    --node) [[ $# -ge 2 ]] || die "--node needs a value"; NODE_BIN="$2"; shift 2 ;;
-    --v8-flags) [[ $# -ge 2 ]] || die "--v8-flags needs a value"; V8FLAGS="$2"; shift 2 ;;
-    --out) [[ $# -ge 2 ]] || die "--out needs a value"; OUT="$2"; shift 2 ;;
+    --self-test) [[ $# -eq 1 && ${#POS[@]} -eq 0 && $SEEN_FN -eq 0 && $SEEN_MAX -eq 0 && $SEEN_REPORT -eq 0 ]] || die "--self-test takes no other argument"; self_test ;;
+    --report) [[ $SEEN_REPORT -eq 0 ]] || die "--report given more than once"; SEEN_REPORT=1; shift ;;
+    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; FNLIST="$v"; shift ;;
+    --tiers) [[ $SEEN_TIERS -eq 0 ]] || die "--tiers given more than once"; SEEN_TIERS=1; need "$@" || shift; TIERS="$v"; shift ;;
+    --max) [[ $SEEN_MAX -eq 0 ]] || die "--max given more than once"; SEEN_MAX=1; need "$@" || shift; MAXSPEC="$v"; shift ;;
+    --node-version) [[ $SEEN_VER -eq 0 ]] || die "--node-version given more than once"; SEEN_VER=1; need "$@" || shift; WANT_VER="$v"; shift ;;
+    --platform-arch) [[ $SEEN_PA -eq 0 ]] || die "--platform-arch given more than once"; SEEN_PA=1; need "$@" || shift; WANT_PA="$v"; shift ;;
+    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; RUNS="$v"; shift ;;
+    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; NODE_BIN="$v"; shift ;;
+    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; V8FLAGS="$v"; shift ;;
+    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; OUT="$v"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POS+=("$1"); shift; done ;;
-    -*) die "unknown option: $1 (see --help)" ;;
+    -*) die "unknown option: $a (see --help)" ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 
+# D4: explicit mode conflict checks (order-independent!)
+if [[ $SEEN_REPORT -eq 1 && $SEEN_MAX -eq 1 ]]; then
+  die "--report and --max are mutually exclusive"
+fi
+if [[ $SEEN_REPORT -eq 1 ]]; then MODE="report"
+elif [[ $SEEN_MAX -eq 1 ]]; then MODE="gate"
+fi
+
+# D6: newline / CR refusals on every option value and PWD BEFORE any spawn or write (LEDGER law 3)
+nl_refuse "the cwd" "$PWD"
+nl_refuse "--fn" "$FNLIST"
+nl_refuse "--tiers" "$TIERS"
+nl_refuse "--max" "$MAXSPEC"
+nl_refuse "--node-version" "$WANT_VER"
+nl_refuse "--platform-arch" "$WANT_PA"
+nl_refuse "--runs" "$RUNS"
+nl_refuse "--node" "$NODE_BIN"
+nl_refuse "--v8-flags" "$V8FLAGS"
+nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}
+[[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"
+
 RE_INT='^[0-9]+$'
 [[ "$RUNS" =~ $RE_INT && "$RUNS" -ge 2 && "$RUNS" -le 20 ]] || die "--runs must be 2..20, got '$RUNS'"
 
+# D5: non-empty + no leading/trailing/double comma on --tiers
+[[ -n "$TIERS" ]] || die "--tiers must not be empty"
+case ",$TIERS," in *,,*) die "--tiers must not have an empty entry" ;; esac
 IFS=',' read -r -a TIER_ARR <<< "$TIERS"
-SEEN_TIERS=","
+SEEN_T=","
 for t in "${TIER_ARR[@]}"; do
   case "$t" in
     turbo|maglev|sparkplug|ignition) ;;
     *) die "--tiers accepts only turbo,maglev,sparkplug,ignition (got '$t')" ;;
   esac
-  [[ "$SEEN_TIERS" != *",$t,"* ]] || die "--tiers has duplicate '$t'"
-  SEEN_TIERS="${SEEN_TIERS}${t},"
+  [[ "$SEEN_T" != *",$t,"* ]] || die "--tiers has duplicate '$t'"
+  SEEN_T="${SEEN_T}${t},"
 done
 
 FN_RE='^[A-Za-z_$][A-Za-z0-9_$]*( [A-Za-z_$][A-Za-z0-9_$]*)?$'
 PA_RE='^[a-z0-9]+-[a-z0-9_]+$'
 TARGETS=()
 MAX_VALS=()
+SEEN_F=","
 if [[ "$MODE" == "gate" ]]; then
-  [[ -z "$FNLIST" ]] || die "--max and --fn are mutually exclusive"
+  [[ $SEEN_FN -eq 0 ]] || die "--max and --fn are mutually exclusive"
+  [[ -n "$MAXSPEC" ]] || die "--max must not be empty"
+  case ",$MAXSPEC," in *,,*) die "--max must not have an empty entry" ;; esac
   [[ -n "$WANT_VER" ]] || die "--max requires --node-version vX.Y.Z"
-  # WHY require --platform-arch with --max:
-  #   Native machine-code byte sizes differ between arm64 and x64 (and OS ABIs). Checking only
-  #   --node-version lets an arm64 limit give a wrong WITHIN or OVER verdict on x64 Linux CI!
   [[ -n "$WANT_PA" ]] || die "--max requires --platform-arch OS-ARCH (e.g. darwin-arm64, linux-x64)"
   IFS=',' read -r -a PAIR_ARR <<< "$MAXSPEC"
   for pair in "${PAIR_ARR[@]}"; do
     [[ "$pair" == *=* ]] || die "--max entry must be fn=N, got '$pair'"
     fn=${pair%%=*}; lim=${pair#*=}
     [[ "$fn" =~ $FN_RE ]] || die "invalid function name in --max: '$fn'"
+    [[ "$SEEN_F" != *",$fn,"* ]] || die "duplicate function name in --max: '$fn'"
+    SEEN_F="${SEEN_F}${fn},"
     [[ "$lim" =~ $RE_INT && ${#lim} -le 9 ]] || die "invalid max byte limit for '$fn': '$lim' (want 1..9 digits)"
     TARGETS+=("$fn"); MAX_VALS+=("$lim")
     FNLIST="${FNLIST:+$FNLIST,}$fn"
   done
 else
   [[ -n "$FNLIST" ]] || die "--fn LIST is required"
+  case ",$FNLIST," in *,,*) die "--fn must not have an empty entry" ;; esac
   IFS=',' read -r -a TARGETS <<< "$FNLIST"
   for fn in "${TARGETS[@]}"; do
     [[ "$fn" =~ $FN_RE ]] || die "invalid function name in --fn: '$fn'"
+    [[ "$SEEN_F" != *",$fn,"* ]] || die "duplicate function name in --fn: '$fn'"
+    SEEN_F="${SEEN_F}${fn},"
   done
 fi
 if [[ -n "$WANT_PA" ]]; then
@@ -688,11 +853,14 @@ else
   [[ -f "${POS[0]}" && -r "${POS[0]}" ]] || die "DRIVER not readable: ${POS[0]}"
 fi
 
-# Early syntactic/conflict refusals on --v8-flags BEFORE any spawn; full allowlist runs via v8fl_check
+# Split --v8-flags with noglob (`set -f`) so wildcards never expand against cwd (RECHECK New Defect 5)
 V8_EXTRA=()
-if [[ -n "$V8FLAGS" ]]; then
+if [[ $SEEN_V8 -eq 1 ]]; then
+  [[ -n "$V8FLAGS" ]] || die "--v8-flags must not be empty"
+  set -f
   # shellcheck disable=SC2206
   V8_EXTRA=($V8FLAGS)
+  set +f
   [[ ${#V8_EXTRA[@]} -gt 0 ]] || die "--v8-flags needs at least one flag, got only blanks"
   for f in "${V8_EXTRA[@]}"; do
     [[ "$f" == --[A-Za-z]* ]] || die "--v8-flags takes flags only (each starts with -- and a letter), got '$f'"
@@ -706,9 +874,10 @@ if [[ -n "$V8FLAGS" ]]; then
   done
 fi
 
-# --out validation BEFORE any spawn or write (mirrors src/ic-diff.sh)
+# --out validation BEFORE any spawn or write (LEDGER law 3)
 if [[ -n "$OUT" ]]; then
   [[ "$OUT" != -* ]] || OUT="./$OUT"
+  [[ ! -L "$OUT" ]] || die "--out: $OUT is a symlink (refused)"
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
   [[ ! -e "$OUT/raw" || -d "$OUT/raw" ]] || die "--out: $OUT/raw exists and is not a directory"
   [[ ! -e "$OUT/raw" || ( -r "$OUT/raw" && -x "$OUT/raw" ) ]] || die "--out: $OUT/raw is not readable"
@@ -719,29 +888,43 @@ if [[ -n "$OUT" ]]; then
   if [[ -e "$OUT/report.txt" ]]; then
     RL=$(find "$OUT/report.txt" -links +1 2>/dev/null || true)
     [[ -z "$RL" ]] || die "--out: $OUT/report.txt has another hard link (refused)"
-    for inp in "${POS[@]}"; do
-      [[ ! "$OUT/report.txt" -ef "$inp" ]] || die "--out: $OUT/report.txt is an input file of this run"
-    done
   fi
   OUT_UP="$OUT/raw/before"
   while [[ ! -e "$OUT_UP" && ! -L "$OUT_UP" && "$OUT_UP" != . ]]; do OUT_UP=$(dirname -- "$OUT_UP"); done
   [[ -d "$OUT_UP" && -w "$OUT_UP" && -x "$OUT_UP" ]] || die "--out: cannot create $OUT/raw ($OUT_UP is not a writable directory)"
+  nl_dir "--out (resolved)" "$OUT"
+  rep_refuse "${POS[@]}"
 fi
 
-# Resolve node binary ONCE to an absolute path
+# Resolve node binary ONCE to an absolute path (LEDGER law 5)
 NODE_RES=$NODE_BIN
 if [[ "$NODE_RES" != */* ]]; then
   NODE_RES=$(command -v -- "$NODE_RES" 2>/dev/null) || die "node binary not found: $NODE_BIN"
 fi
 [[ "$NODE_RES" == */* ]] || die "node binary is not a file on PATH: $NODE_BIN -> $NODE_RES"
 [[ -f "$NODE_RES" && -x "$NODE_RES" ]] || die "node binary is not executable: $NODE_RES"
-NODE_DIR=$(cd -- "$(dirname -- "$NODE_RES")" && pwd)
-NODE_RES="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+NODE_DIR=$(dirname -- "$NODE_RES"); [[ "$NODE_DIR" != - ]] || NODE_DIR=./-
+NODE_DIR=$(cd -- "$NODE_DIR" 2>/dev/null && pwd) || die "node binary: cannot resolve directory of $NODE_RES"
+NODE_C="${NODE_DIR%/}/$(basename -- "$NODE_RES")"
+[[ "$NODE_C" -ef "$NODE_RES" ]] || die "node binary is not an executable file: $NODE_RES"
+NODE_RES=$NODE_C
+nl_refuse "--node (resolved)" "$NODE_RES"
+[[ "$NODE_RES" != *=* ]] || die "node binary: an = is not allowed in the resolved path: $NODE_RES"
 
-# --- Spawns start here: --version + platform-arch probe (one node -p), then v8fl_check (--v8-options) ---
-# WHY probe process.version + process.platform + process.arch from NODE_RES itself:
-#   `uname -m` can disagree with a Rosetta/x64 binary on Apple Silicon. One `node -p` call gives
-#   exact version + OS + CPU arch of the node binary in a single spawn.
+# Resolve driver paths & refuse resolved newline/CR BEFORE first spawn (LEDGER law 3)
+if [[ "$MODE" == "diff" ]]; then
+  DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
+  DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+  [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"
+  [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"
+  nl_refuse "DRIVER (resolved)" "$DRV_B_DIR/$DRV_B_BASE" "$DRV_A_DIR/$DRV_A_BASE"
+else
+  DRV_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_BASE=$(basename -- "${POS[0]}")
+  [[ "$DRV_DIR/$DRV_BASE" -ef "${POS[0]}" ]] || die "DRIVER: cannot resolve directory of ${POS[0]}"
+  nl_refuse "DRIVER (resolved)" "$DRV_DIR/$DRV_BASE"
+fi
+
+# --- Spawns start here ---
 INFO=$("${PROBE_ENV[@]}" "$NODE_RES" -p 'process.version + " " + process.platform + "-" + process.arch' 2>/dev/null) || die "cannot probe $NODE_RES"
 GOT_VER=${INFO%% *}
 GOT_PA=${INFO#* }
@@ -753,15 +936,25 @@ if [[ -n "$WANT_PA" && "$GOT_PA" != "$WANT_PA" ]]; then
   die "platform-arch mismatch: got $GOT_PA, want $WANT_PA"
 fi
 
-# LEDGER law 4 runtime V8 allowlist + Turbolev default-on check (ONE --v8-options capture)
+# Verbatim lib/v8flags.sh runtime allowlist (LEDGER law 4)
 v8fl_check "$NODE_RES"
-TL_STATE=$(printf '%s\n' "$V8_OPTS_RAW" | awk "$TURBOLEV_AWK")
+
+# Local Turbolev exact-name refusal + default-on check (Q-CSD-TLLIB (a); LEDGER #107 G5c)
+for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
+  g=${f//_/-}
+  case "$g" in
+    --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)
+      die "--v8-flags must not set $f: Turbolev logs identical *' markers to TurboFan in --log-code" ;;
+  esac
+done
+TL_RAW=$("${PROBE_ENV[@]}" "$NODE_RES" --v8-options 2>/dev/null) || die "cannot run $NODE_RES --v8-options"
+TL_STATE=$(printf '%s\n' "$TL_RAW" | awk "$TURBOLEV_AWK")
 case "$TL_STATE" in
   on\ *|*\ on) die "Turbolev is on by default in this V8 ($TL_STATE); --log-code cannot distinguish Turbolev from TurboFan" ;;
   \?*|*\ \?)   die "cannot read the --turbolev default from $NODE_RES --v8-options" ;;
 esac
 
-# Create --out dirs OR private temp dir
+# Create --out dirs OR private temp dir (with ms/ subdir for lib/nullctl.sh file cmp -s, D9)
 if [[ -n "$OUT" ]]; then
   if [[ "$MODE" == "diff" ]]; then
     mkdir -p -- "$OUT/raw/before" "$OUT/raw/after" || die "--out: cannot create $OUT/raw/{before,after}"
@@ -769,16 +962,20 @@ if [[ -n "$OUT" ]]; then
     mkdir -p -- "$OUT/raw/one" || die "--out: cannot create $OUT/raw/one"
   fi
   OUT=$(cd -- "$OUT" && pwd)
+  nl_refuse "--out (resolved)" "$OUT"
   REPORT="$OUT/report.txt"
   { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"
   RUNROOT="$OUT/raw"
+  TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/code-size-diff-ms.XXXXXX") || die "cannot create temp ms dir"
+  MSDIR="$TMP_DIR"
 else
   TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/code-size-diff.XXXXXX") || die "cannot create temp dir"
   TMP_DIR=$(cd -- "$TMP_DIR" && pwd)
-  if [[ "$MODE" == "diff" ]]; then mkdir "$TMP_DIR/before" "$TMP_DIR/after"
-  else mkdir "$TMP_DIR/one"
+  if [[ "$MODE" == "diff" ]]; then mkdir "$TMP_DIR/before" "$TMP_DIR/after" "$TMP_DIR/ms"
+  else mkdir "$TMP_DIR/one" "$TMP_DIR/ms"
   fi
   RUNROOT="$TMP_DIR"
+  MSDIR="$TMP_DIR/ms"
 fi
 
 say "code-size-diff (prototype)  node $GOT_VER  target $GOT_PA  $NODE_RES  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)"
@@ -789,8 +986,6 @@ if [[ -n "$OUT" ]]; then say "out     $OUT"; fi
 # EXECUTION & VERDICT
 # =============================================================================================
 if [[ "$MODE" == "diff" ]]; then
-  DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
-  DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
   say "before  ${DRV_B_DIR%/}/$DRV_B_BASE"
   say "after   ${DRV_A_DIR%/}/$DRV_A_BASE"
   say ""
@@ -803,8 +998,8 @@ if [[ "$MODE" == "diff" ]]; then
 
   VERDICT=SAME
   for fn in "${TARGETS[@]}"; do
-    JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge "$fn" "$TIERS"; VB=$JV; WB=$JWHY
-    JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge "$fn" "$TIERS"; VA=$JV; WA=$JWHY
+    JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge_side "$fn" "$TIERS" "$MSDIR" before; VB=$JV; WB=$JWHY
+    JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge_side "$fn" "$TIERS" "$MSDIR" after;  VA=$JV; WA=$JWHY
     if [[ "$VB" == NO-VERDICT || "$VA" == NO-VERDICT ]]; then
       FV=NO-VERDICT
       [[ "$VB" != NO-VERDICT ]] || say "  $fn: NO-VERDICT -- before: $WB"
@@ -832,7 +1027,6 @@ if [[ "$MODE" == "diff" ]]; then
   FINAL=1
   case "$VERDICT" in SAME) exit 0 ;; DIFF) exit 1 ;; *) exit 2 ;; esac
 else
-  DRV_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_BASE=$(basename -- "${POS[0]}")
   say "driver  ${DRV_DIR%/}/$DRV_BASE"
   say ""
 
@@ -844,7 +1038,7 @@ else
   VERDICT=$([[ "$MODE" == "gate" ]] && echo WITHIN || echo OK)
   for idx in "${!TARGETS[@]}"; do
     fn="${TARGETS[$idx]}"
-    JRC=("${RCO[@]}"); JLOG=("${LGO[@]}"); JREC=("${REO[@]}"); judge "$fn" "$TIERS"
+    JRC=("${RCO[@]}"); JLOG=("${LGO[@]}"); JREC=("${REO[@]}"); judge_side "$fn" "$TIERS" "$MSDIR" one
     if [[ "$JV" == NO-VERDICT ]]; then
       FV=NO-VERDICT
       say "  $fn: NO-VERDICT -- $JWHY"
@@ -867,7 +1061,7 @@ else
       fi
       say "    REPORTED all tiers: $RONE"
     fi
-    VERDICT=$(worst "$VERDICT" "$FV")
+    VERDICT=$(vworst "$VERDICT" "$FV")
   done
   say ""
   say "VERDICT $VERDICT"
