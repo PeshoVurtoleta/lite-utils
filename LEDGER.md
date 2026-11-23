@@ -668,7 +668,8 @@ ic by the prologue comment only); lib/prologue.sh 6a5ea148 -> 29b5811f. (b) Revi
 APPROVED: (1) bb's / ibd's chained EXIT trap ran `rm -f` before `set +e`, so a failing rm under set -e exited the trap
 rc 1 (a DIFF code, fail-open) instead of 2; both traps now turn set -e off FIRST (audit-sig RMFAIL rows, red on the
 pre-fix roots). The same rm-before-`set +e` shape in 6 PRE-EXISTING traps (allocation-diff :348 / :920, deopt-diff :577
-/ :1408, ic-diff :332 / :881) was ruled its own unit, not this round (Q-B71-TRAPS). (2) The TMPLEAK row bypassed the
+/ :1408, ic-diff :332 / :881) was ruled its own unit, not this round (Q-B71-TRAPS).
+(2) The TMPLEAK row bypassed the
 runner it guards (see (c)). (c) TMPLEAK lesson (law 10 applied to tests; Q-B71-TMPLEAK): test/inlining-budget-diff.test.mjs
 ran each mutant's `--self-test` with the caller's TMPDIR (cleanEnv() never sets it), so the `probe-no-rm` mutant left 7
 `inlining-budget-diff.XXXXXX` files in the shared TMPDIR per npm test: 245 found (35 runs since b62, 7 per run, sizes
@@ -686,7 +687,8 @@ inlining-budget-diff probe mutants and the -h pin, deopt-diff-boundary A4 ibd pa
 (private copy with .git + frozen fillers-final, /bin/bash 3.2, quiet lock, host PRELIMINARY load1 1.93): 3256 tests,
 3244 pass, 0 fail, 12 skip, rc 0, 1754 s. Evidence: `.handoff/PLAN-b70-gsig2.md`, `.handoff/RULINGS-b71.md`,
 `.handoff/evidence/b71-tmpdir/FINDINGS.md`, `.handoff/evidence/b71-gsig2/`, `.handoff/evidence/b71-npm/` (local,
-untracked).
+untracked). CLOSED (b96, 727e315): the 6 traps now turn set -e off before the rm (and ibd gets the OUT_NAMES type
+check, b95-F1); gate rows audit-sig TR / RMFAIL2, red on the old roots.
 
 ---
 
@@ -947,15 +949,18 @@ audit-g2 A3 tooth. (d) Review r1 REJECTED (2 LITERAL: a kill after the reap of a
 group kill), r2 APPROVED. Q-B72-G1FLAKE: the b72 run 1 (r1 tree, PRELIMINARY host) failed only the pre-existing,
 host-dependent audit-g1 "A1 real BB-opus-1 twin" (statuses 2,2,1 under load; passed alone at load1 1.94); ruled re-run
 the full suite once as the stop gate (FILLER 1: make the twin load-proof). npm test (private copy with .git, private
-TMPDIR, /bin/bash 3.2, quiet lock, host QUIET at start, load1 1.77): 3288 tests, 3276 pass, 0 fail, 12 skip, rc 0, 1669
-s. (e) CI proof (b73, run 43049200147, ef9cf7f): 8 / 8 legs green, 3288 tests, 0 fail on each; ubuntu runs bash 5.3.9
-with uutils env 0.10.0, the env exec probe reads `comm=sleep children=[]` (env execs: the uutils-env lead is closed),
-the PSUB rows ran and the aed6684 twins reach their named timeout, so the old `_sig` hung on bash 5.3.9 too. Three of the four macOS legs ran 108-118 min wall (node 26: 63 min) against the 120 min job timeout: raised to 180 min (Q-B73-CITIME, ffff1f7). Roots: allocation-diff
-29d6e484 -> fbed0e8b, bytecode-budget 0b9c9157 -> c01fce6b, deopt-diff fc04657d -> 178bb508, ic-diff f4a6f429 ->
-850606e0, inlining-budget-diff 06927a13 -> 5b9f3c26; lib/prologue.sh 29b5811f -> 24527638. Closes #117 (e)'s bare-`wait`
-and bash >= 5.1 residuals. Tier DETERMINISTIC. Evidence: `.handoff/PLAN-b72-cihang.md`, `.handoff/RULINGS-b72.md`,
-`.handoff/evidence/b72-cihang/`, `.handoff/evidence/b72-npm/`, `.handoff/evidence/b73-ci/CI-READ.md` (local,
-untracked).
+TMPDIR, /bin/bash 3.2, quiet lock, host QUIET at start, load1 1.77): 3288 tests, 3276 pass, 0 fail, 12 skip, rc 0,
+1669 s. CLOSED (b96, 9acc7d4): the twin is now deterministic on every leg (a FAKE_PIPEDROP fake; the pipe end is made by
+the shell pipe(2), never node socketpair stdio); the real scheduler-race twin is REPORTED tier, skipped unless
+BB_G1_REAL_TWIN=1 (Q-B95-G1TWIN). (e) CI proof (b73, run 43049200147, ef9cf7f): 8 / 8 legs green, 3288 tests, 0 fail
+on each; ubuntu runs bash 5.3.9 with uutils env 0.10.0, the env exec probe reads `comm=sleep children=[]` (env execs:
+the uutils-env lead is closed), the PSUB rows ran and the aed6684 twins reach their named timeout, so the old `_sig`
+hung on bash 5.3.9 too. Three of the four macOS legs ran 108-118 min wall (node 26: 63 min) against the 120 min job
+timeout: raised to 180 min (Q-B73-CITIME, ffff1f7). Roots: allocation-diff 29d6e484 -> fbed0e8b, bytecode-budget
+0b9c9157 -> c01fce6b, deopt-diff fc04657d -> 178bb508, ic-diff f4a6f429 -> 850606e0, inlining-budget-diff 06927a13 ->
+5b9f3c26; lib/prologue.sh 29b5811f -> 24527638. Closes #117 (e)'s bare-`wait` and bash >= 5.1 residuals. Tier
+DETERMINISTIC. Evidence: `.handoff/PLAN-b72-cihang.md`, `.handoff/RULINGS-b72.md`, `.handoff/evidence/b72-cihang/`,
+`.handoff/evidence/b72-npm/`, `.handoff/evidence/b73-ci/CI-READ.md` (local, untracked).
 
 **#128 Nightly on node 27 alpha (b78): two test oracles keyed on the wrong input (Q-B78-ICV8, Q-B78-PACK,
 Q-B78-LATEST).** Class: none -- test-oracle defects, no wrong verdict, no tool change, no A4 re-pin. Scheduled nightly
@@ -1324,6 +1329,24 @@ M11: main's reject arm is reachable only by a bench that patches `process.stderr
 covered. Re-check every corner before calling it frozen, and a fail-closed exit does not excuse a per-item verdict that
 says otherwise. What would re-open (c): a clean judged reading above 2 x 524288 / N on any leg. Evidence (local):
 `audit/2026-11-22-alloc-per-op-cli/`, `.handoff/b93/`.
+
+**#137 alloc-per-op: a fixed stand-in against a band edge nearer than the background (TRAP) (b95 / b96 / b97).** (a)
+TRAP (law 6): fixb A-B6 oneoff planted a 600000 B step (6 B/op at --n 100000) and expected NO VERDICT with 5.9 < peak
+< 10. CI run 45005171470 (macOS, node 26.8.2, n1e5 w3 warm0) read a clean background of 131712 / 454872 / 0 B per
+window after the step was removed. A literal re-size cannot work: at --max 0.05 a step kills M-BAND only above 5.30
+B/op and stays NO VERDICT only while step + background <= 10.5463, a 5.24 B/op window, narrower than the worst
+one-off seen (5.84 B/op, #136 (c)). The #135 lesson applies: "a planted stand-in must dominate the largest one-off the
+harness can accept, by construction, and its size is bounded by what the engine's own guards let through -- find that
+bound before choosing a magnitude [...]" (b) Fix (Q-B95-AB6F (a)): keep the step; assert hiFixed first; knob peak >
+5.9, no upper bound; the expected verdict comes from the row's own peak with hand constants; pin hand(10.54872) ===
+'FAIL'. Note (b96 U8): the row passes on 65e500c (the doubled band shipped in 1.1.0); its teeth are b93 SNAP 3fe6d649,
+M-BAND, M-HALF and ONEOFF 0-step. (c) Second layer (b97, CI run 45091044522): a rejected sandwich attempt could absorb
+the one-off, so the step was not counted every run. U8b made the knob transient and branch-free (60000 B on every
+measured bracket of window 1 whose read moved since the previous read), with a no-spawn pin against the old knob;
+a VOID row expects NO VERDICT whatever its peak (Q-B96-AB6VOID (a), Q-B97-AB6M2 (a)), and `row.voids` must be an
+integer >= 0, never null (review r1, LITERAL). Re-open if the knob misses on a CI leg, or a clean judged reading
+exceeds 2 x 524288 / N. Tier DETERMINISTIC (the pins and the spawn row, all in npm test); the CI readings are
+REPORTED. Evidence (local, untracked): `.handoff/b96/U8/`, `.handoff/b97/handbacks.md`.
 
 ---
 
@@ -1860,3 +1883,28 @@ existed: RULINGS-b66-cross.md routes X10 to no question and does not list it OUT
 parsers fail closed on every measured tear form; bb is stricter); no README / llms.txt bullet; one shared lib/ parser
 stays a post-1.0 candidate.
 Evidence: `audit/2026-11-10-cross-script/FINDINGS.md`, `.handoff/evidence/b77-confirm/B/`.
+
+**#138 allocation-diff guard hand-over: a stack-guard GC inside the gcn.cjs P/Q overlap (H1) or after the gcn write
+(H2) reads "trace lost 1 GC line" (b97, OPEN).** (a) Sighting: CI run 45091044522 (job 137420421262, ubuntu-latest, node
+v26.13.1, V8 14.6.202.34-node.40) read the L2 control (D-F64 `--zero --runs 3`) as NO-VERDICT "trace lost 1 GC line in
+run 1 (guard count 13, trace 12)", exit 2 (want 0 ZERO), with young 0,0,0 / old 0 (12 GC lines before the fence, 6
+after end). The window read clean; only the guard cross-check failed, so the tool failed closed. The first sighting in
+any saved CI log; the 7 other legs were green. (b) Mechanism: node's GCProfiler `Stop()` copies the record before it
+allocates and never removes its GC callbacks; the gcn.cjs preload starts profiler Q before it stops P, so one GC in that
+window is counted by both (H1); a GC serviced at the `stop()` entry after the gcn write is counted while its trace line
+lands after gcn (H2). Both give count = g + 1, the exact message. A natural trigger is a GC requested through the stack
+guard (V8 finalizes incremental marking that way) and serviced at the next JS entry. (c) Proof: injection with
+`%ScheduleGCInStackCheck`, 5/5 runs per window (H1 between Q.start and P.stop, H2 between the gcn write and Q.stop), the
+unchanged gcn.cjs 5/5 clean and the control before Q.start 5/5 clean. Natural trigger seen (an mc2 driver, 6 of 200
+runs with an Incremental Mark-Compact line right after gcn); a natural hit 0 of 800 locally (300 + 300 under load + 200
+mc2). Every number is a COUNT, REPORTED, macOS arm64 node v26.8.2. H3 (a real line missing from the trace) is NOT
+excluded: it needs one ubuntu node 26.13 D-F64 baseline (g, p, count): 13 / 7 / 13 means a line went missing (H3),
+12 / 6 / 12 means one GC was counted extra (H1 or H2). (d) Consequence: a false NO-VERDICT (fail closed), never a wrong
+verdict by itself; but an H1 double count can cancel one genuinely lost line ("a lost line cancelled by an extra one"
+is already a Not-detected case). Every live allocation-diff row has the same exposure. (e) Rulings: Q-B97-L2FIX (a)
+(diagnose first; the F-H1 fix, GCs seen by both profilers counted once, gets a planner after the evidence, in 1.1.2 or
+1.2.0; gcn.cjs sha pinned by self-test A14), Q-B97-L2ROW (a) and Q-B98-L2TWINS (a) (tests accept exactly this
+NO-VERDICT on the L2 control and audit-g3 A2, with a dump on any guard NO-VERDICT in the live rows; audit-g0 G-T4 real
+and env-strip alloc stay strict), Q-B98-A2PIN (a). Law: a guard cross-check has its own race windows: every hand-over
+between two counters is a window a GC can land in. What would close it: the ubuntu baseline plus the next CI sighting's
+dump (H1 / H2 / H3). Evidence (local, untracked): `.handoff/FINDING-b97-L2TRACE.md`, `.handoff/b97/L2/probes/`.

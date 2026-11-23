@@ -233,7 +233,9 @@ allocation-diff.sh [opts] --zero DRIVER                  # gate mode: ZERO / NON
 allocation-diff.sh --self-test
 ```
 
-- **Exit.** 0 `SAME` / `ZERO`, 1 `DIFF` / `NONZERO`, 2 `NO-VERDICT`.
+- **Exit.** 0 `SAME` / `ZERO`, 1 `DIFF` / `NONZERO`, 2 `NO-VERDICT`. A GC that the V8 stack guard runs at the guard's
+  hand-over can read `trace lost 1 GC line in run k (guard count c, trace c-1)`: that is `NO-VERDICT` (exit 2, fail
+  closed), rare, window unaffected (LEDGER #138).
 - **ZERO** means less than one semi-space (1 MB) of young allocation in the window, not zero bytes. The tool pins a
   1 MB semi-space for every run.
 - **Driver contract.** The driver marks the window with `fs.writeSync(1, '@@LITE-MARK start\n')` and the matching `end`
@@ -450,8 +452,9 @@ holds only for the build it was measured on.
 
 ## Testing
 
-`npm test` runs 4281 tests (node:test), 4267 pass / 0 fail / 14 skip in one local run (2026-11-22, node v26.8.2,
-macOS arm64, /bin/bash 3.2.57, host PRELIMINARY, load1 7.83 at start; a measurement, not a guarantee).
+`npm test` runs 4312 tests (node:test), 4297 pass / 0 fail / 15 skip in one local run (2026-11-23, node v26.8.2,
+macOS arm64, /bin/bash 3.2.57, 1739 s, host QUIET at start (load1 1.61 vs baseline 2.21), another node at 99.2% CPU at
+the end, so PRELIMINARY; tree 4dc6a53 + U8c + U8d; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 
@@ -475,12 +478,14 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
   lane with side effects sees extra calls; the floor is reported and never subtracted.
 - `alloc-per-op`: a bench that replaces `v8.GCProfiler` gets a fence miss, exit 2: replaced at import or in `setup()`,
   selfCheck misses (`selfCheck: fence: ...`, no lane measured, floor null); replaced by a lane during the run, every
-  lane verdict is NO VERDICT and stderr says `fence (after): v8.GCProfiler was replaced during the run`. A prototype patch of
-  `v8.GCProfiler` / `v8.getHeapSpaceStatistics`, or a swap restored before the run ends, is not detected. On a fence miss a non-VOID gate lane line in the text output ends ` (fence)`; A/B text lane lines carry no label, and every lane verdict in `--json` is NO VERDICT. (Code that imports alloc-per-op.mjs's
-  exports (unsupported, no contract) and replaced `v8.GCProfiler` passes `Profiler: v8.GCProfiler`).
-  `--no-concurrent-recompilation` lowers noise and is not forced. The numeric constants are FROZEN by S-A36 (CI run
-  43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the
-  read set and the driver are re-frozen by S-A51 (CI run 44945969102); both REPORTED tier (hosted CI, one run each).
+  lane verdict is NO VERDICT and stderr says `fence (after): v8.GCProfiler was replaced during the run`. A prototype
+  patch of `v8.GCProfiler` / `v8.getHeapSpaceStatistics`, or a swap restored before the run ends, is not detected. On a
+  fence miss a non-VOID gate lane line in the text output ends ` (fence)`; A/B text lane lines carry no label, and every
+  lane verdict in `--json` is NO VERDICT. (Code that imports alloc-per-op.mjs's exports (unsupported, no contract) and
+  replaced `v8.GCProfiler` passes `Profiler: v8.GCProfiler`). `--no-concurrent-recompilation` lowers noise and is not
+  forced. The numeric constants are FROZEN by S-A36 (CI run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5
+  / 1e8 corners rest on local PRELIMINARY data only); the read set and the driver are re-frozen by S-A51 (CI run
+  44945969102); both REPORTED tier (hosted CI, one run each).
 - an inherited SHELLOPTS=noexec runs nothing and exits 0; callers must require the VERDICT line, not only the exit code
   (class 2; LEDGER #124).
 - The `--v8-flags` allowlist checks a numeric value's FORM only: `--max-inlined-bytecode-size=NaN` passes, node

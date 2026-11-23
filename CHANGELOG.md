@@ -5,6 +5,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Patch (1.1.1): fixes and tests, no new surface. Unreleased block only; the release step writes the heading, the
+version and the date.
+
+### Fixed
+
+- allocation-diff, deopt-diff, ic-diff: the chained EXIT traps (the self-test temp dir; allocation-diff's run dir,
+  deopt-diff's run temp file, ic-diff's private log dir) now turn `set -e` off before removing, so a failing `rm` no
+  longer turns a SAME or NO-VERDICT run into exit 1 (DIFF); the run keeps its own exit code (Q-B71-TRAPS; 727e315).
+- inlining-budget-diff: a FIFO, a directory or another non-regular or non-writable entry at an `--out` file name
+  (`budget.<tier>.tsv`, `all.<tier>.diff.txt`, `<fn>.<tier>.diff.txt`) is refused before any spawn, exit 2
+  `--out: cannot write <path>`; a FIFO there used to hang the run (b95-F1; 727e315). User-visible: a 0444 file at an
+  OUT name that would never be written is now refused (was rc 0 SAME); a read-only input file or a 0444 hard link at
+  an OUT name now gets "cannot write" before "is an input file" / "hard link" (all rc 2, 0 spawns).
+- ic-diff: `-h` now says V8 15.6 (node 27 alpha) uses the same code-kind numbering as V8 14.x (README and llms.txt
+  already did; 727e315).
+- alloc-per-op: the after-run fence reads `v8.GCProfiler` once and uses that one class for both the forced-GC fence and
+  the identity check. A getter could hand the fence a fake and the identity check the real class (PASS exit 0); that
+  is now NO VERDICT exit 2 (b95-F1 alloc; ccd531f).
+- alloc-per-op: a `lanes` read that throws an error whose `message` getter changes per read is reported with its first
+  message (it was read twice and the second message printed; b95-E1; ccd531f).
+
+### Tests
+
+- audit-g1: the BB-opus-1 old-root twin is now DETERMINISTIC on every leg (Q-B95-G1TWIN): a FAKE_PIPEDROP fake prints
+  the second `f` record only when stdout is not a pipe; the control pins both modes; the tool is OVER exit 1; the
+  ff6108b root is WITHIN exit 0. The real scheduler-race twin is REPORTED tier, skipped unless `BB_G1_REAL_TWIN=1`.
+  Q-B72-G1FLAKE is closed: the pipe end is made by the shell `pipe(2)`, never by node socketpair stdio (9acc7d4).
+- audit-g4: every ic-diff spawn is capped under SIGKILL; row K1 (a fake hung in a foreground `sleep 30` fails by name
+  in < 10 s under cap 2000; red on the SIGTERM `run()`: 30 s, killed by SIGPIPE). judge-drain: `capSync` named caps
+  (60000 'judge-drain run', 30000 'git show') plus a cap-teeth row. env-strip / ext-audit-inl: the cap comments cite
+  the 7200 s per-file limit; the ext-audit-inl all-hang bound is 1575 s (it counts the two hangOk cwd000 rows).
+- pack.test: `package.json` `files[]` is pinned (10 entries) with A2 controls (dropping ic-diff.sh / README.md is
+  flagged; npm packs the bin targets, README and LICENSE anyway); `npm()` asserts npm-cli.js before spawning (a named
+  failure, not `Cannot find module .../null`); npm children run with `NODE_DISABLE_COMPILE_CACHE=1` and a private
+  TMPDIR; row A1 pins the compile cache at 0 entries (526 without, node 26.8.2 / npm 11.19.1; trivially green on
+  npm <= 10).
+- deopt-diff-boundary: the trap-without-rm mutant is re-anchored on the reordered self-test trap; the A4 parity pin is
+  now inlining-budget-diff.sh d7386f35 (fillers-final rotated). ic-diff: the `-h` row pins the V8 15.6 line once.
+- audit-sig: ROW TR (3 rows: a synthetic trap, the 5 live roots plus lib/*.sh read from the directory, and a 65e500c
+  twin from `git ls-tree`) pins that no EXIT trap removes before `set +e`; ROW RMFAIL2 (allocation-diff, ic-diff,
+  deopt-diff live, plus 65e500c twins) plants a 0500 subdirectory so the trap's `rm -rf` fails and the run's own exit
+  code must survive (Q-B71-TRAPS closed). inlining-budget-diff: OUT_NAMES rows (FIFO, directory, 0444 file, plus a
+  writable control; capSync 20 s). Per-file counts from the helper's runs: audit-sig 143 -> 152, inlining-budget-diff
+  98 -> 102.
+- alloc-per-op: fixb rows b95-E1, b95-F1 and b95-F1 v2; the A-B6 one-off check reads `band.hiFixed` first, then takes
+  its expected verdict from its own peak (FAIL exit 1 iff peak - (10.48576 + 0.001 x peak) > 0.05, else NO VERDICT
+  exit 2; Q-B95-AB6F (a)). qa-b93 QA-S2 matches the bench path literally (it passes with a space in TMPDIR).
+- alloc-per-op fixb A-B6: the stand-in heap step is counted deterministically (a transient 60000 B on every measured
+  bracket of window 1, so a rejected sandwich attempt can no longer absorb it; CI run 45091044522), with a no-spawn
+  pin against the old knob. A VOID row expects NO VERDICT whatever its peak, and `row.voids` must be an integer
+  >= 0 (null is not zero; Q-B96-AB6VOID (a), Q-B97-AB6M2 (a)).
+- allocation-diff: the L2 control (D-F64 `--zero --runs 3`) passes on exit 0 ZERO, or on exit 2 whose only NO-VERDICT
+  reason is exactly `trace lost 1 GC line in run k (guard count c, trace c-1)` with the counts line young 0,0,0 /
+  old 0 (the head pin line and A3 kept); each accepted sighting is a `t.diagnostic` (Q-B97-L2ROW (a)). Every live
+  real-node row now runs with `--out <private dir>` and, on a guard NO-VERDICT, prints the run's raw GC lines from 3
+  before `@@LITE-MARK end` to EOF, the per-segment GC-line counts and the guard count (the D-WORKER rows, whose guard
+  reason is expected, do not). No-spawn pins: the CI output verbatim passes; 18 other outputs fail ("trace lost 2 GC
+  lines", young 1 in any run, old 1, "the guard did not count", trace != count - 1, a wrong status or verdict, the
+  pin line missing, A3); the old strict body fails the CI output (parity). A live D-WORKER row pins the dump path.
+  Context: CI run 45091044522 (ubuntu, node v26.13.1) read the D-F64 control as NO-VERDICT "trace lost 1 GC line in run
+  1 (guard count 13, trace 12)" with young 0,0,0 / old 0 (the tool failed closed on its guard, not on the window).
+- audit-g3: the A2 D-F64 control (the L2 twin) gets the same acceptance and a canned pin (Q-B98-L2TWINS (a)); it
+  checks no mode-line pin (A1 does; 1.1.0's A2 never did), so it still passes on the frozen b63-g3 build
+  (Q-B98-A2PIN (a)). audit-g0 G-T4 real and env-strip alloc stay strict (known exposure; 1.1.2, with the guard fix).
+- Per-file runs (private copy, untimed, one run each): allocation-diff 243 / 243, audit-g3 19 / 19, spawn-cap 18 / 18.
+  npm test: 4312 tests, 4297 pass, 0 fail, 15 skip, rc 0 (2026-11-23, node v26.8.2, /bin/bash 3.2.57, macOS arm64,
+  1739 s; host QUIET at start, load1 1.61 vs baseline 2.21, another node at 99.2% CPU at the end, so PRELIMINARY; one
+  run; tree 4dc6a53 + U8c + U8d, before the U10 docs).
+
+### Known issues
+
+- allocation-diff: a GC that the V8 stack guard runs at the guard's hand-over (gcn.cjs, between its two GC profilers,
+  or between the gcn write and the count) can read `trace lost 1 GC line in run k (guard count c, trace c-1)`: fail
+  closed, NO-VERDICT exit 2, the window itself unaffected. Proven by injection; 0 natural hits in 800 local
+  runs. One CI run (45091044522, ubuntu node v26.13.1) read this exact message; which cause fired there (this
+  hand-over, or a real lost GC line) is not known yet. The tool is unchanged in 1.1.1 for this, and the fix waits for
+  evidence (Q-B97-L2FIX (a); LEDGER #138).
+
 ## [1.1.0] - 2026-11-22
 
 Minor release. Adds a sixth tool, `alloc-per-op` (a node CLI, `bin: alloc-per-op`), with the b93 audit fixes to it;
@@ -25,10 +103,12 @@ line were filled). The b93 closing run on the pre-release tree gave the same cou
   - Engine (add1189, audit fix 72e76b3): paired space-used brackets over the four heap spaces, folded with
     code_space, trusted_space and their large-object spaces (read per slot; a missing name never reads 0; a shrink in
     any slot rejects the attempt and re-runs it, at most 3 times); a twin-sandwich acceptance; PEAK = max of windows
-    1..K-1; the refusal band lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N (doubled below --n 1000000, b93, PRELIMINARY); the floor (empty lane) is printed and never
-    subtracted. Fail closed: a non-finite peak, a VOID window, a fence miss or a selfCheck miss is NO VERDICT. The
-    numeric constants are FROZEN by S-A36 (CI run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data only); the new read set and driver are re-frozen by S-A51 (CI
-    run 44945969102, 8/8 legs, ci-report VERDICT PASS); both REPORTED tier (hosted CI, one run each).
+    1..K-1; the refusal band lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N (doubled below --n
+    1000000, b93, PRELIMINARY); the floor (empty lane) is printed and never subtracted. Fail closed: a non-finite
+    peak, a VOID window, a fence miss or a selfCheck miss is NO VERDICT. The numeric constants are FROZEN by S-A36 (CI
+    run 43691163080, at --n 1e6 / 1e7 x --sub 1e3 / 1e4; the --n 1e5 / 1e8 corners rest on local PRELIMINARY data
+    only); the new read set and driver are re-frozen by S-A51 (CI run 44945969102, 8/8 legs, ci-report VERDICT PASS);
+    both REPORTED tier (hosted CI, one run each).
   - CLI (3641eba, 4ea66ce): the allowlist parser, the preflight (the eight heap spaces, the v8 API, the bench file),
     one respawn with `--expose-gc`, `-h` (exit 2) stating scope, the store rule and the exit codes.
   - A lane that returns a value is refused (only lane(0) is checked); a lane must STORE what it allocates (a dropped
@@ -55,12 +135,13 @@ line were filled). The b93 closing run on the pre-release tree gave the same cou
 - README.md and llms.txt: an `alloc-per-op` section, six commands, and the scope, store, period, Worker and Profiler
   limits.
 - Never-released code, fixed in this cycle:
-  - Engine audit fixes (72e76b3): the driver loads its base from a module `Int32Array`, so the first peeled iteration cannot
-    constant-fold an index-derived allocation; a lane returning a value is refused; selfCheck judges each control on its
-    own and reports `misses` per control (a CI flake on node 22); a Profiler that is not the live `v8.GCProfiler` is a
-    fence miss; `bandOf` refuses a non-integer or < 1 `n` / `sub`.
-  - Test fixes (eb66f8a, 1c4a11c): engine E11 settles before it counts; E9 X5c retries a VOIDed selfCheck and its stand-in
-    pads every read, so a one-off positive reading in the old / code space cannot fail a DETERMINISTIC row (LEDGER law 6).
+  - Engine audit fixes (72e76b3): the driver loads its base from a module `Int32Array`, so the first peeled iteration
+    cannot constant-fold an index-derived allocation; a lane returning a value is refused; selfCheck judges each
+    control on its own and reports `misses` per control (a CI flake on node 22); a Profiler that is not the live
+    `v8.GCProfiler` is a fence miss; `bandOf` refuses a non-integer or < 1 `n` / `sub`.
+  - Test fixes (eb66f8a, 1c4a11c): engine E11 settles before it counts; E9 X5c retries a VOIDed selfCheck and its
+    stand-in pads every read, so a one-off positive reading in the old / code space cannot fail a DETERMINISTIC row
+    (LEDGER law 6).
 
 ### Changed
 

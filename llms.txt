@@ -145,6 +145,9 @@ change? Counts of GC events, never bytes.
 
 - Diff mode only plus `--zero`; no ref mode and no file mode.
 - Exit 0 SAME or ZERO, 1 DIFF or NONZERO, 2 NO-VERDICT.
+- A GC that the V8 stack guard runs at the guard's hand-over can read
+  `trace lost 1 GC line in run k (guard count c, trace c-1)`: NO-VERDICT
+  (exit 2, fail closed), rare, window unaffected (LEDGER #138).
 - ZERO means less than one semi-space of young allocation in the
   window, not zero bytes. An allocation TurboFan scalar-replaces is not an
   allocation: ZERO is then the correct reading.
@@ -171,10 +174,10 @@ Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, ste
   (repeatable), `--max B`, `--tol B` (required in A/B), `--json` (the last line the tool writes to stdout). Option
   checks run before any spawn, except a `--lane NAME` (checked after the bench loads, setup() has run; a dash-led NAME
   is a name).
-- lane(i): i runs 0 .. S-1 in every sub-window and restarts; it is not an op index. An allocation that needs i >= S never
-  happens; one at i = 0 happens once per sub-window. A GC inside a sub-window VOIDs it: a lane allocating more than new space
-  holds per sub-window (on the order of 100 B/op at the default S; it depends on the new-space size) is NO VERDICT,
-  never FAIL; lower --sub.
+- lane(i): i runs 0 .. S-1 in every sub-window and restarts; it is not an op index. An allocation that needs i >= S
+  never happens; one at i = 0 happens once per sub-window. A GC inside a sub-window VOIDs it: a lane allocating more
+  than new space holds per sub-window (on the order of 100 B/op at the default S; it depends on the new-space size) is
+  NO VERDICT, never FAIL; lower --sub.
 - Exit 0 PASS / SAME / table; 1 FAIL / DIFF / ONLY-A / ONLY-B; 2 NO VERDICT or refused. `--self-test`: 0 all rows ok,
   1 a row missed, 2 the selfCheck missed. Output has a `gate --max ...` / `A/B --tol ...` line, no `VERDICT` line.
 - Refusal band: lo = 32 / S, hi = hiFixed + 0.001 x peak, hiFixed = 524288 / N, doubled below --n 1000000
