@@ -6,7 +6,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -94,7 +94,12 @@ test('QA-S2 adversarial: a revoked Proxy as setup: exit 2, stdout "", "BENCH <p>
     const r = run(['--json', ...T, p], dir);
     assert.equal(r.status, 2, why(r));
     assert.equal(String(r.stdout), '', why(r));
-    assert.match(String(r.stderr), /NO VERDICT: BENCH \S+b\.mjs: reading `setup` threw: \S/, why(r));
+    // b95 (PLAN-GB TASK 5): the bench path is matched literally (the tool prints it realpath'd: macOS /var -> /private/var),
+    // so a TMPDIR with a space still matches; the tail is non-empty
+    const err = String(r.stderr), head = 'NO VERDICT: BENCH ' + realpathSync(p) + ': reading `setup` threw: ';
+    const at = err.indexOf(head);
+    assert.ok(at >= 0, `stderr names the bench path and "reading \`setup\` threw: "\n${why(r)}`);
+    assert.ok(err.slice(at + head.length).split('\n')[0].trim() !== '', `the thrown text after "threw: " is non-empty\n${why(r)}`);
 });
 
 // ================= U3 / S-A57 + Q-B93-C14 (a): the fence label on text lines =================

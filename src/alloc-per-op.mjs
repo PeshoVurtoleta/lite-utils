@@ -727,7 +727,8 @@ async function loadBench(p) {
             fns.set(k, f);
         }
     } catch (e) {
-        throw new Error(errText(e).startsWith('BENCH ') ? errText(e) : 'BENCH ' + p + ': reading `lanes` threw: ' + errText(e));
+        const t = errText(e);
+        throw new Error(t.startsWith('BENCH ') ? t : 'BENCH ' + p + ': reading `lanes` threw: ' + t);
     }
     return { path: p, fns };
 }
@@ -797,9 +798,10 @@ async function run(o, reals) {
             }
         }
     }
-    const fence = fenceCheck();
+    const P = v8.GCProfiler;
+    const fence = fenceCheck(P);
     const fenceRecOk = typeof fence.recorded === 'number' && Number.isFinite(fence.recorded) && fence.recorded >= fence.forced;
-    const fenceLiveOk = v8.GCProfiler === CONTROLS.Profiler;
+    const fenceLiveOk = P === CONTROLS.Profiler;
     const fenceOk = fenceRecOk && fenceLiveOk;
     if (!fenceRecOk) reasons.push('fence (after): recorded ' + fence.recorded + ' < forced ' + fence.forced);
     else if (!fenceLiveOk) reasons.push('fence (after): v8.GCProfiler was replaced during the run');
