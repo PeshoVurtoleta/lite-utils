@@ -5,8 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Patch (1.1.1): fixes and tests, no new surface. Unreleased block only; the release step writes the heading, the
-version and the date.
+## [1.1.1] - 2026-11-23
+
+Patch release: fixes and tests, no new surface. Touches allocation-diff, deopt-diff, ic-diff, inlining-budget-diff
+and alloc-per-op; bytecode-budget is unchanged. One user-visible tightening: inlining-budget-diff refuses a
+non-regular or non-writable entry at an `--out` file name (Fixed). Zero runtime dependencies; node >= 22,
+bash >= 3.2.
+npm test (the b99 release gate): 4312 tests, 4297 pass, 0 fail, 15 skip (2026-11-23, node v26.8.2, /bin/bash 3.2.57,
+host PRELIMINARY: load1 3.76 at start vs baseline 2.21, another node at 91.3%; 1765 s; private copy with .git,
+quiet-lock; one run; tree 5173e8e + the 1.1.1 release-step files (sha-pinned in the run log), before this count
+line, the README Testing line, the touched-tools sentence above and the ROADMAP Next line were edited).
 
 ### Fixed
 

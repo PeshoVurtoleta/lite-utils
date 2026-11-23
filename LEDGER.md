@@ -1337,7 +1337,7 @@ window after the step was removed. A literal re-size cannot work: at --max 0.05 
 B/op and stays NO VERDICT only while step + background <= 10.5463, a 5.24 B/op window, narrower than the worst
 one-off seen (5.84 B/op, #136 (c)). The #135 lesson applies: "a planted stand-in must dominate the largest one-off the
 harness can accept, by construction, and its size is bounded by what the engine's own guards let through -- find that
-bound before choosing a magnitude [...]" (b) Fix (Q-B95-AB6F (a)): keep the step; assert hiFixed first; knob peak >
+bound before choosing a magnitude [...]". (b) Fix (Q-B95-AB6F (a)): keep the step; assert hiFixed first; knob peak >
 5.9, no upper bound; the expected verdict comes from the row's own peak with hand constants; pin hand(10.54872) ===
 'FAIL'. Note (b96 U8): the row passes on 65e500c (the doubled band shipped in 1.1.0); its teeth are b93 SNAP 3fe6d649,
 M-BAND, M-HALF and ONEOFF 0-step. (c) Second layer (b97, CI run 45091044522): a rejected sandwich attempt could absorb

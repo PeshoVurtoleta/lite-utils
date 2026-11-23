@@ -22,7 +22,7 @@ answer in its own trace output, but reading two traces by eye does not scale and
 flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a `VERDICT` line and
 an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
 
-Install (version 1.1.0), three ways:
+Install (version 1.1.1), three ways:
 
 ```bash
 # 1. from the npm registry
@@ -235,7 +235,7 @@ allocation-diff.sh --self-test
 
 - **Exit.** 0 `SAME` / `ZERO`, 1 `DIFF` / `NONZERO`, 2 `NO-VERDICT`. A GC that the V8 stack guard runs at the guard's
   hand-over can read `trace lost 1 GC line in run k (guard count c, trace c-1)`: that is `NO-VERDICT` (exit 2, fail
-  closed), rare, window unaffected (LEDGER #138).
+  closed), rare (0 natural hits in 800 local runs), window unaffected (LEDGER #138).
 - **ZERO** means less than one semi-space (1 MB) of young allocation in the window, not zero bytes. The tool pins a
   1 MB semi-space for every run.
 - **Driver contract.** The driver marks the window with `fs.writeSync(1, '@@LITE-MARK start\n')` and the matching `end`
@@ -453,8 +453,8 @@ holds only for the build it was measured on.
 ## Testing
 
 `npm test` runs 4312 tests (node:test), 4297 pass / 0 fail / 15 skip in one local run (2026-11-23, node v26.8.2,
-macOS arm64, /bin/bash 3.2.57, 1739 s, host QUIET at start (load1 1.61 vs baseline 2.21), another node at 99.2% CPU at
-the end, so PRELIMINARY; tree 4dc6a53 + U8c + U8d; a measurement, not a guarantee).
+macOS arm64, /bin/bash 3.2.57, 1765 s, host PRELIMINARY at start (load1 3.76 vs baseline 2.21, another node at 91.3%
+CPU); the 1.1.1 release gate, tree 5173e8e + the version bump; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 

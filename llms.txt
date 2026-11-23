@@ -11,7 +11,7 @@ This is not a JS library: no JS API is supported (alloc-per-op.mjs's exports ser
 
 ## Status
 
-Version 1.1.0 (2026-11-22), on npm as @zakkster/lite-utils (1.0.0, 2026-11-12, was the first release).
+Version 1.1.1 (2026-11-23), on npm as @zakkster/lite-utils (1.0.0, 2026-11-12, was the first release).
 
 Install (instructions; pick one):
 
@@ -147,7 +147,8 @@ change? Counts of GC events, never bytes.
 - Exit 0 SAME or ZERO, 1 DIFF or NONZERO, 2 NO-VERDICT.
 - A GC that the V8 stack guard runs at the guard's hand-over can read
   `trace lost 1 GC line in run k (guard count c, trace c-1)`: NO-VERDICT
-  (exit 2, fail closed), rare, window unaffected (LEDGER #138).
+  (exit 2, fail closed), rare (0 natural hits in 800 local runs),
+  window unaffected (LEDGER #138).
 - ZERO means less than one semi-space of young allocation in the
   window, not zero bytes. An allocation TurboFan scalar-replaces is not an
   allocation: ZERO is then the correct reading.

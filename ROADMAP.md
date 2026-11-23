@@ -7,7 +7,9 @@
 Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
 1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3).
 1.1.0 RELEASED 2026-11-22: commit 65e500c, tag v1.1.0, npm `@zakkster/lite-utils` 1.1.0 (alloc-per-op, minor 1).
-Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5), item 2 (the 1.1.1 patch, Q-M-PATCH (a)).
+1.1.1 PREPARED 2026-11-23 (b99; the maintenance patch, post-1.0 minors item 2): the maintainer commits, tags v1.1.1
+and publishes. Next: the 1.1.2 patch (the allocation-diff --zero null control, Q-ADZ-NC (a); the guard fix F-H1
+once there is evidence), then the post-1.0 minors (section 3, "Post-1.0 minors"; D-5).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -220,6 +222,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      (RULINGS-cli-audit.md).
   2. 1.1.1 maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a); versioned 1.1.1 by Q-PATCH-NAME (a),
      maintainer 2026-11-22). No new surface.
+     STATUS: PREPARED 2026-11-23 (b99; status line 10): fixes 727e315 / ccd531f, tests 9acc7d4 / feb9210, docs 5173e8e.
   3. 1.2.0 import-audit (L1 below).
   4. 1.3.0 code-size-diff (L4 below).
   5. 1.4.0 suite-run (L6 below).

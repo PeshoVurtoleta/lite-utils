@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-utils",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Standalone V8-diagnostic CLIs (five bash scripts, one node tool) with fail-closed verdicts",
   "type": "module",
   "sideEffects": false,
