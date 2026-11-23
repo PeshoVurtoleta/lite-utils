@@ -573,12 +573,13 @@ self_test() {
   local T_DEOPT T_MONO DUMP E9 D10 P ED GE GD OSRC OSR LZM LZ
   local -a RCB RCA TXB TXA JRC JREC
   d=$(mktemp -d) || { echo "FAIL self-test: mktemp -d"; echo; echo "self-test: 1 check(s) FAILED"; return 1; }
-  # the temp dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $? restored; set +e
-  # so restoring a non-zero $? cannot cut the trap short), and the script's trap is put back below
+  # the temp dir goes on every exit path: this trap saves $?, turns set -e off FIRST (so neither a failing rm nor restoring
+  # a non-zero $? can cut the trap short), removes the dir, then runs the script's own EXIT trap with $? restored;
+  # the script's trap is put back below
   ST_D=$d
   eval "set -- $(trap -p EXIT)"; old=${3:-}
   # shellcheck disable=SC2064
-  trap "st_rc=\$?; rm -rf \"\$ST_D\"; set +e; (exit \$st_rc); $old" EXIT
+  trap "st_rc=\$?; set +e; rm -rf \"\$ST_D\"; (exit \$st_rc); $old" EXIT
   check() { if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"; else fails=$((fails + 1)); echo "FAIL $1: $2"; echo "  want: $3"; fi; }
   # FN TEXT -> records (";" per line, "|" = TAB); a failing DEOPT_AWK adds "!awk exited <rc>" (no row expects it)
   rec() { printf '%s\n' "$2" | { awk -v fn="$1" "$DEOPT_AWK" || echo "!awk exited $?"; } | tr '\t\n' '|;'; }
@@ -1413,13 +1414,14 @@ say ""
 # ---------------------------------------------------------------------------------------------
 # runs: k = 1..R, before then after; each keeps its driver exit and its kept lines (KEEP_AWK) (raw output to --out only)
 # ---------------------------------------------------------------------------------------------
-# run_side's temp file goes on every exit path (die, set -e, a signal): this trap removes it, then runs the script's own
-# fail-closed EXIT trap (lib/prologue.sh) with $? restored (set +e so restoring a non-zero $? cannot cut the trap short).
+# run_side's temp file goes on every exit path (die, set -e, a signal): this trap saves $?, turns set -e off FIRST (so
+# neither a failing rm nor restoring a non-zero $? can cut the trap short), removes the file, then runs the script's own
+# fail-closed EXIT trap (lib/prologue.sh) with $? restored.
 # A signal inside $(mktemp) before the assignment can still leave that one file
 RUN_TMP=""
 eval "set -- $(trap -p EXIT)"; old=${3:-}
 # shellcheck disable=SC2064
-trap "st_rc=\$?; [[ -z \$RUN_TMP ]] || rm -f -- \"\$RUN_TMP\"; set +e; (exit \$st_rc); $old" EXIT
+trap "st_rc=\$?; set +e; [[ -z \$RUN_TMP ]] || rm -f -- \"\$RUN_TMP\"; (exit \$st_rc); $old" EXIT
 RUN_RC=0; RUN_TX=""
 run_side() { # dir base rawfile: one node run of dir/base; sets RUN_RC (the driver exit, or "<mktemp|tee|tr|awk|append> <rc>") RUN_TX
   local tx st n t r a nrc=0 ar=0

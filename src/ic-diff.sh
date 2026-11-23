@@ -146,6 +146,7 @@
 #   enclosing literal); a detached child that outlives the driver. A Worker or a forked child that logs is caught
 #   by the isolate-file count (NO-VERDICT).
 # Known limit: on node 22 and 24 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 / 24 numbering is adopted; a NO-VERDICT, never a wrong verdict.
+# V8 15.6 (node 27 alpha) uses the same V8 14.x numbering (CODE_KIND_LIST identical at 14.6.202.34 and 15.6.75.25, read from source), so the tool gives verdicts there.
 # Tier: on a user driver the verdict is STATISTICAL (IC states follow warm-up, GC and tier-up timing; run it under the
 #   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
@@ -327,12 +328,12 @@ self_test() {
   local -a RCB RCA LGB LGA REB REA JRC JLOG JREC
   local TB=$'\t'
   d=$(mktemp -d) || { echo "FAIL self-test: mktemp -d"; echo; echo "self-test: 1 check(s) FAILED"; return 1; }
-  # the temp dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $? restored; set +e
-  # so restoring a non-zero $? cannot cut the trap short)
+  # the temp dir goes on every exit path: this trap saves $?, turns set -e off FIRST (so neither a failing rm nor restoring
+  # a non-zero $? can cut the trap short), removes the dir, then runs the script's own EXIT trap with $? restored
   ST_D=$d
   eval "set -- $(trap -p EXIT)"; old=${3:-}
   # shellcheck disable=SC2064
-  trap "st_rc=\$?; rm -rf \"\$ST_D\"; set +e; (exit \$st_rc); $old" EXIT
+  trap "st_rc=\$?; set +e; rm -rf \"\$ST_D\"; (exit \$st_rc); $old" EXIT
   check() { if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"; else fails=$((fails + 1)); echo "FAIL $1: $2"; echo "  want: $3"; fi; }
   # FNS TEXT -> IC_AWK records (";" per line, "|" = TAB); a failing IC_AWK adds "!awk exited <rc>" (no row expects it)
   rec() { printf '%s\n' "$2" | { awk -v fns="$1" "$IC_AWK" || echo "!awk exited $?"; } | tr '\t\n' '|;'; }
@@ -886,11 +887,11 @@ if [[ -n "$OUT" ]]; then
   REPORT="$OUT/report.txt"; { : >"$REPORT"; } 2>/dev/null || die "--out: cannot write $REPORT"   # backstop: a write that races the check
   RUNROOT="$OUT/raw"
 else
-  # the private log dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $?
-  # restored; set +e so restoring a non-zero $? cannot cut the trap short)
+  # the private log dir goes on every exit path: this trap saves $?, turns set -e off FIRST (so neither a failing rm nor
+  # restoring a non-zero $? can cut the trap short), removes the dir, then runs the script's own EXIT trap with $? restored
   eval "set -- $(trap -p EXIT)"; IC_OLD=${3:-}
   # shellcheck disable=SC2064
-  trap "ic_rc=\$?; if [[ -n \$IC_TMP ]]; then rm -rf \"\$IC_TMP\"; fi; set +e; (exit \$ic_rc); $IC_OLD" EXIT
+  trap "ic_rc=\$?; set +e; if [[ -n \$IC_TMP ]]; then rm -rf \"\$IC_TMP\"; fi; (exit \$ic_rc); $IC_OLD" EXIT
   # an INT / TERM / HUP while mktemp runs is only NOTED, so the new dir is always named before a die can run (bash 3.2
   # runs a pending trap after the assignment anyway; a shell that ran it before would leak the dir); then the shared
   # trap (lib/prologue.sh) is armed again and a noted signal dies here through it; the EXIT trap removes the dir

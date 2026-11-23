@@ -678,6 +678,14 @@ test('ic-diff -h: the node 22 and 24 known limit, one whole line, exactly once (
     assert.equal(h.stdout.split('on node 22 and 24').length - 1, 1, h.stdout);
     assert.equal(h.stdout.split('on node 22').length - 1, 1, h.stdout);   // an old-text or duplicated line fails
 });
+// b96 U6 (PLAN-GA TASK 7): V8 15.6 shares the 14.x code-kind numbering (README and llms already say it); one whole line
+const V8_156_LINE = 'V8 15.6 (node 27 alpha) uses the same V8 14.x numbering (CODE_KIND_LIST identical at 14.6.202.34 and 15.6.75.25, read from source), so the tool gives verdicts there.';
+test('ic-diff -h: the V8 15.6 numbering line, one whole line, exactly once', { skip }, () => {
+    const [h] = helpRuns(SCRIPT);
+    assert.equal(h.status, 2, h.stdout + h.stderr);
+    assert.equal(h.stdout.split('\n').filter((l) => l === V8_156_LINE).length, 1, h.stdout);
+    assert.equal(h.stdout.split('V8 15.6').length - 1, 1, h.stdout);   // a duplicated or reworded second line fails
+});
 
 // --- A4 (+ A7 K1 / K2) on this file's OWN fake node and mktemp shim (independent of the self-test's fake). The fake
 // node logs its argv per spawn, exits 7 when NODE_OPTIONS or NODE_COMPILE_CACHE reaches it (every run below sets

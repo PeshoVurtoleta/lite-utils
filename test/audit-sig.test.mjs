@@ -189,6 +189,16 @@ function fakeText(dir) {
         'fi',
         'if [ "$drv" = 1 ] && mkdir "$D/first" 2>/dev/null; then',
         '  if [ -f "$D/catstdin" ] && [ "$cs" != probe ]; then cat > "$D/stdin.bin"; fi',
+        // b96 RMFAIL2: `plant` (glob prefix) -> a 0500 subdir holding a file inside each matching temp DIR of TMPDIR (rm -rf then fails);
+        // `rmfail2` (glob prefix) -> each matching temp FILE becomes a non-empty dir, the pid is written, then SIGTERM to the tool
+        '  if [ -f "$D/plant" ]; then',
+        '    for f in "$TMPDIR/$(cat "$D/plant")".??????; do [ -d "$f" ] || continue; mkdir "$f/locked"; : > "$f/locked/x"; chmod 500 "$f/locked"; done',
+        '  fi',
+        '  if [ -f "$D/rmfail2" ]; then',
+        '    for f in "$TMPDIR/$(cat "$D/rmfail2")".??????; do [ -f "$f" ] || continue; rm -f -- "$f"; mkdir -- "$f"; : > "$f/keep"; done',
+        '    echo $$ > "$D/pid.tmp"; mv "$D/pid.tmp" "$D/pid"',
+        '    kill -TERM $PPID; exec sleep 5',
+        '  fi',
         '  if [ -f "$D/hold" ]; then',
         '    echo $$ > "$D/pid.tmp"; mv "$D/pid.tmp" "$D/pid"',
         '    exec sleep "$(cat "$D/hold")"',
@@ -422,6 +432,65 @@ for (const sc of [SCEN[1], SCEN[3]]) {
         assert.equal((both.match(/^VERDICT \S+$/gm) || []).length, 1, w);
     });
 }
+// ======================================================= RMFAIL2 (b96, PLAN-GA ASSERTION 2) =======================================================
+// The six chained EXIT traps ran `rm` BEFORE `set +e`: a failing rm ended the trap with rc 1 (a wrong DIFF exit) and the
+// prologue's fail-closed trap never ran. Expected values from the plan: ad (plant in its main temp dir T) and ic (plant in IC_TMP,
+// no --out): rc equals the rc of the same run without the plant (2), signal null, exactly 1 `^VERDICT \S+$`. dd (RUN_TMP replaced
+// by a non-empty dir, then the fake SIGTERMs the tool): rc 2, `deopt-diff: interrupted (SIGTERM)` once, 1 VERDICT. The B95 twin
+// (`git show 65e500c:<root>`, the roots as released in 1.1.0) gives rc 1 for each. The plant survived is the FIRST check (as root
+// the 0500 dir is removable and the row is vacuous: that check names it). The restore of the chmod runs in `finally`.
+const B95_SHA = '65e500c';
+const B95SKIP = skipFor(haveSha(B95_SHA));
+const RMFAIL2 = [
+    { t: 'allocation-diff', pre: 'allocation-diff.', mode: 'plant' },
+    { t: 'ic-diff', pre: 'ic-diff.', mode: 'plant' },
+    { t: 'deopt-diff', pre: 'deopt-diff.', mode: 'rmfail2' },
+];
+function unlockTree(d) {   // restore 0700 on every dir below d so rmSync can clean it (own planted dirs only)
+    if (!existsSync(d)) return;
+    try { chmodSync(d, 0o700); } catch { /* gone */ }
+    for (const e of readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) unlockTree(join(d, e.name));
+}
+async function rmfail2Run(root, sc, plant) {
+    const c = mkCase(sc.t);
+    if (plant) writeFileSync(join(c.dir, sc.mode), sc.t);
+    try {
+        const r = await runSelfSig(root, sc.t, c, c.args(), `${sc.t} rmfail2 ${plant ? 'plant' : 'control'}`);
+        const left = ls(c.tmp);
+        const both = r.stdout + r.stderr;
+        const w = `${msg(r)}\nTMPDIR: ${JSON.stringify(left)}`;
+        const planted = left.filter((n) => n.startsWith(sc.pre));
+        return { r, both, w, left, planted, c, nv: (both.match(/^VERDICT \S+$/gm) || []).length };
+    } finally { unlockTree(c.tmp); }
+}
+function survived(o, sc) {   // the first check of every planted row
+    assert.equal(o.planted.length, 1, `the plant did not survive (vacuous row; running as root makes the 0500 dir removable?) uid=${process.getuid ? process.getuid() : '?'}\n${o.w}`);
+}
+for (const sc of RMFAIL2) {
+    test(`RMFAIL2 ${SHORT[sc.t]}: an rm that fails in the EXIT trap keeps the run's code (rc 2, 1 VERDICT${sc.mode === 'rmfail2' ? ', interrupted once' : ', equals the no-plant rc'})`, { skip }, async () => {
+        const o = await rmfail2Run(LIVE(sc.t), sc, true);
+        survived(o, sc);
+        assert.equal(o.r.signal, null, o.w);
+        assert.equal(o.r.status, 2, o.w);
+        assert.equal(o.nv, 1, o.w);
+        if (sc.mode === 'rmfail2') assert.equal(o.both.split(`${sc.t}: interrupted (SIGTERM)`).length - 1, 1, o.w);
+        else {
+            const base = await rmfail2Run(LIVE(sc.t), sc, false);
+            assert.equal(base.r.status, 2, `no-plant control: want rc 2\n${base.w}`);
+            assert.equal(o.r.status, base.r.status, o.w);
+            assert.deepEqual(base.left, [], `no-plant control must leave TMPDIR empty\n${base.w}`);
+        }
+        // retention: TMPDIR holds exactly the one planted entry (cleaned in finally, then the top is removed by after())
+        assert.equal(o.left.length, 1, o.w);
+    });
+    test(`RMFAIL2 twin ${B95_SHA} ${SHORT[sc.t]}: the same run gives rc 1 (the rm failure ends the old trap, a wrong DIFF exit)`, { skip: skip || B95SKIP }, async () => {
+        const o = await rmfail2Run(oldRoot(sc.t, B95_SHA), sc, true);
+        survived(o, sc);
+        assert.equal(o.r.signal, null, o.w);
+        assert.equal(o.r.status, 1, o.w);
+    });
+}
+
 test(`A2o OLD twin bb: the ${OLD_SHA} bytecode-budget leaves exactly 1 entry in TMPDIR after SIGTERM`, { skip: OLDSKIP }, async () => {
     const t = 'bytecode-budget';
     const c = oldHoldCase(t);
@@ -646,6 +715,63 @@ test(`T twin ${PRE_SHA}: exactly 6 operand-less wait commands (1 in lib/prologue
     });
     assert.deepEqual(per, [1, 1, 1, 1, 1, 1], `per file ${JSON.stringify(T_FILES)}`);
     assert.equal(per.reduce((a, b) => a + b, 0), 6);
+});
+
+// ---- ROW TR (b96, PLAN-GA ASSERTION 1): an EXIT trap runs `set +e` BEFORE its `rm` (a text gate; no spawn) ----
+// A `trap "` line (whole comment lines skipped) that holds an rm command is an OFFENDER when that rm stands before its `set +e`
+// (or there is no `set +e`): a failing rm under set -e ends the trap with rc 1 before `(exit $rc)` restores the run's code.
+// Live (5 roots + lib/*.sh): exactly 8 trap lines with rm, 0 offenders. The `git show 65e500c:<f>` twin has exactly 6 offenders
+// (ad 2, dd 2, ic 2; bb and ibd already had the order right). Synthetic lists pin the matcher (6 offender shapes match, the bb
+// and ibd shapes do not). An unreachable pin FAILs under CI_STRICT.
+const TR_FILES = [...readdirSync(join(PKG, 'lib')).filter((f) => f.endsWith('.sh')).sort().map((f) => `lib/${f}`), ...NAMES.map((t) => `${t}.sh`)];
+function rmTraps(src) {   // -> [{ n, line, bad }] one per `trap "` line holding an rm command
+    const hits = [];
+    src.split('\n').forEach((line, i) => {
+        if (/^\s*#/.test(line) || !/\btrap\s+"/.test(line)) return;
+        const rm = line.search(/(?:^|[;&|{(\s"])rm\s+-/);
+        if (rm < 0) return;
+        const se = line.indexOf('set +e');
+        hits.push({ n: i + 1, line, bad: se < 0 || rm < se });
+    });
+    return hits;
+}
+const TR_BAD = [
+    'trap "st_rc=\\$?; rm -rf \\"\\$ST_D\\"; set +e; (exit \\$st_rc); $old" EXIT',
+    'trap "t_rc=\\$?; if [[ -n \\"\\$T\\" ]]; then rm -rf \\"\\$T\\"; fi; set +e; (exit \\$t_rc); $OLD_TRAP" EXIT',
+    'trap "st_rc=\\$?; [[ -z \\$RUN_TMP ]] || rm -f -- \\"\\$RUN_TMP\\"; set +e; (exit \\$st_rc); $old" EXIT',
+    '  trap "st_rc=\\$?; rm -rf \\"\\$ST_D\\"; set +e; (exit \\$st_rc); $old" EXIT',
+    '  trap "ic_rc=\\$?; if [[ -n \\$IC_TMP ]]; then rm -rf \\"\\$IC_TMP\\"; fi; set +e; (exit \\$ic_rc); $IC_OLD" EXIT',
+    'trap "x=\\$?; rm -f a" EXIT',
+];
+const TR_OK = [
+    'trap "bb_rc=\\$?; set +e; [[ -z \\$BB_TMP ]] || rm -f -- \\"\\$BB_TMP\\"; (exit \\$bb_rc); $old" EXIT',
+    'trap "ibd_rc=\\$?; set +e; [[ -z \\$IBD_TMP ]] || rm -f -- \\"\\$IBD_TMP\\"; (exit \\$ibd_rc); $old" EXIT',
+];
+test('TR synthetic: the 6 offender shapes match (bad), the bb and ibd shapes are rm traps but not bad, a comment line and an rm-less trap give none', () => {
+    assert.deepEqual(TR_BAD.map((l) => rmTraps(l).map((h) => h.bad)), TR_BAD.map(() => [true]));
+    assert.deepEqual(TR_OK.map((l) => rmTraps(l).map((h) => h.bad)), TR_OK.map(() => [false]));
+    assert.equal(rmTraps('# trap "x=\\$?; rm -rf a; set +e" EXIT').length, 0);
+    assert.equal(rmTraps('trap "set +e; echo hi" EXIT').length, 0);
+});
+test('TR live: exactly 8 trap lines with rm over the 5 roots and lib/*.sh, 0 with rm before set +e', () => {
+    const all = TR_FILES.flatMap((f) => rmTraps(rd(join(PKG, f))).map((h) => ({ f, ...h })));
+    assert.equal(all.length, 8, `trap lines with rm: ${JSON.stringify(all.map((h) => `${h.f}:${h.n}`))}`);
+    const bad = all.filter((h) => h.bad).map((h) => `${h.f}:${h.n}: ${h.line}`);
+    assert.equal(bad.length, 0, `rm before set +e:\n${bad.join('\n')}`);
+});
+test(`TR twin ${B95_SHA}: exactly 8 trap lines with rm, exactly 6 offenders (ad 2, dd 2, ic 2; the live gate is red there)`, { skip: B95SKIP }, () => {
+    const lt = spawn('git', ['ls-tree', '--name-only', B95_SHA, 'lib/'], { cwd: PKG }, `git ls-tree ${B95_SHA} lib/`, 30000);
+    assert.equal(lt.status, 0, `git ls-tree ${B95_SHA} lib/ failed (CI_STRICT: an unreachable pin is a failure)`);
+    const twinFiles = [...lt.stdout.split('\n').filter((f) => f.endsWith('.sh')), ...NAMES.map((t) => `${t}.sh`)];
+    const all = twinFiles.flatMap((f) => {
+        const g = spawn('git', ['show', `${B95_SHA}:${f}`], { cwd: PKG }, `git show ${B95_SHA}:${f}`, 30000);
+        assert.equal(g.status, 0, `git show ${B95_SHA}:${f} failed (CI_STRICT: an unreachable pin is a failure)`);
+        return rmTraps(g.stdout).map((h) => ({ f, ...h }));
+    });
+    assert.equal(all.length, 8);
+    const per = {};
+    for (const h of all) if (h.bad) per[h.f] = (per[h.f] || 0) + 1;
+    assert.deepEqual(per, { 'allocation-diff.sh': 2, 'deopt-diff.sh': 2, 'ic-diff.sh': 2 });
 });
 
 // ---- ROW PSUB (b72 CI-HANG; final-review finding lib-opus-c-1, reproduced at aed6684): the trap's reap never waits for a

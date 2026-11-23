@@ -123,7 +123,8 @@
 # symlink, not a regular writable file or hard-linked
 # elsewhere; an input file of this run (a DRIVER, --driver, --before or --after) that is OUT/report.txt or
 # OUT/budget.<tier>.tsv / OUT/<key>.<tier>.diff.txt ("is an input file of this run"), or a symlink / hard link there (key:
-# all and each --fn name, every listed tier; "is a symlink" / "has another hard link"); an fn or tier given twice;
+# all and each --fn name, every listed tier; "is a symlink" / "has another hard link"), or anything there that is not a
+# regular writable file ("cannot write"); an fn or tier given twice;
 # a newline or a CR in --fn, --runs, --tiers, --v8-flags, --node or an option name;
 # a value option given twice; --self-test with any other argument; a --v8-flags of
 # only blanks; --before and --after the same file; an empty value on a value option; --runs of
@@ -955,6 +956,7 @@ OUT_NAMES=""   # the other files written in place in OUT: budget.<tier>.tsv and 
 for x in "${TIER_LIST[@]}"; do OUT_NAMES+=" budget.$x.tsv all.$x.diff.txt"; for t in "${TARGETS[@]}"; do OUT_NAMES+=" $t.$x.diff.txt"; done; done
 for x in $OUT_NAMES; do
   [[ ! -L "$OUT/$x" ]] || die "--out: $OUT/$x is a symlink (refused: the write would follow it)"
+  [[ ! -e "$OUT/$x" || ( -f "$OUT/$x" && -w "$OUT/$x" ) ]] || die "--out: cannot write $OUT/$x"
   [[ ! -f "$OUT/$x" ]] || { RL=$(find "$OUT/$x" -links +1 2>/dev/null) && [[ -z "$RL" ]]; } || die "--out: $OUT/$x has another hard link (refused: the write would change that file too)"
 done
 nl_refuse "--before-ref / --after-ref / --driver / --repo" "$BEFORE_REF" "$AFTER_REF" "$DRIVER" "$REPO"   # ref mode prints the refs in the head; the refusals of lib/modes.sh print --driver and --repo (Q-XF-CR)

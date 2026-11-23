@@ -5,7 +5,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -502,4 +502,54 @@ test('inlining-budget-diff Q-B71-TMPLEAK: the probe-no-rm mutant self-test (mutS
         const left = readdirSync(dir).filter((f) => f.startsWith('inlining-budget-diff.'));
         assert.ok(left.length >= 1, `dir holds ${left.length} inlining-budget-diff.* file(s), want >= 1: the mutant's leak went outside dir`);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- b96 U7 (PLAN-GA TASK 9, ASSERTION 3): the OUT_NAMES refusal. Every top-level name the tool writes into --out must be a
+// regular WRITABLE file or absent; anything else (a FIFO, a directory, a 0444 file) is refused BEFORE the first spawn or write:
+// rc 2, `--out: cannot write <OUT>/<name>` exactly once, 0 fake-node calls, no raw/ dec/ bud/ ms/ stage/ created. Expected
+// values come from the plan, not from a run. A revert fails by a NAMED timeout (the FIFO write blocks; capSync cap 20 s) or by
+// the missing message (dir / 0444 file). Must-pass control: a writable regular file at budget.turbo.tsv is not refused.
+const OUTN_CAP = 20000;
+function outNamesRun(label, setup, tiers) {
+    const dir = mkdtempSync(join(tmpdir(), 'ibd-outn-'));
+    try {
+        const out = join(dir, 'out'), tmp = join(dir, 'tmp'), log = join(dir, 'spawns.log');
+        mkdirSync(out); mkdirSync(tmp);
+        const name = setup(out);
+        const fake = envFakeNode(dir, log);
+        writeFileSync(join(dir, 'a.mjs'), ''); writeFileSync(join(dir, 'b.mjs'), '');
+        const r = capSync('bash', [SCRIPT, '--tiers', tiers, '--no-bytecode', '--fn', 'read.set', '--node', fake, '--out', out, 'a.mjs', 'b.mjs'],
+            { cwd: dir, env: cleanEnv({ TMPDIR: tmp }), encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 1 << 26, group: true }, OUTN_CAP, `inlining-budget-diff.sh OUT_NAMES ${label}`);
+        const both = r.stdout + r.stderr;
+        return { r, both, name, out, msg: `--out: cannot write ${out}/${name}`, calls: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0,
+            made: readdirSync(out).filter((f) => ['raw', 'dec', 'bud', 'ms', 'stage'].includes(f)), tmpLeft: readdirSync(tmp) };
+    } finally {
+        try { chmodSync(join(dir, 'out', 'read.set.maglev.diff.txt'), 0o644); } catch { /* absent */ }
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+const OUTN_ROWS = [
+    ['a FIFO at budget.turbo.tsv', 'turbo', (out) => { const m = capSync('mkfifo', [join(out, 'budget.turbo.tsv')], { encoding: 'utf8' }, 20000, 'mkfifo'); assert.equal(m.status, 0, m.stderr); return 'budget.turbo.tsv'; }],
+    ['a directory at all.turbo.diff.txt', 'turbo', (out) => { mkdirSync(join(out, 'all.turbo.diff.txt')); return 'all.turbo.diff.txt'; }],
+    ['a 0444 file at read.set.maglev.diff.txt', 'turbo,maglev', (out) => {
+        const f = join(out, 'read.set.maglev.diff.txt'); writeFileSync(f, ''); chmodSync(f, 0o444);
+        assert.ok(typeof process.getuid !== 'function' || process.getuid() !== 0, 'running as root: the 0444 plant is writable, the row is vacuous (run as a normal user)');
+        return 'read.set.maglev.diff.txt';
+    }],
+];
+for (const [label, tiers, setup] of OUTN_ROWS) {
+    test(`inlining-budget-diff OUT_NAMES: ${label} is refused (rc 2, "--out: cannot write" once, 0 spawns, no raw/ dec/ bud/ ms/ stage/, TMPDIR clean)`, { skip }, () => {
+        const o = outNamesRun(label, setup, tiers);   // capSync threw already on a timeout (named)
+        assert.equal(o.r.status, 2, o.both);
+        assert.equal(o.both.split(o.msg).length - 1, 1, `want the refusal exactly once:\n${o.both}`);
+        assert.equal(o.calls, 0, 'a refused --out must make no node spawn');
+        assert.deepEqual(o.made, [], 'a refused --out must create no raw/ dec/ bud/ ms/ stage/');
+        assert.deepEqual(o.tmpLeft, [], 'private TMPDIR must be empty after the run');
+    });
+}
+test('inlining-budget-diff OUT_NAMES control: a writable regular file at budget.turbo.tsv is not refused (>= 1 fake call, no "cannot write")', { skip }, () => {
+    const o = outNamesRun('writable file', (out) => { writeFileSync(join(out, 'budget.turbo.tsv'), ''); return 'budget.turbo.tsv'; }, 'turbo');
+    assert.ok(!o.both.includes('--out: cannot write'), o.both);
+    assert.ok(o.calls >= 1, `want >= 1 fake call, got ${o.calls}`);
+    assert.deepEqual(o.tmpLeft, [], 'private TMPDIR must be empty after the run');
 });

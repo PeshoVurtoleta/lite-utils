@@ -601,12 +601,12 @@ self_test() {
   local LS LDS LMC L2 LMM LMMDS LSX LFOO LIMM LMCR H1 T1 H2 T2 U1 S A1T GRAM TK NO fk mk dr b0 b1 TU
   TB0=${TMPDIR:-/tmp}; [[ "$TB0" == /* ]] || TB0="$PWD/$TB0"
   d=$(mktemp -d "$TB0/allocation-diff-st.XXXXXX") && d=$(cd "$d" && pwd) || { echo "FAIL self-test: mktemp -d"; echo; echo "self-test: 1 check(s) FAILED"; return 1; }
-  # the temp dir goes on every exit path: this trap runs the script's own EXIT trap after it (with $? restored; set +e
-  # so restoring a non-zero $? cannot cut the trap short)
+  # the temp dir goes on every exit path: this trap saves $?, turns set -e off FIRST (so neither a failing rm nor restoring
+  # a non-zero $? can cut the trap short), removes the dir, then runs the script's own EXIT trap with $? restored
   ST_D=$d
   eval "set -- $(trap -p EXIT)"; old=${3:-}
   # shellcheck disable=SC2064
-  trap "st_rc=\$?; rm -rf \"\$ST_D\"; set +e; (exit \$st_rc); $old" EXIT
+  trap "st_rc=\$?; set +e; rm -rf \"\$ST_D\"; (exit \$st_rc); $old" EXIT
   check() { if [[ "$2" == "$3" ]]; then oks=$((oks + 1)); echo "ok $1"; else fails=$((fails + 1)); echo "FAIL $1: $2"; echo "  want: $3"; fi; }
   # TEXT -> GC_AWK records (";" per line); a failing GC_AWK adds "!awk exited <rc>" (no row expects it)
   rec() { printf '%s\n' "$1" | { awk "$GC_AWK" || echo "!awk exited $?"; } | tr '\n' ';'; }
@@ -1183,12 +1183,13 @@ nl_refuse "DRIVER (resolved)" "${DESC[@]}"
 # (v8fl_check refuses here, before any disk write or run), then disk writes, then the runs ---
 GOT_VER=$(env -u NODE_OPTIONS "$NODE_BIN" --version 2>/dev/null) || die "cannot run $NODE_BIN --version"
 v8fl_check "$NODE_BIN"
-# the temp dir (gcn.cjs, the guard counts, driver stderr without --out) goes on every exit path: this trap runs the
-# prologue's EXIT trap after it (with $? restored; set +e so restoring a non-zero $? cannot cut the trap short). It is
-# set before mktemp, and T is absolute from the start (a relative TMPDIR is taken from the caller's cwd).
+# the temp dir (gcn.cjs, the guard counts, driver stderr without --out) goes on every exit path: this trap saves $?, turns
+# set -e off FIRST (so neither a failing rm nor restoring a non-zero $? can cut the trap short), removes the dir, then runs
+# the prologue's EXIT trap with $? restored. It is set before mktemp, and T is absolute from the start (a relative TMPDIR
+# is taken from the caller's cwd).
 eval "set -- $(trap -p EXIT)"; OLD_TRAP=${3:-}
 # shellcheck disable=SC2064
-trap "t_rc=\$?; if [[ -n \"\$T\" ]]; then rm -rf \"\$T\"; fi; set +e; (exit \$t_rc); $OLD_TRAP" EXIT
+trap "t_rc=\$?; set +e; if [[ -n \"\$T\" ]]; then rm -rf \"\$T\"; fi; (exit \$t_rc); $OLD_TRAP" EXIT
 TB=${TMPDIR:-/tmp}; [[ "$TB" == /* ]] || TB="$PWD/$TB"
 T=$(mktemp -d "$TB/allocation-diff.XXXXXX") || die "cannot create a temp dir in $TB"
 gcn_cjs >"$T/gcn.cjs" || die "cannot write $T/gcn.cjs"

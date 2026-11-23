@@ -258,7 +258,7 @@ test('A5: --self-test killed by SIGTERM mid-run -> its EXIT trap removes every l
 test('A5 teeth: mutant trap-without-rm -> a SIGTERM mid self-test leaves the logged dir (red)', { skip }, async () => {
     const dir = tmp('dd-stm-');
     try {
-        const r = await selfTestRun(variant(dir, 'trap_no_rm', [['trap "st_rc=\\$?; rm -rf \\"\\$ST_D\\"; set +e;', 'trap "st_rc=\\$?; set +e;']]), { term: true });
+        const r = await selfTestRun(variant(dir, 'trap_no_rm', [['trap "st_rc=\\$?; set +e; rm -rf \\"\\$ST_D\\";', 'trap "st_rc=\\$?; set +e;']]), { term: true });
         assert.doesNotMatch(r.out, /^self-test: /m, 'the self-test finished before the SIGTERM');
         assert.throws(() => assertNoDirs(r), /a logged mktemp path survived/);
     } finally { rmAll(dir); }
@@ -603,14 +603,14 @@ for (const [label, args, line, setup, tname, teeth, flip, rskip] of FX_ROWS) {
 // =====================================================================================================================
 // A4 parity, re-pinned in U1 (Q-IBD-4 (a), MD-54): U1 is the MD-54 ibd hardening unit, so the root moved on purpose and
 // the old 740da13b pin, its bd1f283 history row and the hunk-scoped put-back of every later change are retired. FILLERS
-// B1, U2, G5 (b62), G-XS (b67), G-X6 (b69), G-SIG-1 (b70), NULLCTL (b70, r1 + r2), G-SIG-2 (b71), CI-HANG (b72), F-A and F-B (b73), F-C, F-D, F-E (b74), F-F (b75), F-G (b77) moved the root again. The live
+// B1, U2, G5 (b62), G-XS (b67), G-X6 (b69), G-SIG-1 (b70), NULLCTL (b70, r1 + r2), G-SIG-2 (b71), CI-HANG (b72), F-A and F-B (b73), F-C, F-D, F-E (b74), F-F (b75), F-G (b77), U1 (b96) moved the root again. The live
 // root must equal its .handoff/frozen/fillers-final/ copy byte for byte, sha256/8 pinned. A rung that moves the root bumps
 // the literal and the frozen copy together.
 // =====================================================================================================================
 const sha8 = (buf) => createHash('sha256').update(buf).digest('hex').slice(0, 8);
 const FROZEN = join(ROOT, '.handoff', 'frozen', 'fillers-final');
 // bytecode-budget.sh left the Phase 2 freeze in ext-audit (MD-32 (a)); its regression oracle is test/ext-audit.test.mjs
-const PARITY = [['inlining-budget-diff.sh', '7a5cf99b']];
+const PARITY = [['inlining-budget-diff.sh', 'd7386f35']];
 function assertParity(live, ref, want) {
     assert.equal(sha8(live), want, 'live sha256/8');
     assert.ok(Buffer.compare(live, ref) === 0, 'live differs from the reference copy');
