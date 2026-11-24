@@ -22,7 +22,7 @@ answer in its own trace output, but reading two traces by eye does not scale and
 flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a `VERDICT` line and
 an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
 
-Install (version 1.1.1), three ways:
+Install (version 1.1.2), three ways:
 
 ```bash
 # 1. from the npm registry
@@ -100,7 +100,7 @@ now bails out, or a loop that now allocates enough to trigger young-generation G
 only through trace flags whose output is noisy (addresses, ids, timing) and changes between node versions.
 
 These tools do the unglamorous part: they run the driver under the right flags on one pinned node binary, normalize the
-trace, compare the two builds as an order-free multiset, and repeat the runs so that any run-to-run change is
+trace, compare the two builds as an order-free multiset, and repeat the runs so that any run-to-run change in the answer is
 caught by a null control and reported as `NO-VERDICT` instead of a false `DIFF`. They are plain bash plus POSIX
 awk (alloc-per-op: plain node), with no runtime dependency, so a script can be copied into any repository.
 
@@ -233,11 +233,13 @@ allocation-diff.sh [opts] --zero DRIVER                  # gate mode: ZERO / NON
 allocation-diff.sh --self-test
 ```
 
-- **Exit.** 0 `SAME` / `ZERO`, 1 `DIFF` / `NONZERO`, 2 `NO-VERDICT`. A GC that the V8 stack guard runs at the guard's
+- **Exit.** 0 `SAME` / `ZERO`, 1 `DIFF` / `NONZERO`, 2 `NO-VERDICT` (with `--zero`, a young GC in every run is `NONZERO`
+  even when the counts or kinds differ from run to run; a young GC in some runs only is `NO-VERDICT`). A GC that the V8 stack guard runs at the guard's
   hand-over can read `trace lost 1 GC line in run k (guard count c, trace c-1)`: that is `NO-VERDICT` (exit 2, fail
-  closed), rare (0 natural hits in 800 local runs), window unaffected (LEDGER #138).
+  closed), rare (0 natural hits locally; CI sightings: LEDGER #138), window unaffected.
 - **ZERO** means less than one semi-space (1 MB) of young allocation in the window, not zero bytes. The tool pins a
-  1 MB semi-space for every run.
+  1 MB semi-space for every run. `--zero` prints `NONZERO -- young GC(s) in the window in every run (young per run
+  <y1>,<y2>,..)` when every run has a young GC but the runs' young multisets differ (exit 1).
 - **Driver contract.** The driver marks the window with `fs.writeSync(1, '@@LITE-MARK start\n')` and the matching `end`
   marker, written after warm-up; never use `console.log` or `process.stdout` in the driver, and never make stdout
   non-blocking. A cold window over-reports.
@@ -319,7 +321,7 @@ full text; `alloc-per-op` has its own flags, in its section above and in `alloc-
 | `--node BIN` | node binary (default `$NODE`, else `node`), resolved ONCE to an absolute path; refused before any spawn if it is not an executable file |
 | `--v8-flags STR` | extra V8 flags for every run; a runtime allowlist (V8 flags the node lists in `--v8-options`, minus log / trace / print / prof / perf / dump / snapshot / file flags); node options and the tool's own flags are refused |
 | `--out DIR` | keep the report and the raw per-run outputs in DIR |
-| `--runs N` | runs per side; run 1 vs runs 2..N is the null control |
+| `--runs N` | runs per side; run 1 vs runs 2..N is the null control (with `--zero`: young 0 vs young >= 1 per run) |
 | `--self-test` | canned checks (a fake node or canned text) |
 | `-h`, `--help` | print the header text and exit 2 |
 
@@ -438,7 +440,10 @@ holds only for the build it was measured on.
 - **Multiset compare.** Traces are compared as order-free multisets with duplicates kept: inlined at 2 sites then 1
   site is a `DIFF`; `6,19` equals `19,6`.
 - **Null control.** Run 1 of each side is compared with runs 2..N of the same side. Any difference is `NO-VERDICT`,
-  never `DIFF`: a comparison that does not reproduce itself says nothing.
+  never `DIFF`: a comparison that does not reproduce itself says nothing. The law is applied per question: in `--zero`
+  the question is young 0 vs young >= 1, so only a run with young 0 against a run with young >= 1 is `NO-VERDICT`
+  (`null control: run k differs from run 1 (--zero: run 1 young a | run k young b)`); young in every run with differing
+  counts or kinds is `NONZERO`.
 - **Counts, not bytes.** `allocation-diff` counts young-GC events; it cannot tell you how many bytes a window
   allocated. `alloc-per-op` is the bytes tool, for on-heap bytes per op of a synchronous lane.
 - **The frozen "before".** Ref and file modes refuse a `--before` that is the live, tracked file: comparing a build with
@@ -452,9 +457,9 @@ holds only for the build it was measured on.
 
 ## Testing
 
-`npm test` runs 4312 tests (node:test), 4297 pass / 0 fail / 15 skip in one local run (2026-11-23, node v26.8.2,
-macOS arm64, /bin/bash 3.2.57, 1765 s, host PRELIMINARY at start (load1 3.76 vs baseline 2.21, another node at 91.3%
-CPU); the 1.1.1 release gate, tree 5173e8e + the version bump; a measurement, not a guarantee).
+`npm test` runs 4344 tests (node:test), 4329 pass / 0 fail / 15 skip in one local run (2026-11-24, node v26.8.2,
+macOS arm64, /bin/bash 3.2.57, 1687 s, host QUIET at start (load1 1.38 vs baseline 2.21); the 1.1.2 release gate,
+tree 52f3f2b + the 1.1.2 docs + the version bump; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 

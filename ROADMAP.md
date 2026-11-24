@@ -7,9 +7,12 @@
 Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 shape was adopted 2026-11-04 as D-4).
 1.0.0 RELEASED 2026-11-12: commit 0894b0b, tag v1.0.0, npm `@zakkster/lite-utils` 1.0.0 (D-3).
 1.1.0 RELEASED 2026-11-22: commit 65e500c, tag v1.1.0, npm `@zakkster/lite-utils` 1.1.0 (alloc-per-op, minor 1).
-1.1.1 PREPARED 2026-11-23 (b99; the maintenance patch, post-1.0 minors item 2): the maintainer commits, tags v1.1.1
-and publishes. Next: the 1.1.2 patch (the allocation-diff --zero null control, Q-ADZ-NC (a); the guard fix F-H1
-once there is evidence), then the post-1.0 minors (section 3, "Post-1.0 minors"; D-5).
+1.1.1 RELEASED 2026-11-23: commit 6643647, tag v1.1.1, npm `@zakkster/lite-utils` 1.1.1 (the maintenance patch, post-1.0
+minors item 2).
+1.1.2 PREPARED 2026-11-24 (b102; the 1.1.2 patch: G-A the allocation-diff --zero null control, Q-ADZ-NC (a);
+G-B alloc-per-op test rows; G-C the deopt-diff T11 SIGPIPE fix): the maintainer commits, tags v1.1.2 and publishes.
+Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5) starting with 1.2.0 shape-diff (Q-M-ORDER2 (a)), then
+1.3.0 code-size-diff. The guard fix F-H1 stays after 1.1.2 (the H3d mechanism is UNVERIFIED).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -28,7 +31,9 @@ Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 1. BEFORE vs AFTER on ONE node binary (driver mode, git-ref mode, frozen-file mode).
 2. Normalize the trace (addresses, node ids, frequencies, timings), then compare as a MULTISET
    (`sort | uniq -c`, never `sort -u`): one site -> two sites is a DIFF.
-3. Null control: runs 2..N of each side must match run 1, else NO-VERDICT.
+3. Null control: runs 2..N of each side must match run 1, else NO-VERDICT. Applied per question: in allocation-diff
+   `--zero` it compares young 0 vs young >= 1 per run (1.1.2, Q-ADZ-NC (a)); young in every run with differing
+   counts or kinds is NONZERO, exit 1.
 4. Guard: a run with no evidence about the named function is NO-VERDICT, never "identical".
 5. Fail closed: exit 0 SAME, 1 DIFF, 2 NO-VERDICT; any unplanned failure (rc 0 included) is 2, never 1.
 6. A `--self-test` on canned trace text through the SAME awk programs, plus a node:test wrapper whose
@@ -150,7 +155,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   `@@LITE-MARK start` / `@@LITE-MARK end` on stdout around the steady-state window (same stream as the GC
   trace, so order holds). Count Scavenge / Mark-Compact lines inside the window.
 - Verdict: BEFORE count vs AFTER count (SAME / DIFF), and a gate mode `--zero` (any young-gen collection
-  in the window -> 1). Missing markers -> NO-VERDICT.
+  in the window in every run -> 1; young in some runs only -> NO-VERDICT, 1.1.2). Missing markers -> NO-VERDICT.
 - Docs state S-7 plainly: counts, not bytes; a cold window over-reports.
 - Controls: an allocating loop (must be > 0) and a zero-alloc loop (must be 0) at fixed N.
 
@@ -222,7 +227,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      (RULINGS-cli-audit.md).
   2. 1.1.1 maintenance patch: after 1.1.0, before 1.2.0 (Q-M-PATCH (a); versioned 1.1.1 by Q-PATCH-NAME (a),
      maintainer 2026-11-22). No new surface.
-     STATUS: PREPARED 2026-11-23 (b99; status line 10): fixes 727e315 / ccd531f, tests 9acc7d4 / feb9210, docs 5173e8e.
+     STATUS: RELEASED 2026-11-23 (commit 6643647, tag v1.1.1, npm 1.1.1): fixes 727e315 / ccd531f, tests 9acc7d4 /
+     feb9210, docs 5173e8e.
+     Order from slot 3 superseded by Q-M-ORDER2 (a) (maintainer 2026-11-23): 1.2.0 shape-diff (L2) -> 1.3.0 code-size-diff
+     (L4) -> 1.4.0 import-audit (L1) -> 1.5.0 suite-run (L6) -> heap-count-diff (L5, kept); items 3-7 below are the
+     2026-11-12 order.
   3. 1.2.0 import-audit (L1 below).
   4. 1.3.0 code-size-diff (L4 below).
   5. 1.4.0 suite-run (L6 below).

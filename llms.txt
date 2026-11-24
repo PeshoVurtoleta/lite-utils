@@ -11,7 +11,7 @@ This is not a JS library: no JS API is supported (alloc-per-op.mjs's exports ser
 
 ## Status
 
-Version 1.1.1 (2026-11-23), on npm as @zakkster/lite-utils (1.0.0, 2026-11-12, was the first release).
+Version 1.1.2 (2026-11-24), on npm as @zakkster/lite-utils (1.0.0, 2026-11-12, was the first release).
 
 Install (instructions; pick one):
 
@@ -47,7 +47,7 @@ Shared options (each tool's own `-h` is the authority for its subset):
 `--node BIN` (default `$NODE`, else `node`; resolved once to an absolute
 path), `--v8-flags STR` (runtime allowlist of V8 flags; log / trace / print /
 prof flags and node options are refused), `--out DIR` (keep the report and raw
-runs), `--runs N` (runs per side; run 1 vs the later runs is the null control),
+runs), `--runs N` (runs per side; run 1 vs the later runs is the null control; with --zero: young 0 vs young >= 1 per run),
 `--self-test`, `-h`. The five bash tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
 NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS from every spawn (alloc-per-op's one --expose-gc respawn inherits the
 environment).
@@ -144,11 +144,13 @@ change? Counts of GC events, never bytes.
     allocation-diff.sh --self-test
 
 - Diff mode only plus `--zero`; no ref mode and no file mode.
-- Exit 0 SAME or ZERO, 1 DIFF or NONZERO, 2 NO-VERDICT.
+- Exit 0 SAME or ZERO, 1 DIFF or NONZERO, 2 NO-VERDICT. With --zero a young GC in every run is NONZERO even when
+  the counts differ from run to run (`NONZERO -- young GC(s) in the window in every run (young per run <y1>,<y2>,..)`);
+  a young GC in some runs only is NO-VERDICT (`null control: run k differs from run 1 (--zero: run 1 young a | run k young b)`).
 - A GC that the V8 stack guard runs at the guard's hand-over can read
   `trace lost 1 GC line in run k (guard count c, trace c-1)`: NO-VERDICT
-  (exit 2, fail closed), rare (0 natural hits in 800 local runs),
-  window unaffected (LEDGER #138).
+  (exit 2, fail closed), rare (0 natural hits locally; CI sightings: LEDGER #138),
+  window unaffected.
 - ZERO means less than one semi-space of young allocation in the
   window, not zero bytes. An allocation TurboFan scalar-replaces is not an
   allocation: ZERO is then the correct reading.

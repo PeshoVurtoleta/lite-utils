@@ -5,6 +5,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-24
+
+Patch release: one behaviour change, one fix and tests, no new surface. Touches allocation-diff (the `--zero` null
+control; user-visible exit change, Changed) and deopt-diff (Fixed); alloc-per-op changes in tests only;
+bytecode-budget, ic-diff and inlining-budget-diff are unchanged. Zero runtime dependencies; node >= 22, bash >= 3.2.
+npm test (the b102 release gate): 4344 tests, 4329 pass, 0 fail, 15 skip (2026-11-24, node v26.8.2, /bin/bash 3.2.57,
+macOS arm64, host QUIET: load1 1.38 at start vs baseline 2.21, no other node >= 10% CPU at the end; 1687 s; private
+copy with .git, quiet-lock; one run; tree 52f3f2b + the 1.1.2 docs and release-step files (sha-pinned in the run
+log), before this count line and the README Testing line were edited). The same tree before the release step:
+4344 / 4329 / 0 / 15 (1670 s, host QUIET at start).
+
+### Changed
+
+- allocation-diff `--zero`: the null control is applied per question. The question is "young 0 or young >= 1", so
+  `judge()` now compares, per run k, young 0 vs young >= 1 against run 1 (it no longer requires every run's young
+  multiset to equal run 1's). Young in every run with differing counts or kinds (for example 311, 312, 312) is now
+  `NONZERO`, exit 1 (it was `NO-VERDICT`, exit 2), with the new line `NONZERO -- young GC(s) in the window in every run
+  (young per run <y1>,<y2>,..)`; runs whose multisets are all equal keep the old `NONZERO -- <n> young GC(s) in the
+  window (every run equal to run 1)`. A run with young 0 against a run 1 with young >= 1 (or the reverse) is still
+  `NO-VERDICT`, exit 2, with the new reason `null control: run <k> differs from run 1 (--zero: run 1 young <a> | run
+  <k> young <b>)` (the first such run is named; every earlier check, an O record included, still outranks it). Diff
+  mode is unchanged. `-h` and the self-test follow: the allocation-diff self-test is 85 checks (was 83; rows 84 and
+  85). User-visible: a `--zero` gate that read exit 2 on a young-in-every-run driver whose counts moved now reads exit
+  1 (Q-ADZ-NC (a); 1.1.2 G-A).
+
+### Fixed
+
+- deopt-diff: the two `<(printf ...)` producers that feed TIER_AWK in the tier report now drop their stderr
+  (`2>/dev/null`), so a producer that gets EPIPE no longer prints `printf: write error: Broken pipe` when awk exits
+  without reading its input (SIGPIPE ignored by the caller, a large trace). The `--self-test` row T11 gains a leg 2
+  that runs under SIGPIPE ignored with 16384 padding lines per trace. This is consistent with the T11 flake seen in CI
+  (the tag-push run of 6643647), not proven: the confirming run (P2) was not made; the measured fact is that the OLD
+  root printed the write error 10/10 with SIGPIPE ignored and 256 KiB of padding, 0/10 at the default disposition
+  (b101, macOS, local; REPORTED). Only the "$4" producer redirect is gated by a test (mutant TW8); the "$rec" redirect has no gate of its own, and
+  tier_fn's `printf | awk "$DEOPT_AWK"` producer (:556 at 6643647) is left unchanged (Q-B100-T11-556 (a)): it has the
+  same EPIPE exposure, and no gate can fail on the old code there (RISK).
+
+### Tests
+
+- alloc-per-op: fixa A3 + 4 live rows (fixa A1(c), `--lane -x`, cli A3 x2) accept a sole selfCheck VOID NO VERDICT
+  (Q-B99-FIXA3 (a)); a sole lane VOID stays red, and the strict rows are listed in LEDGER #139. The cli TASK 3
+  re-spawn row stays strict: its child exits at preload, so no VOID can reach it (Q-B101-T3RESPAWN (a)).
+- allocation-diff: test C = 85, ROW 84 / 85, 8 new mutants (M-znc-ms, M-znc-off, M-znc-run2, M-znc-last, M-zline-old,
+  M-zline-new, M-order, M-jeq-noreset), a precedence e2e row with M-orderO, and a parity row against
+  `git show 6643647:allocation-diff.sh`. The live L2 row and audit-g3 A2 print one `D-F64 baseline (<node>
+  <plat>/<arch>): run k a/b/c/d count C; ...` diagnostic line per invocation, with a segment per run k (a/b/c/d = GC lines before the start mark, in the
+  window, end..gcn, after gcn; C is printed only where judge checked the guard count, else `?`); audit-g3 pins the
+  self-test at 85; audit-g0 G-T4 real gains the Q-B97-L2ROW acceptance with a canned pin (Q-B100-BASEDIAG (a)).
+  nonpath-cr-refuse A3 pins the live allocation-diff self-test at 85 (861f3d3 side 83).
+- deopt-diff: self-test T11 leg 2; an e2e row (SIGPIPE ignored, 256 KiB after the trace), its revert twin (the
+  producers' `2>/dev/null` put back: the row fails with a producer write error) and a control (the same twin at the
+  default SIGPIPE disposition passes); tier mutant TW8 (the same revert) turns T11 red. Write-error lines with the
+  revert, measured in b101 review (REPORTED, not asserted): self-test 2 (one per side), e2e twin 1.
+
 ## [1.1.1] - 2026-11-23
 
 Patch release: fixes and tests, no new surface. Touches allocation-diff, deopt-diff, ic-diff, inlining-budget-diff

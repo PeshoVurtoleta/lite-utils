@@ -756,6 +756,17 @@ inputs (all still refused). bb already had the right order (pinned by 2 bb-clean
 768c388 twins, 2 bb pins, 3 move-back mutants). Evidence: the three commit messages, `.handoff/RULINGS-b73.md`,
 `.handoff/RULINGS-final-review.md`, `.handoff/evidence/b73-npm/`, `.handoff/evidence/b74-npm/` (local, untracked).
 
+**#140 allocation-diff b101 GA-B2: a diagnostic that printed counts judge never checked (fail-open; review catch).**
+The first BASEDIAG form of the L2 / audit-g3 A2 line printed counts that judge never checked; a reader would take them
+as a measured baseline. Review r1 REJECTED
+LITERAL (fail-open: a number on the page that no check backs); fix in 7 steps -> r2 APPROVED. Final form (Q-B100-BASEDIAG
+(a)): `D-F64 baseline (<node> <plat>/<arch>): run k a/b/c/d count C`, a/b/c/d = GC lines before the start mark / in the
+window / end..gcn / after gcn; C is printed only where judge checked it (the runs before the guard NO-VERDICT's own run,
+or every run of a ZERO / NONZERO verdict: count == a+b+c; the guard NO-VERDICT's own run prints its guard count, or
+`none`); `?` elsewhere; a missing raw file or mark prints no number. Rule: a diagnostic that prints a number must be
+able to say which check backed it; else print `?`. Tier: DETERMINISTIC (canned pins, no spawn). Evidence (local,
+untracked): `.handoff/b101/GA-T-review/`, `GA-T-review-r2/`.
+
 ---
 
 ## C. CI / platform lessons
@@ -1348,6 +1359,23 @@ integer >= 0, never null (review r1, LITERAL). Re-open if the knob misses on a C
 exceeds 2 x 524288 / N. Tier DETERMINISTIC (the pins and the spawn row, all in npm test); the CI readings are
 REPORTED. Evidence (local, untracked): `.handoff/b96/U8/`, `.handoff/b97/handbacks.md`.
 
+**#139 alloc-per-op: a DETERMINISTIC row resting on a live measurement (TRAP) (b99 / b100 / b101).** (a) TRAP (law 6):
+a row that sits in `npm test` as DETERMINISTIC but whose pass needs a clean live reading goes red when the host gives a
+selfCheck VOID (NO VERDICT, exit 2) -- a host fact, not a defect. Q-B99-FIXA3 (a) ruled the fixa A3 predicate: accept
+a sole selfCheck VOID. (b) Fix (Q-B100-GBSWEEP (a), Q-B100-GBLANE (a); b101 GB-B1): the same predicate on the 4 live
+rows whose mutant survives the VOID branch (fixa A1(c), `--lane -x`, cli A3 x2); a sole lane VOID stays red. Pinned by
+a pin row per file (PASS and FAIL vectors; must-fail M-PRED). Under FORCE-V (a tool copy whose selfCheck row is forced
+to VOID) the measured count of accepted-row VOID diagnostics is 5 (fixa A3 + the 4 rows), not the plan's 6: the plan
+counted the cli TASK 3 re-spawn row, which is NOT live (Q-B101-T3RESPAWN (a): its child exits at preload, so no VOID
+can reach it; reverted to strict). (c) Residual strict rows (still red on a selfCheck VOID or resting on a measured
+point; a later patch may widen them): fixa A1(e), A1(a) / (b) / (d); cli A6 x3, A9 x2, A5, A7 x3, A8 x4 + the SIGKILL
+lane, N4, B2 R2, the C-14 fence, C-23; fixb A-B7, boxSize, :302, :315, :333; LB 1-4 (LB 3 / 4 would be vacuous on a
+VOID line: floor null, rows []). The cli b87 miss row's `/^positive: /` check (:530) also matches a natural positive
+VOID: if the knob silently stopped working, that row could still pass on a VOID host (noted, out of scope). Rule: a
+row's tier is its weakest input; list every row that needs a clean live reading, and say why each stays strict.
+Tier: DETERMINISTIC (the pins and predicates in npm test). Evidence (local, untracked): `.handoff/b100/PLAN-GB.md`,
+`.handoff/b101/GB-B1-review*/`, HISTORY b101.
+
 ---
 
 ## E. Process lessons
@@ -1408,6 +1436,27 @@ deopt-diff too, not only bytecode-budget; it is ruled to G1, G2 and G5, not G0. 
 exit 2: accepted, the last line matches the exit status. Evidence: `.handoff/RULINGS-b58-g0.md`,
 `.handoff/RULINGS-b57-audit.md`, `.handoff/PLAN-b58-g0.md`, `.handoff/evidence/REVIEW-b58-g0-r1.md` (local,
 untracked).
+
+**#141 b101: FACTS listed a non-live row as live (the cli TASK 3 re-spawn).** The b100 FACTS table for the G-B sweep
+counted the cli TASK 3 re-spawn row among the rows that run a live measurement; its child exits at preload, so no
+selfCheck VOID can reach it, and the coder's FORCE-V run showed 5 VOID diagnostics, not 6. Ruled Q-B101-T3RESPAWN (a):
+revert it to strict. Rule: a FACTS "live" label is a claim to run, not read: the brief for a predicate widening names
+the probe that proves each row reaches the branch (FORCE-V here), and the plan's count is checked against the probe's.
+Evidence (local, untracked): HISTORY b101, `.handoff/b101/GB-B1-review/`.
+
+**#142 b101: two coder / reviewer runs started while quiet-lock was held by another package.** The GB-B1 r1 reviewer ran
+one ~15 s cli test file while LiteABGate held the lock, and the GC-B1 coder ran ~40 s of bash-5 self-test spawns while
+bench-audit held it. Both runs were untimed and no timing was claimed from them; the cost fell on the holders, whose
+timing windows may be perturbed (recorded in the b101 shared notes). Rule (the suite quiet-host rule exempts only tests
+that spawn no processes): a brief that runs spawning tests checks `quiet-lock.mjs status` first and starts only when
+the lock is free. Evidence (local, untracked): HISTORY b101.
+
+**#143 b101: a count sweep must also grep the bare number near the tool's key.** The GA self-test bump 83 -> 85 was swept
+by grepping the rendered text `83 check`; it missed the table literal `{ [AD]: 83 }` in test/nonpath-cr-refuse.test.mjs
+A3 (the live allocation-diff self-test pin), which only the closing npm test caught (runs 2 and 3: 1 fail; fixed: live 85,
+the 861f3d3 side stays 83 via OLD_COUNT; review APPROVED r1; file re-run 395 / 395 on both states). Rule: a sweep for a
+changed count greps the rendered phrase AND the bare number beside the tool's key (`[AD]: 83`, `ad.*83`), in tests as
+well as docs. Evidence (local, untracked): HISTORY b101, `.handoff/b101/A3PIN-review/`.
 
 ---
 
@@ -1908,3 +1957,12 @@ NO-VERDICT on the L2 control and audit-g3 A2, with a dump on any guard NO-VERDIC
 and env-strip alloc stay strict), Q-B98-A2PIN (a). Law: a guard cross-check has its own race windows: every hand-over
 between two counters is a window a GC can land in. What would close it: the ubuntu baseline plus the next CI sighting's
 dump (H1 / H2 / H3). Evidence (local, untracked): `.handoff/FINDING-b97-L2TRACE.md`, `.handoff/b97/L2/probes/`.
+
+(f) Addendum (b102, 1.1.2 G-A): the one CI dump (run 45133611956, ubuntu-latest, node v26.13.1) names neither H1 nor H2:
+GC lines 6 / 0 / 6 / 1 (before start / start..end / end..gcn / after gcn), guard count 13, trace 12, and the line after
+gcn is BYTE-IDENTICAL to the last line before gcn (an allocation-failure Scavenge): a lost 7th fence line plus a
+duplicated line, "H3d". UNVERIFIED (the ubuntu baseline was not captured); F-H1 stays after 1.1.2. 1.1.2 prints the
+baseline on every run: the live L2 row and audit-g3 A2 emit one `D-F64 baseline (<node> <plat>/<arch>): run k a/b/c/d
+count C` diagnostic (Q-B100-BASEDIAG (a); C only where judge checked it, else `?`; #140), so the next CI legs record
+it; the first ubuntu / node 26.13 sighting is the CI run of the 1.1.2 commits. Evidence (local,
+untracked): `.handoff/FINDING-b97-L2TRACE.md` section 8, `.handoff/b100/FACTS.md`.
