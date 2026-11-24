@@ -229,6 +229,10 @@ const OKL = '  if [[ $ok == 1 ]]; then say "$out"; else say "tier    $1  $2  unr
 const L0 = 'tier_fn "$fn" before "${RCB[0]}" "${TXB[0]}"; tier_fn "$fn" after "${RCA[0]}" "${TXA[0]}"';
 const HDR = 'say "tier    REPORTED: run 1 of each side, never part of the verdict"';
 const FORFN = 'for fn in "${TARGETS[@]}"; do';
+// b100 G-C Branch S (PLAN-GC TASK 1): tier_fn's two TIER_AWK producers with their stderr dropped (NEW) and the 6643647
+// HEAD form (OLD); TW8 and the b100 T11-PIPE e2e rows below put OLD back
+const NEW_557 = `<(printf '%s\\n' "$rec" 2>/dev/null) <(printf '%s\\n' "$4" 2>/dev/null)`;
+const OLD_557 = `<(printf '%s\\n' "$rec") <(printf '%s\\n' "$4")`;
 const TIER_MUTANTS = [
     ['G1-every-D-a-cycle', [['    if (EV[i] == "deopt") p++; else { c += p; p = 0 }', '    if (EV[i] == "deopt") c++; else p = 0']], [TR(1)]],
     ['G2-pairing-across-a-bracket-line', [['  if (substr($0, 1, 1) == "[") {\n    PD = 0\n', '  if (substr($0, 1, 1) == "[") {\n']], [TR(3)]],
@@ -248,6 +252,9 @@ const TIER_MUTANTS = [
     ['TW5-after-before-swapped', [[L0, 'tier_fn "$fn" after "${RCA[0]}" "${TXA[0]}"; tier_fn "$fn" before "${RCB[0]}" "${TXB[0]}"']], [TR(9)]],
     ['TW6-awk-rc-not-tested', [['if [[ $rc == 0 && -n "$out" ]]; then', 'if [[ -n "$out" ]]; then']], [TR(11)]],
     ['TW7-first-line-test-only', [['[[ "$rest" == *$\'\\n\'* ]] || break;', 'break;']], [TR(12)]],
+    // TW8 (b100 PLAN-GC TASK 4): the producers' 2>/dev/null reverted -> T11 leg 2 (SIGPIPE ignored, 16384 pad lines)
+    // counts the producers' `write error` lines (GC-B1 review: `|2|11|differs`)
+    ['TW8-producer-stderr-back', [[NEW_557, OLD_557]], [TR(11)]],
 ];
 // The B-four dd refusal mutant table (.handoff/PLAN-ext-audit-gB-four-dd.md TASK 5, ASSERTION A2): each of M36, M37, M40,
 // M42, M44 turns the self-test red on EXACTLY its one check (85-89), never another; the edit sites are those of the
@@ -307,7 +314,7 @@ function assertKilled(name, r, rows, exact = false) {
 
 assert.equal(MUTANTS.length, 36, 'the mutant table holds the 29 + 7 rows of the plan');
 assert.equal(OUT_MUTANTS.length, 5, 'the B-four dd mutant table holds M36, M37, M40, M42, M44 (TASK 5)');
-assert.equal(TIER_MUTANTS.length, 16, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4))');
+assert.equal(TIER_MUTANTS.length, 17, 'the tier mutant table holds G1-G6, V1-V3, TW1-TW7 (P3G3 TASK 6 + A9 (4)), TW8 (b100 PLAN-GC TASK 4)');
 assert.equal(V8FL_MUTANTS.length, 2, 'the MD-46 G2 mutant table holds M-v8fl-off and M-v8fl-late (PLAN-md46 G2 TASK 4)');
 assert.equal(GENV_MUTANTS.length, 2, 'the G-ENV mutant table holds M-env-off and M-d5-off (PLAN-b42-genv TASK 4)');
 // The mutant self-tests are independent, so they run in parallel (6 at a time) from module load; each test awaits its own.
@@ -747,7 +754,9 @@ const REASON = (why) => `  add: NO-VERDICT -- after: unparseable trace line nami
 
 // run SCRIPTPATH: before = the mono trace (E only), after = AFTER (raw bytes); -> { status, lines, spawns, out }
 const E2E_CAP = 60000;   // the per-run cap of an e2e run (capSync: a timed-out run throws "e2e run timed out after ...")
-function e2e(script, after) {
+// ign (b100 T11-PIPE, e2eIgn below): null = the plain run; { trap } = the TIER_AWK shim first on PATH, and with trap true
+// the run goes through `bash -c 'trap "" PIPE; exec bash "$@"'` (SIGPIPE ignored)
+function e2e(script, after, ign = null) {
     const dir = mkdtempSync(join(tmpdir(), 'dd-e2e-'));
     try {
         const fk = join(dir, 'fk');
@@ -763,8 +772,20 @@ function e2e(script, after) {
             writeFileSync(join(dir, n, 'trace.txt'), text);
         }
         writeFileSync(join(fk, 'log'), '');
-        const r = capSync('bash', [script, '--node', join(fk, 'node'), '--fn', 'add', join(dir, 'before', 'driver.js'), join(dir, 'after', 'driver.js')],
-            { encoding: 'utf8', env: ENV, cwd: dir }, E2E_CAP, 'e2e run');
+        let args = [script, '--node', join(fk, 'node'), '--fn', 'add', join(dir, 'before', 'driver.js'), join(dir, 'after', 'driver.js')];
+        let env = ENV;
+        if (ign) {
+            // the self-test's T11 shim (mktaw tap): on `-v side=*` as args 3-4 (TIER_AWK only) print a tier line, exit 5,
+            // never read its inputs; every other awk execs the host awk (NUL.awk: the absolute path probeAwk found)
+            const ta = join(dir, 'tap');
+            mkdirSync(ta);
+            writeFileSync(join(ta, 'awk'), [`#!${process.env.BASH || '/bin/bash'}`,
+                'case "${3:-} ${4:-}" in "-v side="*) echo "tier    add  x  PARTIAL"; exit 5 ;; esac', `exec ${NUL.awk} "$@"`, ''].join('\n'));
+            chmodSync(join(ta, 'awk'), 0o755);
+            env = { ...ENV, PATH: ta + ':' + ENV.PATH };
+            if (ign.trap) args = ['-c', 'trap "" PIPE; exec bash "$@"', 'bash', ...args];
+        }
+        const r = capSync('bash', args, { encoding: 'utf8', env, cwd: dir }, E2E_CAP, 'e2e run');
         const out = r.stdout + r.stderr;
         // timedOut / cap / signal / stdout / stderr / what: the shape noTimeout reads (a revert row checks it outside its throws)
         return { status: r.status, out, lines: out.split('\n'), spawns: readFileSync(join(fk, 'log'), 'utf8').split('\n').filter(Boolean).length,
@@ -886,6 +907,50 @@ test('deopt-diff e2e G-DDAWK A4: revert (judge() with the early exit back fails 
             const r = e2e(variant(dir, 'A4-exit-back', [[X_NEW, X_OLD]]), A4_AFTER);
             noTimeout(r);
             assert.throws(() => assertA4(r), assert.AssertionError);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+// b100 T11-PIPE (PLAN-GC Branch S TASK 4, ASSERTION A2; rulings Q-B100-T11 (a), Q-B100-T11-556 (a)): tier_fn's two
+// <(printf ...) producers feed a TIER_AWK that may exit before it reads them. With SIGPIPE ignored (as the CI runner is
+// inferred to do) a producer still writing gets EPIPE and bash's printf prints `printf: write error: Broken pipe`
+// into the tool's stderr. The after trace carries 16384 `@@LITE-MARK pad` lines (256 KiB > the 64 KiB pipe buffer),
+// so the "$4" producer blocks on a full pipe and the text is deterministic (P1: 10/10 with SIGPIPE ignored, 0/10 at
+// default; .handoff/evidence/b100-t11/P1-summary.txt). ORACLE: the plan's row text, never the script's output.
+// Before = E9, after = E9 + pad: no deopt either side, so the verdict is SAME (exit 0); the shim's exit 5 is REPORTED
+// only (one unreadable tier line per side), never part of the verdict.
+const IGN_AFTER = E9 + '\n' + '@@LITE-MARK pad\n'.repeat(16384);
+const IGN_UNR = ['before', 'after'].map((s) => `tier    add  ${s}  unreadable (awk exited 5)`);
+const e2eIgn = (script, after, trap = true) => e2e(script, after, { trap });
+function assertIgn(r) {
+    assert.equal(r.status, 0, r.out.slice(0, 3000));
+    assert.deepEqual(r.lines.filter((l) => l.startsWith('VERDICT ')), ['VERDICT SAME'], r.out.slice(0, 3000));
+    assert.equal(r.spawns, 8, r.out.slice(0, 3000));
+    assert.equal(r.lines.filter((l) => l.includes('unreadable (awk exited 5)')).length, 2, r.out.slice(0, 3000));
+    for (const l of IGN_UNR) assert.ok(r.lines.includes(l), `missing "${l}"\n${r.out.slice(0, 3000)}`);
+    assert.doesNotMatch(r.out, /PARTIAL/);
+    assert.doesNotMatch(r.stderr, /write error|Broken pipe/);
+    assert.doesNotMatch(r.out, /write error|Broken pipe/);
+}
+test('deopt-diff e2e b100 T11-PIPE: SIGPIPE ignored, TIER_AWK exits 5 unread, 256 KiB after trace -> exit 0, VERDICT SAME, 2 unreadable lines, no write error',
+    { skip }, () => { assertIgn(e2eIgn(SCRIPT, IGN_AFTER)); });
+test('deopt-diff e2e b100 T11-PIPE: twin (the producers\' 2>/dev/null reverted) fails the row with a producer write error',
+    { skip }, (t) => {
+        const dir = mkdtempSync(join(tmpdir(), 'dd-eig-'));
+        try {
+            const r = e2eIgn(variant(dir, 'T11-producer-stderr-back', [[NEW_557, OLD_557]]), IGN_AFTER);
+            noTimeout(r);
+            assert.throws(() => assertIgn(r), assert.AssertionError);
+            assert.match(r.stderr, /write error/, r.out.slice(0, 3000));   // the trigger fires (A2: >= 1 match)
+            t.diagnostic(`twin: exit ${r.status}, ${(r.stderr.match(/write error/g) || []).length} write error line(s) in stderr`);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+test('deopt-diff e2e b100 T11-PIPE: control -- the same twin with SIGPIPE at default passes the row (the trap wrapper is load-bearing)',
+    { skip }, () => {
+        const dir = mkdtempSync(join(tmpdir(), 'dd-eig-'));
+        try {
+            const r = e2eIgn(variant(dir, 'T11-producer-stderr-back', [[NEW_557, OLD_557]]), IGN_AFTER, false);
+            noTimeout(r);
+            assertIgn(r);
         } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 

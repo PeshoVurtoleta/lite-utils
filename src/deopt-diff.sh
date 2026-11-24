@@ -550,11 +550,12 @@ diff_fn() {
 # tier_fn FN SIDE RC TEXT: the REPORTED tier lines of FN on one side, from run 1 (RC = its RUN_RC, TEXT = its kept
 # lines). Cold path, after every verdict line: never sets VERDICT / FV / JV and never moves the exit code. A run 1
 # that did not exit 0 prints "not reported"; a failing awk prints one "unreadable (awk exited <rc>)" line (MD-20).
+# awk's own exit is what gets reported; the producer's EPIPE text is noise (2>/dev/null on each <(printf ...) producer).
 tier_fn() {
   local rec out= rest l ok=0 rc=0
   if [[ "$3" != 0 ]]; then say "tier    $1  $2  not reported (run 1: $3)"; return 0; fi
   rec=$(printf '%s\n' "$4" | awk -v fn="$1" "$DEOPT_AWK") || rc=$?
-  if [[ $rc == 0 ]]; then out=$(awk -v fn="$1" -v side="$2" "$TIER_AWK" <(printf '%s\n' "$rec") <(printf '%s\n' "$4") \
+  if [[ $rc == 0 ]]; then out=$(awk -v fn="$1" -v side="$2" "$TIER_AWK" <(printf '%s\n' "$rec" 2>/dev/null) <(printf '%s\n' "$4" 2>/dev/null) \
     && printf . || { rc=$?; printf .; exit "$rc"; }) || rc=$?; fi
   # print only if awk exited 0 with output and EVERY line starts `tier    ` (an empty line is foreign; the `.` keeps
   # trailing newlines); else one unreadable line (MD-20, A9 (1))
@@ -909,8 +910,9 @@ EOF
   # --- the REPORTED tier section end to end (PLAN A3, A5, MD-20, A9): mx / dx are mono / deop driver dirs whose
   # trace.txt put() rewrites between runs; mktaw DIR BODY writes an awk shim (first on PATH) that runs BODY for
   # TIER_AWK only (the one awk with `-v side=` as its 3rd / 4th args) and never reads stdin ---
-  local EX N4L
+  local EX N4L PAD='@@LITE-MARK pad'
   EX=$(printf '%s\n' "$SEMI" '@@LITE-MARK op 1' '@@LITE-MARK op 2' '@@LITE-MARK op x' '....@@LITE-MARK op 3')
+  for f in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do PAD=$PAD$'\n'$PAD; done   # 2^14 = 16384 lines (256 KiB > a 64 KiB pipe)
   mkd mx "$T_MONO"; mkd dx "$T_DEOPT"
   put() { printf '%s\n' "$T_MONO$1" >"$d/mx/trace.txt"; printf '%s\n' "$T_DEOPT$1" >"$d/dx/trace.txt"; }
   sm() { [[ "$(grep -v -e '^tier    ' "$d/m0.out" || true)" == "$(grep -v -e '^tier    ' "$d/sp.out" || true)" ]] && echo same || echo differs; }
@@ -956,8 +958,11 @@ EOF
   check "T10 A9 (2) N5: each dir's run 1 deopts, runs 2 3 do not -> exit 2 (null control), 3 + 3 runs, both sides' tier deopt line read from run 1" \
     "$(spawn - --fn add "$d/mixb/driver.js" "$d/mixa/driver.js")|$(cat "$fk/mixb.n" 2>/dev/null)+$(cat "$fk/mixa.n" 2>/dev/null)|$(has 'tier    add  before  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')$(has 'tier    add  after  deopt 1/1: TURBOFAN_JS deopt-eager (not a Smi), bytecode offset 2, at drv-deopt.js:1:31')" \
     "2|VERDICT NO-VERDICT|8|3+3|11"
-  check "T11 A9 (2) N6: TIER_AWK prints 'tier    add  x  PARTIAL' then exits 5 -> no PARTIAL line, 'unreadable (awk exited 5)' per side; rc, VERDICT, spawns, non-tier lines unchanged" \
-    "$(spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e PARTIAL "$d/sp.out" || true)|$(uw 5)|$(sm)" "1|VERDICT DIFF|8|0|11|same"
+  got="$(spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e PARTIAL "$d/sp.out" || true)|$(uw 5)|$(sm)"
+  put $'\n'"$PAD"
+  check "T11 A9 (2) N6: TIER_AWK prints 'tier    add  x  PARTIAL' then exits 5 -> no PARTIAL line, 'unreadable (awk exited 5)' per side; rc, VERDICT, spawns, non-tier lines unchanged; leg 2, SIGPIPE ignored + 16384 pad lines per trace: no producer 'write error' text" \
+    "$got#$(trap '' PIPE; spawn "PATH=$d/tap:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e 'write error' "$d/sp.out" || true)|$(uw 5)|$(sm)" "1|VERDICT DIFF|8|0|11|same#1|VERDICT DIFF|8|0|11|same"
+  put ""
   got=""
   for x in taf tam tab; do got="$got#$(spawn "PATH=$d/$x:$PATH" --fn add "$d/mx/driver.js" "$d/dx/driver.js")|$(grep -c -e FOREIGN -e '  x  ' "$d/sp.out" || true)|$(uw 0)"; done
   check "T12 A9 (1) N7: TIER_AWK exits 0 after a tier line + a foreign line, a 3-space 'tier' line between 2 tier lines, or a tier line + an empty line -> no shim line, 'unreadable (awk exited 0)' per side" \
