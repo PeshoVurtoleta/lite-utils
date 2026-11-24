@@ -765,7 +765,7 @@ window / end..gcn / after gcn; C is printed only where judge checked it (the run
 or every run of a ZERO / NONZERO verdict: count == a+b+c; the guard NO-VERDICT's own run prints its guard count, or
 `none`); `?` elsewhere; a missing raw file or mark prints no number. Rule: a diagnostic that prints a number must be
 able to say which check backed it; else print `?`. Tier: DETERMINISTIC (canned pins, no spawn). Evidence (local,
-untracked): `.handoff/b101/GA-T-review/`, `GA-T-review-r2/`.
+untracked): `.handoff/archive/1.1.2/b101/GA-T-review/`, `GA-T-review-r2/`.
 
 ---
 
@@ -1372,9 +1372,10 @@ point; a later patch may widen them): fixa A1(e), A1(a) / (b) / (d); cli A6 x3, 
 lane, N4, B2 R2, the C-14 fence, C-23; fixb A-B7, boxSize, :302, :315, :333; LB 1-4 (LB 3 / 4 would be vacuous on a
 VOID line: floor null, rows []). The cli b87 miss row's `/^positive: /` check (:530) also matches a natural positive
 VOID: if the knob silently stopped working, that row could still pass on a VOID host (noted, out of scope). Rule: a
-row's tier is its weakest input; list every row that needs a clean live reading, and say why each stays strict.
-Tier: DETERMINISTIC (the pins and predicates in npm test). Evidence (local, untracked): `.handoff/b100/PLAN-GB.md`,
-`.handoff/b101/GB-B1-review*/`, HISTORY b101.
+row's tier is its weakest input; list every row that needs a clean live reading; a row stays strict until a later
+patch shows its mutant survives the VOID branch (the criterion (b) used to widen the 4 rows). Tier:
+DETERMINISTIC (the pins and predicates in npm test). Evidence (local, untracked): `.handoff/b100/PLAN-GB.md`,
+`.handoff/archive/1.1.2/b101/GB-B1-review*/`, HISTORY b101.
 
 ---
 
@@ -1442,7 +1443,7 @@ counted the cli TASK 3 re-spawn row among the rows that run a live measurement; 
 selfCheck VOID can reach it, and the coder's FORCE-V run showed 5 VOID diagnostics, not 6. Ruled Q-B101-T3RESPAWN (a):
 revert it to strict. Rule: a FACTS "live" label is a claim to run, not read: the brief for a predicate widening names
 the probe that proves each row reaches the branch (FORCE-V here), and the plan's count is checked against the probe's.
-Evidence (local, untracked): HISTORY b101, `.handoff/b101/GB-B1-review/`.
+Evidence (local, untracked): HISTORY b101, `.handoff/archive/1.1.2/b101/GB-B1-review/`.
 
 **#142 b101: two coder / reviewer runs started while quiet-lock was held by another package.** The GB-B1 r1 reviewer ran
 one ~15 s cli test file while LiteABGate held the lock, and the GC-B1 coder ran ~40 s of bash-5 self-test spawns while
@@ -1456,7 +1457,19 @@ by grepping the rendered text `83 check`; it missed the table literal `{ [AD]: 8
 A3 (the live allocation-diff self-test pin), which only the closing npm test caught (runs 2 and 3: 1 fail; fixed: live 85,
 the 861f3d3 side stays 83 via OLD_COUNT; review APPROVED r1; file re-run 395 / 395 on both states). Rule: a sweep for a
 changed count greps the rendered phrase AND the bare number beside the tool's key (`[AD]: 83`, `ad.*83`), in tests as
-well as docs. Evidence (local, untracked): HISTORY b101, `.handoff/b101/A3PIN-review/`.
+well as docs. Evidence (local, untracked): HISTORY b101, `.handoff/archive/1.1.2/b101/A3PIN-review/`.
+
+**#144 b102: a docs brief's line list is not the stale-site list.** The b102 docs r1 review REJECTED a Sonnet helper's
+draft with 4 LITERAL doc-truth blockers: (1) a producer site named by the wrong call (the CHANGELOG RISK site said "the
+DEOPT_AWK call"; the producer is tier_fn's printf | awk, :556 at 6643647); (2) counts measured in the b101 review stated
+as asserted (now "measured in b101 review (REPORTED, not asserted)"); (3) an invented claim and a weakened rule (the
+#142 entry); (4) ROADMAP section 3 carried a stale release order (and 1.1.1 STATUS), OUTSIDE the brief's line list. One
+fix round; r2 APPROVED (3 NITs also raised in r1; their text is not recorded here). The orchestrator's stale-phrasing
+grep before r1 found no leftovers (HISTORY b102). Rule: a docs brief's line list is not the stale-site list -- sweep the
+whole file for the changed fact (here: the release order), not only the lines the brief names. Tier: process (no gate).
+Evidence (local, untracked): HISTORY b102; NEXT.md b102 FILLERS 51 (the line-list fact; the brief was not saved);
+`.handoff/archive/1.1.2/b102/DOCS-review/` vs `DOCS-review-r2/` (r2's ROADMAP :230 fix lies outside every r1 helper
+hunk).
 
 ---
 
@@ -1966,3 +1979,22 @@ baseline on every run: the live L2 row and audit-g3 A2 emit one `D-F64 baseline 
 count C` diagnostic (Q-B100-BASEDIAG (a); C only where judge checked it, else `?`; #140), so the next CI legs record
 it; the first ubuntu / node 26.13 sighting is the CI run of the 1.1.2 commits. Evidence (local,
 untracked): `.handoff/FINDING-b97-L2TRACE.md` section 8, `.handoff/b100/FACTS.md`.
+
+(g) Addendum (b103, FILLERS 52): the baseline (f) asked for is in. CI run 45430316847 (push of 52f3f2b, the 1.1.2 G-A /
+G-B / G-C commits; 8/8 success); each leg printed the `D-F64 baseline` line twice (live L2 row and audit-g3 A2), same
+values, 3 runs per leg, all identical within each leg: `run k a/b/c/d count C`, a/b/c/d as (f) defines. ubuntu node
+v26.13.1 (job 138573487437): `D-F64 baseline (v26.13.1 linux/x64): run 1 6/0/7/0 count 13; run 2 6/0/7/0 count 13; run 3
+6/0/7/0 count 13`. macOS node v26.13.1 (job 138573486949, darwin/arm64): 6/0/7/0 count 13 (x3). Node v26.8.2 (ubuntu
+138573487114, macOS 138573488274): 6/0/7/0 count 13 (x3). Node v24.22.3 (ubuntu 138573486943, macOS 138573486944):
+5/0/7/0 count 12 (x3). Node v22.23.5 (ubuntu 138573486344, macOS 138573487488): 5/0/6/1 count 11 (x3). Reading, by (c)'s
+own predicate (as (g, p, count)): the ubuntu node 26.13 baseline is g = 13 lines before gcn, p = 7 (end..gcn), count 13,
+which is the H3 side ("13 / 7 / 13 means a line went missing"), not the H1 / H2 side (12 / 6 / 12). The one dump ((f):
+6/0/6/1, guard count 13, trace 12) had the baseline's guard count (no extra count, so not H1 / H2 alone, if the dump run
+had the baseline's 13 GCs) and one of the 7 end..gcn lines missing before gcn, plus one line after gcn: consistent with
+"H3d" (a lost fence line plus a duplicated line). The baseline does not show WHY a line is lost or duplicated: the H3d
+mechanism stays UNVERIFIED. On node 22 a line after gcn (d = 1) is the normal baseline, so "a line after gcn" alone is
+not anomalous there. Consequence: the planned F-H1 fix (count once the GCs seen by both profilers) targets H1, which
+this baseline does not support as the sightings' cause (H1 stays an injection-proven window, (c), whose double count can
+cancel a lost line, (d)); F-H1's premise goes back to the maintainer before any planner (to be re-ruled). REPORTED
+(hosted CI, one run, 3 runs per leg). Evidence (local, untracked): `.handoff/evidence/b103-ci/` (per-job logs
+`<job>-<leg>.log`, job list `jobs-45430316847.txt`).
