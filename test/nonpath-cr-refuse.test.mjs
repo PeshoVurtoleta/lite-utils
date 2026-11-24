@@ -36,8 +36,9 @@
 //       unmutated live root both halves of that kill assertion fail for every named row
 //   A6  retention: the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged; 0 --out dirs
 //       across the 93 live rows
-//   A3  self-test counts: live AND 861f3d3 --self-test, rc 0 and `self-test: N check(s) ok`, N = ad 83, bb 69, dd 107, ic 83,
-//       ibd 92 (the PLAN numbers: F-G adds no check); the 861f3d3 half SKIPs / CI=true FAILs as A2
+//   A3  self-test counts: live AND 861f3d3 --self-test, rc 0 and `self-test: N check(s) ok`, N = ad 85 (861f3d3: 83), bb 69,
+//       dd 107, ic 83, ibd 92 (the PLAN numbers: F-G adds no check; Q-ADZ-NC (a) added ad rows 84 / 85 in 1.1.2); the
+//       861f3d3 half SKIPs / CI=true FAILs as A2
 // Own fake node (bash): logs one SPAWN line per call, answers --version / --v8-options (tracked fixture) / -p, else prints its
 // last argument's file and exits 0; it is also first on PATH. Editor env stripped, NODE / NODE_V8_COVERAGE set undefined.
 import { test, before, after, beforeEach } from 'node:test';
@@ -425,14 +426,15 @@ test('A6: 0 --out dirs created across the 93 live rows', { skip }, () => {
 
 
 // ---- A3 self-test counts (PLAN section 2: "Self-test counts do not change") ----
-const COUNT = { [AD]: 83, [BB]: 69, [DD]: 107, [IC]: 83, [IBD]: 92 };
+const COUNT = { [AD]: 85, [BB]: 69, [DD]: 107, [IC]: 83, [IBD]: 92 };
+const OLD_COUNT = { ...COUNT, [AD]: 83 }; // 861f3d3 predates the Q-ADZ-NC (a) self-test rows 84 / 85
 function selfTest(root, what) {
     const d = mk('st'); const cwd = join(d, 'cwd'), tmp = join(d, 'tmp'); mkdirSync(cwd); mkdirSync(tmp);
     return spawn(BASH, [root, '--self-test'], { cwd, env: cleanEnv({ PWD: cwd, TMPDIR: tmp }) }, what, 900000);
 }
-for (const [tool, n] of Object.entries(COUNT)) {
-    const line = `self-test: ${n} check(s) ok`;
-    for (const [side, sk, root] of [['live', skip, () => LIVE(tool)], [OLD_SHA, OLDSKIP, () => oldRoot(tool)]]) {
+for (const tool of Object.keys(COUNT)) {
+    for (const [side, sk, root, n] of [['live', skip, () => LIVE(tool), COUNT[tool]], [OLD_SHA, OLDSKIP, () => oldRoot(tool), OLD_COUNT[tool]]]) {
+        const line = `self-test: ${n} check(s) ok`;
         test(`A3 ${tool} --self-test (${side}): rc 0, "${line}"`, { skip: sk }, () => {
             const r = selfTest(root(), `${tool} --self-test (${side})`);
             assert.equal(r.status, 0, r.stdout.slice(-2000) + r.stderr.slice(-2000));

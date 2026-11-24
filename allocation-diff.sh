@@ -8,10 +8,12 @@
 #   allocation-diff.sh -h | --help                           this text
 #
 # Options
-#   --zero             gate mode: exactly one DRIVER. No young GC in the window of run 1 (and every run equal to
-#                      run 1) -> ZERO, exit 0; else NONZERO, exit 1. Takes no value. ZERO means less than one
+#   --zero             gate mode: exactly one DRIVER. No young GC in the window in any run -> ZERO, exit 0; a young
+#                      GC in the window in every run -> NONZERO, exit 1 (the counts may differ from run to run); in
+#                      some runs only -> NO-VERDICT (null control), exit 2. Takes no value. ZERO means less than one
 #                      semi-space (1 MB) of young allocation in the window, not zero bytes.
-#   --runs N           node runs per side, 2..20 (default 5). Run 1 vs runs 2..N is the null control.
+#   --runs N           node runs per side, 2..20 (default 5). Run 1 vs runs 2..N is the null control (with --zero:
+#                      young 0 vs young >= 1 per run).
 #   --node BIN         node binary (default: $NODE, else node). Resolved ONCE, from the caller's directory, to an
 #                      absolute path: a bare name through PATH (`command -v`; a function, alias or builtin is
 #                      refused); a name with a slash is a path, never looked up on PATH. It must be an executable
@@ -126,11 +128,15 @@
 #   <d> GC line(s) in run <k> the guard did not count (guard count <c>, trace <g>)   (g > count)
 #   old-generation GC in the window in run <k> (<kind>)     (a full GC empties the young generation)
 #   null control: run <k> differs from run 1 (<n> kind(s) differ, first: run 1 x<a> | run <k> x<b>  <kind>)
+#   null control: run <k> differs from run 1 (--zero: run 1 young <a> | run <k> young <b>)   (--zero only: the first
+#                                    run with young 0 where run 1 has young >= 1, or the reverse; the line above is
+#                                    diff mode only)
 # Report: a head (node, drivers with sha256/8, mode, flags), per side whose run 1 exited 0 its counts line
 #   "  <side>: run 1 young <y> [<kind> x<n>, ..], old <o> in the window; <g> GC line(s) before the fence, <p> after
 #   end; young per run <y1>,<y2>,.." (REPORTED), the verdict line(s), a blank line and "VERDICT <v>". Diff mode:
 #   "  SAME -- identical young-GC multiset in the window (before <y> | after <y>)" or "  DIFF -- ..." then per kind
-#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ...";
+#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ..." ("  NONZERO
+#   -- young GC(s) in the window in every run (young per run <y1>,<y2>,..)" when the runs' young multisets differ);
 #   "  NO-VERDICT -- <side>: <reason>". Exit 0 SAME / ZERO, 1 DIFF / NONZERO, 2 NO-VERDICT. Every refused argument
 #   exits 2 before any node is spawned and before anything is written, except a --v8-flags flag outside the allowlist
 #   (after the --version and --v8-options spawns). Spawns: one `node --version` (a failing one exits 2 before
@@ -539,11 +545,12 @@ counts() {
 # judge: one side. JRC[k-1] = the driver exit of run k (or "<tee|tr|awk|append> <rc>" when that step failed), JREC[k-1] = the
 # GC_AWK records of run k, JCNT[k-1] = the guard count of run k ("" = none). Sets JV (OK NO-VERDICT) and JWHY. Order,
 # each over k = 1..N: driver output / exit, X record (and a readable G line), p = 0, the guard count vs g, an O record,
-# the null control (Y+O multiset of run k vs run 1).
+# the null control (Y+O multiset of run k vs run 1; with --zero: young 0 vs young >= 1 of run k vs run 1, checked
+# first, and a multiset difference is no NO-VERDICT, it only sets JEQ = 0; JEQ = 1: every multiset equals run 1's).
 judge() {
   local n i x o last first nk dl g c d w
   local -a jp=() jg=()
-  JV=NO-VERDICT; JWHY=""
+  JV=NO-VERDICT; JWHY=""; JEQ=1
   n=${#JRC[@]}
   for ((i = 0; i < n; i++)); do
     case "${JRC[$i]}" in
@@ -579,10 +586,19 @@ judge() {
     o=$(printf '%s\n' "${JREC[$i]}" | awk '!f && /^O /{ print substr($0, 3); f = 1 }')
     if [[ -n "$o" ]]; then JWHY="old-generation GC in the window in run $((i + 1)) ($o)"; return 0; fi
   done
+  if [[ $ZERO == 1 ]]; then
+    local a yk
+    a=$(ycount "${JREC[0]}")
+    for ((i = 1; i < n; i++)); do
+      yk=$(ycount "${JREC[$i]}")
+      if (((a == 0) != (yk == 0))); then JWHY="null control: run $((i + 1)) differs from run 1 (--zero: run 1 young $a | run $((i + 1)) young $yk)"; return 0; fi
+    done
+  fi
   first=$(nc_ms "${JREC[0]}")
   for ((i = 1; i < n; i++)); do
     nk=$(nc_ms "${JREC[$i]}")
     if [[ "$nk" != "$first" ]]; then
+      if [[ $ZERO == 1 ]]; then JEQ=0; continue; fi
       dl=$(awk "$MSDIFF_AWK" <(printf '%s\n' "$first") <(printf '%s\n' "$nk") | sort -k3 \
         | awk -v k="$((i + 1))" '{ n++; if (n == 1) { l = $0; sub(/^  before=[0-9]+ after=[0-9]+  /, "", l); a = $1; b = $2
             sub(/^before=/, "", a); sub(/^after=/, "", b); f = "run 1 x" a " | run " k " x" b "  " l } }
@@ -890,7 +906,7 @@ FAKE_MKTEMP
     "$(spawn -- "$NO" --runs 3 --zero "$dr/gx/driver.js")|$(has "  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: unknown GC kind 'Foo' in the window")#$(spawn -- "$NO" --runs 3 --zero "$dr/gp0/driver.js")|$(has "  NO-VERDICT -- driver: no GC line between @@LITE-MARK end and the tool's exit fence in run 1")" \
     "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
   mkd gmc "$(win "$LS"$'\n'"$LMC")"; printf '4\n' >"$dr/gmc/count"
-  mkd gnc "$(win "$(rep "$LS" 3)")"; printf '%s\n' "$(win "$(rep "$LS" 4)")" >"$dr/gnc/trace.2.txt"; printf '9\n' >"$dr/gnc/count.3"
+  mkd gnc "$(win "$(rep "$LS" 3)")"; cp "$dr/z0/trace.txt" "$dr/gnc/trace.2.txt"; printf '9\n' >"$dr/gnc/count.3"   # young 3, 0, 3
   check "A6 judge order e2e: Mark-Compact + count 4 (g 3) -> the count; null control (run 2) + count mismatch (run 3) -> the count" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/gmc/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 4, trace 3)')#$(spawn -- "$NO" --runs 3 --zero "$dr/gnc/driver.js")|$(has '  NO-VERDICT -- driver: trace lost 5 GC lines in run 3 (guard count 9, trace 4)')" \
     "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
@@ -1054,6 +1070,16 @@ FAKE_MKTEMP
   check "R8 e2e: a grep shim that fails every -c, first on PATH, --zero on 3 Scavenge -> exit 1 NONZERO, 'young 3 [Scavenge x3], old 0'" \
     "$(spawn PATH="$d/sh/gc:$mk:$PATH" -- "$NO" --runs 3 --zero "$dr/y3/driver.js")|$(has '  driver: run 1 young 3 [Scavenge x3], old 0 in the window; 4 GC line(s) before the fence, 1 after end; young per run 3,3,3')|$(has '  NONZERO -- 3 young GC(s) in the window (every run equal to run 1)')" \
     "1|VERDICT NONZERO|5|1|1"
+  # --- Q-ADZ-NC (b100): --zero compares young 0 vs young >= 1 per run; differing counts >= 1 in every run are NONZERO ---
+  mkd z311 "$(win "$(rep "$LS" 312)")"; printf '%s\n' "$(win "$(rep "$LS" 311)")" >"$dr/z311/trace.1.txt"
+  check "Q-ADZ-NC NONZERO e2e: --zero young 311,312,312 (young in every run, multisets differ) -> exit 1 NONZERO, young per run" \
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/z311/driver.js")|$(has '  NONZERO -- young GC(s) in the window in every run (young per run 311,312,312)')|$(has '  driver: run 1 young 311 [Scavenge x311], old 0 in the window; 312 GC line(s) before the fence, 1 after end; young per run 311,312,312')" \
+    "1|VERDICT NONZERO|5|1|1"
+  mkd z001 "$(cat "$dr/z0/trace.txt")"; cp "$dr/y1/trace.txt" "$dr/z001/trace.3.txt"
+  mkd z100 "$(cat "$dr/z0/trace.txt")"; cp "$dr/y1/trace.txt" "$dr/z100/trace.1.txt"
+  check "Q-ADZ-NC null control e2e: --zero young 0,0,1 -> exit 2 naming run 3; young 1,0,0 -> exit 2 naming run 2 (the first)" \
+    "$(spawn -- "$NO" --runs 3 --zero "$dr/z001/driver.js")|$(has '  NO-VERDICT -- driver: null control: run 3 differs from run 1 (--zero: run 1 young 0 | run 3 young 1)')#$(spawn -- "$NO" --runs 3 --zero "$dr/z100/driver.js")|$(has '  NO-VERDICT -- driver: null control: run 2 differs from run 1 (--zero: run 1 young 1 | run 2 young 0)')" \
+    "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1
@@ -1274,7 +1300,11 @@ if [[ $ZERO == 1 ]]; then
     if [[ $Y -eq 0 ]]; then
       VERDICT=ZERO; say "  ZERO -- no young GC in the window (every run equal to run 1)"
     else
-      VERDICT=NONZERO; say "  NONZERO -- $Y young GC(s) in the window (every run equal to run 1)"
+      if [[ $JEQ == 1 ]]; then
+        VERDICT=NONZERO; say "  NONZERO -- $Y young GC(s) in the window (every run equal to run 1)"
+      else
+        VERDICT=NONZERO; say "  NONZERO -- young GC(s) in the window in every run (young per run $YL0)"
+      fi
     fi
   fi
 else

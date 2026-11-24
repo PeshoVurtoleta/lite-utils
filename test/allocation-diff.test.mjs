@@ -17,14 +17,16 @@ import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative, basename } from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 83;   // self-test ok lines at b63 lane g3 B1 (src cde0ad19 / root 195242d9, sha256; 76 at B2a 00ab0dac / 8e795263,
+const C = 85;   // self-test ok lines at b100 GA-B1a (src 54d474c1 / root 4831c3ac, sha256; 76 at B2a 00ab0dac / 8e795263,
                 // 78 since G5 B1 added checks 77 / 78, 79 since b43 G-ENV added check 79 Q-ENV, 83 since b63 g3 B1 added
-                // checks 80-83 R6 / PRETEN / R26 / R8); a new check moves this literal
+                // checks 80-83 R6 / PRETEN / R26 / R8, 85 since b100 GA-B1a added checks 84 / 85 Q-ADZ-NC); a new check
+                // moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 const ROOTUSER = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -75,7 +77,7 @@ const M_PRETEN_PIN = [[PRETEN_PIN, PRETEN_PIN.replace(' --no-allocation-site-pre
 const M_R8 = [[R8_Y, "ycount() { printf '%s\\n' \"$1\" | grep -c '^Y ' || true; }\n"]];
 const M_WORKER = [[WORKER_LINE, '']];
 
-// The 83 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 85 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ "A1' records: 2",
     /*  2 */ 'A1 records: every',
@@ -160,6 +162,8 @@ const ROW = [null,
     /* 81 */ 'PRETEN refused before',
     /* 82 */ 'R26 refused before',
     /* 83 */ 'R8 e2e:',
+    /* 84 */ 'Q-ADZ-NC NONZERO e2e:',
+    /* 85 */ 'Q-ADZ-NC null control e2e:',
 ];
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
@@ -295,6 +299,17 @@ test('allocation-diff --self-test: the ROW table names each printed row in order
 const P0 = "  for ((i = 0; i < n; i++)); do\n    if [[ ${jp[$i]} == 0 ]]; then JWHY=\"no GC line between @@LITE-MARK end and the tool's exit fence in run $((i + 1))\"; return 0; fi\n  done\n";
 const C0 = "  for ((i = 0; i < n; i++)); do\n    c=${JCNT[$i]:-}\n    if [[ -z \"$c\" ]]; then JWHY=\"no guard count in run $((i + 1))\"; return 0; fi\n    g=$((10#${jg[$i]})); c=$((10#$c))\n    if ((g < c)); then\n      d=$((c - g)); w=lines; [[ $d != 1 ]] || w=line\n      JWHY=\"trace lost $d GC $w in run $((i + 1)) (guard count $c, trace $g)\"; return 0\n    fi\n    if ((g > c)); then\n      d=$((g - c)); w=lines; [[ $d != 1 ]] || w=line\n      JWHY=\"$d GC $w in run $((i + 1)) the guard did not count (guard count $c, trace $g)\"; return 0\n    fi\n  done\n";
 const O0 = "  for ((i = 0; i < n; i++)); do\n    o=$(printf '%s\\n' \"${JREC[$i]}\" | awk '!f && /^O /{ print substr($0, 3); f = 1 }')\n    if [[ -n \"$o\" ]]; then JWHY=\"old-generation GC in the window in run $((i + 1)) ($o)\"; return 0; fi\n  done\n";
+// b100 Q-ADZ-NC (PLAN-GA TASK 4): judge()'s --zero class loop (young 0 vs young >= 1 of run k vs run 1, right after the
+// O loop), the multiset loop's --zero bypass (JEQ = 0, no NO-VERDICT) and the two NONZERO lines: the M-znc-* / M-zline-* /
+// M-order* / M-jeq-* anchors. ZL_IF = the class test line up to its JWHY.
+const ZL_WHY = 'JWHY="null control: run $((i + 1)) differs from run 1 (--zero: run 1 young $a | run $((i + 1)) young $yk)"';
+const ZL_IF = '      if (((a == 0) != (yk == 0))); then ';
+const ZL = '  if [[ $ZERO == 1 ]]; then\n    local a yk\n    a=$(ycount "${JREC[0]}")\n    for ((i = 1; i < n; i++)); do\n' +
+    '      yk=$(ycount "${JREC[$i]}")\n' + ZL_IF + ZL_WHY + '; return 0; fi\n    done\n  fi\n';
+const ZMS_LINE = '      if [[ $ZERO == 1 ]]; then JEQ=0; continue; fi\n';
+const ZN_OLD = '        VERDICT=NONZERO; say "  NONZERO -- $Y young GC(s) in the window (every run equal to run 1)"\n';
+const ZN_NEW = '        VERDICT=NONZERO; say "  NONZERO -- young GC(s) in the window in every run (young per run $YL0)"\n';
+const M_ORDER_O = [[O0 + ZL, ZL + O0]];
 const B2 = [
     ["M1", [1, 14], "window ignored",
         [["  if (st == 1) {\n    if (yg)",
@@ -585,7 +600,28 @@ const NEW = [
     ['M-r8o', [83], 'the old count back on grep -c (a failing grep reads old as empty)',
         [[R8_O, "o=$(printf '%s\\n' \"$1\" | grep -c '^O ' || true)\n"]]],
     ['M-worker', [15], 'R20 main-thread line deleted from the guard preload', M_WORKER],
+    // b100 Q-ADZ-NC (PLAN-GA TASK 4, ASSERTIONS 1 / 2): one mutant per new behaviour, each red on exactly its designed
+    // rows (EXACT below). M-znc-ms: the multiset loop's --zero bypass deleted (a multiset difference is the old null-control
+    // NO-VERDICT again: 311,312,312, row 84); M-znc-off: the class test never fires (0,0,1 falls through to the multiset
+    // bypass and reads ZERO, row 85); M-znc-run2 / M-znc-last: the reason names run 2 / the last differing run (0,0,1 /
+    // 1,0,0, row 85); M-zline-old / M-zline-new: JEQ = 0 prints the old NONZERO line / every NONZERO prints the new one
+    // (row 84 / rows 19 and 83). Added by the GA-B1a reviewer (nit 1): M-order (the class loop above the guard-count loop:
+    // gnc 3,0,3 with count 9 in run 3 names the null control, row 52) and M-jeq-noreset (judge() no longer sets JEQ = 1:
+    // every NONZERO takes the new line, rows 19, 72, 83); M-orderO (the class loop above the O loop) survives the self-test
+    // and is the teeth of the fake-node precedence row below.
+    ['M-znc-ms', [84], '--zero multiset bypass deleted (old behaviour: a multiset difference is NO-VERDICT)', [[ZMS_LINE, '']]],
+    ['M-znc-off', [85], '--zero class test never fires', [[ZL_IF, '      if ((0)); then ']]],
+    ['M-znc-run2', [85], '--zero class reason always names run 2',
+        [[ZL_WHY, 'JWHY="null control: run 2 differs from run 1 (--zero: run 1 young $a | run 2 young $yk)"']]],
+    ['M-znc-last', [85], '--zero class reason names the last differing run, not the first',
+        [[ZL_WHY + '; return 0; fi\n    done\n  fi\n', ZL_WHY + '; fi\n    done\n    [[ -z "$JWHY" ]] || return 0\n  fi\n']]],
+    ['M-zline-old', [84], 'JEQ = 0 prints the old NONZERO line', [[ZN_NEW, ZN_OLD]]],
+    ['M-zline-new', [19, 83], 'every NONZERO prints the new line', [['      if [[ $JEQ == 1 ]]; then\n', '      if [[ $JEQ == 2 ]]; then\n']]],
+    ['M-order', [52], '--zero class loop above the guard-count loop', [[C0 + O0 + ZL, ZL + C0 + O0]]],
+    ['M-jeq-noreset', [19, 72, 83], 'judge() does not reset JEQ = 1', [['  JV=NO-VERDICT; JWHY=""; JEQ=1\n', '  JV=NO-VERDICT; JWHY=""\n']]],
 ];
+// the b100 Q-ADZ-NC mutants: red on their designed rows AND on no other row (PLAN-GA TASK 4)
+const EXACT = new Set(['M-znc-ms', 'M-znc-off', 'M-znc-run2', 'M-znc-last', 'M-zline-old', 'M-zline-new', 'M-order', 'M-jeq-noreset']);
 const MUTANTS = [...B2, ...NEW];
 const NONROOT = new Set(['B2h']);
 
@@ -671,6 +707,11 @@ MUTANTS.forEach(([name, rows, desc], i) => {
         const r = await kills()[i];
         if (r.logged) t.diagnostic(`${name}: removed the ${r.logged.length} logged mktemp path(s), ${r.leaked.length} left outside its dir: ${r.leaked.join(' ')}`);
         assertKilled(name, r, rows);
+        if (EXACT.has(name)) {
+            const fl = r.stdout.split('\n').filter((l) => l.startsWith('FAIL '));
+            assert.equal(fl.length, rows.length, `mutant ${name}: red on rows other than ${rows.join(',')}\n${fl.join('\n')}`);
+            assertClean(r);   // PLAN-GA ASSERTION 4: the mutant's self-test temp dir is gone too
+        }
     });
     test(`allocation-diff mutant ${name}: revert check (the unmutated copy fails the same kill assertion)`, { skip }, async () => {
         const r = await (nulFor(name) ? nbase() : base());   // a NUL mutant under the shim reverts against the shimmed copy
@@ -1262,6 +1303,19 @@ function guardNv(stdout) {
 // lines from 3 before `@@LITE-MARK end` to EOF (<= 60, each <= 200 chars). Never throws; never '' on a guard NV.
 const GNV_GC = /^\[\d+:0x[0-9a-f]+\]/;
 const GNV_MARKS = ['@@LITE-MARK start', '@@LITE-MARK end', '@@LITE-MARK gcn'];
+// b100 Q-B100-BASEDIAG: the stretch counter, factored out of guardDump (its output byte-identical: the canned before /
+// after row below runs the HEAD body, guardDumpHead) and shared with the D-F64 baseline line. L = the raw lines (no
+// trailing ''); n = GC lines before start / start..end / end..gcn / after gcn; at = 1-based line of each mark, in order
+// (0 = none: the later marks are then not looked for)
+function gcStretch(L) {
+    const n = [0, 0, 0, 0], at = [0, 0, 0];
+    let seg = 0;
+    for (let i = 0; i < L.length; i++) {
+        if (seg < 3 && L[i] === GNV_MARKS[seg]) { at[seg] = i + 1; seg++; continue; }
+        if (GNV_GC.test(L[i])) n[seg]++;
+    }
+    return { n, at };
+}
 function guardDump(outDir, nv) {
     const head = `guard NO-VERDICT dump (${process.version} ${process.platform}/${process.arch}): ${nv.reason}`;
     const p = join(outDir, 'raw', nv.side, `run.${nv.k}.txt`);
@@ -1269,12 +1323,7 @@ function guardDump(outDir, nv) {
     try { txt = readFileSync(p, 'latin1'); } catch (e) { return `${head}\nraw file missing or unreadable: ${p} (${e && e.code ? e.code : String(e)})`; }
     const L = txt.split('\n');
     if (L.length && L[L.length - 1] === '') L.pop();
-    const n = [0, 0, 0, 0], at = [0, 0, 0];   // at: 1-based line of each mark, in order; 0 = none
-    let seg = 0;
-    for (let i = 0; i < L.length; i++) {
-        if (seg < 3 && L[i] === GNV_MARKS[seg]) { at[seg] = i + 1; seg++; continue; }
-        if (GNV_GC.test(L[i])) n[seg]++;
-    }
+    const { n, at } = gcStretch(L);
     const sh = (x) => (x === null ? 'none' : String(x));
     const cnt = `GC lines: before start ${n[0]}, start..end ${n[1]}, end..gcn ${n[2]}, after gcn ${n[3]} | guard count ${sh(nv.c)}, trace ${sh(nv.g)}` +
         ` | marks at line start ${at[0] || 'none'} end ${at[1] || 'none'} gcn ${at[2] || 'none'} of ${L.length} | ${p}`;
@@ -1282,6 +1331,35 @@ function guardDump(outDir, nv) {
     const tail = L.slice(from, from + 60).map((l) => (l.length > 200 ? l.slice(0, 200) : l));
     const cut = L.length - from - tail.length;
     return [head, cnt, ...(at[1] ? [] : ['(no @@LITE-MARK end line: the last lines follow)']), ...tail, ...(cut > 0 ? [`(${cut} more line(s) cut)`] : [])].join('\n');
+}
+// b100 Q-B100-BASEDIAG (a): the ONE D-F64 baseline line of a --zero run, printed by the L2 row on every run so each CI leg
+// records its baseline: `D-F64 baseline (<ver> <plat>/<arch>): run k a/b/c/d count C; ...` per run k = 1..runs of
+// <out>/raw/driver/run.k.txt, a/b/c/d = gcStretch's n. C: the guard count of the guard NO-VERDICT's own run (`none` for
+// "no guard count"); g = a+b+c for the runs judge() passed (the runs before that one, or every run of a ZERO / NONZERO
+// verdict: judge checked count == g there); `?` after it and on any other outcome (fail closed: no count judge did not
+// check). A raw file that cannot be read -> `run k raw missing`; a missing mark -> `run k no <mark>`, no number. Never throws.
+function f64Base(outDir, stdout, runs) {
+    const head = `D-F64 baseline (${process.version} ${process.platform}/${process.arch}): `;
+    try {
+        const nv = guardNv(stdout);
+        const judged = !nv && /^VERDICT (ZERO|NONZERO)$/m.test(String(stdout));
+        const parts = [];
+        for (let k = 1; k <= runs; k++) {
+            let txt;
+            try { txt = readFileSync(join(outDir, 'raw', 'driver', `run.${k}.txt`), 'latin1'); } catch { parts.push(`run ${k} raw missing`); continue; }
+            const L = txt.split('\n');
+            if (L.length && L[L.length - 1] === '') L.pop();
+            const { n, at } = gcStretch(L);
+            const miss = at.indexOf(0);
+            if (miss >= 0) { parts.push(`run ${k} no ${GNV_MARKS[miss]}`); continue; }
+            const g = String(n[0] + n[1] + n[2]);
+            let c = '?';
+            if (nv && nv.side === 'driver') c = k < nv.k ? g : k === nv.k ? (nv.c === null ? 'none' : String(nv.c)) : '?';
+            else if (judged) c = g;
+            parts.push(`run ${k} ${n.join('/')} count ${c}`);
+        }
+        return head + parts.join('; ');
+    } catch (e) { return head + 'not read (' + String(e && e.message ? e.message : e).split('\n')[0] + ')'; }
 }
 // r.diag / r.msg for a live run; r.msg is an assertion MESSAGE only (every count / match stays on r.out or r.L)
 function liveDiag(r, outDir) {
@@ -1353,7 +1431,8 @@ const G3_GOPT = (() => {
     const r = spawnSync('grep', ['-c', 'x'], { input: '', env: { ...ENV, GREP_OPTIONS: '-P' } });
     return r.status === 2 ? false : 'GREP_OPTIONS=-P does not make this host\'s grep -c fail (exit ' + r.status + '; the twin needs BSD grep, darwin)';
 })();
-function g3Live(script, driver, args, env = {}) {
+// base = N > 0: r.base = the D-F64 baseline line of runs 1..N (f64Base), read before the --out dir is removed
+function g3Live(script, driver, args, env = {}, base = 0) {
     const d = mkdtempSync(join(tmpdir(), 'ad-g3l-'));
     try {
         const dd = join(d, 'drv'); const tmp = join(d, 'tmp');
@@ -1361,7 +1440,9 @@ function g3Live(script, driver, args, env = {}) {
         mkdirSync(dd); mkdirSync(tmp);
         writeFileSync(join(dd, 'driver.js'), driver);
         const r = capSync('bash', [script, '--node', process.execPath, ...args, '--out', out, join(dd, 'driver.js')], { encoding: 'utf8', cwd: dd, env: { ...ENV, TMPDIR: tmp, ...env } }, 120000, `${AD_RUN} ${basename(script)}`);
-        return liveDiag({ status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, L: r.stdout.split('\n'), left: readdirSync(tmp), drv: readdirSync(dd) }, out);
+        const x = liveDiag({ status: r.status, out: r.stdout + r.stderr, stdout: r.stdout, L: r.stdout.split('\n'), left: readdirSync(tmp), drv: readdirSync(dd) }, out);
+        if (base > 0) x.base = f64Base(out, r.stdout, base);
+        return x;
     } finally { rmSync(d, { recursive: true, force: true }); }
 }
 // the head pin line (g3LitOk, l2Ok)
@@ -1417,8 +1498,11 @@ function l2Ok(r) {
     assert.fail(`L2 exit ${r.status} (want 0 ZERO or 2 "trace lost 1 GC line")\n${m}`);
 }
 test('allocation-diff Q-RL-PRETEN live L2 (A2 control): D-F64 (no allocation in the window) --zero --runs 3 -> exit 0 VERDICT ZERO, or exit 2 whose only NO-VERDICT is "trace lost 1 GC line" (trace = count - 1; Q-B97-L2ROW (a)); young 0,0,0, old 0 either way', { skip: G3_SKIP }, (t) => {
-    const r = g3Live(SCRIPT, G3_F64, ['--zero', '--runs', '3']);
+    const r = g3Live(SCRIPT, G3_F64, ['--zero', '--runs', '3'], {}, 3);
     emitDiag(t, r);
+    // Q-B100-BASEDIAG (a): the ONE baseline line, on every run (ZERO, guard1 or red), before l2Ok can throw
+    t.diagnostic(r.base);
+    assert.ok(r.base.startsWith('D-F64 baseline (') && !r.base.includes('\n'), r.base);
     const how = l2Ok(r);
     if (how === 'guard1') t.diagnostic('L2 accepted guard NO-VERDICT (Q-B97-L2ROW (a)): ' + r.L.find((l) => l.startsWith('  NO-VERDICT -- ')));
 });
@@ -1519,6 +1603,96 @@ test(`allocation-diff guardNv pins (no spawn): ${GNV_PARSE.length} guard reasons
     assert.equal(guardNv(two).side, 'after', 'the first GUARD line, after a non-guard one');
     assert.equal(guardNv(''), null);
 });
+// --- b100 Q-B100-BASEDIAG (a) canned pins (no spawn). The raw fixture = run 1 of the CI dump (run 45133611956, ubuntu
+// node v26.13.1, the L2 row: .handoff/evidence/b100-ci/DUMP-run45133611956-ubuntu-node26-L2.txt): its lines 5-16 verbatim
+// (the dump starts 3 lines before `end`); lines 1-4 are GC lines the dump cut, rebuilt in the same shape (the dump's
+// counts line: before start 6, marks at line start 7 end 8 gcn 15 of 16).
+const F64_GC = (ms, v) => `[3171108:0x2f326000]       ${ms} ms: Scavenge ${v} MB, pooled: 0.0 MB, 1.00 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; `;
+const F64_L73 = '[3171108:0x2f326000]       73 ms: Scavenge 8.2 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.23 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ';
+const F64_RAW = [F64_GC(44, '6.0 (7.5) -> 5.9 (7.8)'), F64_GC(46, '6.3 (7.8) -> 6.1 (8.0)'), F64_GC(48, '6.6 (8.0) -> 6.4 (8.3)'), F64_GC(50, '6.9 (8.3) -> 6.8 (8.8)'),
+    '[3171108:0x2f326000]       52 ms: Scavenge 7.1 (8.8) -> 7.1 (9.0) MB, pooled: 0.0 MB, 1.92 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '[3171108:0x2f326000]       54 ms: Scavenge 7.5 (9.0) -> 7.2 (9.8) MB, pooled: 0.0 MB, 1.48 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '@@LITE-MARK start', '@@LITE-MARK end',
+    '[3171108:0x2f326000]       63 ms: Scavenge 8.1 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.48 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '[3171108:0x2f326000]       65 ms: Scavenge 8.2 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.28 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '[3171108:0x2f326000]       67 ms: Scavenge 8.2 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.20 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '[3171108:0x2f326000]       69 ms: Scavenge 8.2 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.19 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    '[3171108:0x2f326000]       71 ms: Scavenge 8.2 (10.3) -> 7.3 (10.3) MB, pooled: 0.0 MB, 0.18 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ',
+    F64_L73, '@@LITE-MARK gcn', F64_L73].join('\n') + '\n';
+// the HEAD (6643647) guardDump body, inlined verbatim: the before of the gcStretch factoring
+function guardDumpHead(outDir, nv) {
+    const head = `guard NO-VERDICT dump (${process.version} ${process.platform}/${process.arch}): ${nv.reason}`;
+    const p = join(outDir, 'raw', nv.side, `run.${nv.k}.txt`);
+    let txt;
+    try { txt = readFileSync(p, 'latin1'); } catch (e) { return `${head}\nraw file missing or unreadable: ${p} (${e && e.code ? e.code : String(e)})`; }
+    const L = txt.split('\n');
+    if (L.length && L[L.length - 1] === '') L.pop();
+    const n = [0, 0, 0, 0], at = [0, 0, 0];   // at: 1-based line of each mark, in order; 0 = none
+    let seg = 0;
+    for (let i = 0; i < L.length; i++) {
+        if (seg < 3 && L[i] === GNV_MARKS[seg]) { at[seg] = i + 1; seg++; continue; }
+        if (GNV_GC.test(L[i])) n[seg]++;
+    }
+    const sh = (x) => (x === null ? 'none' : String(x));
+    const cnt = `GC lines: before start ${n[0]}, start..end ${n[1]}, end..gcn ${n[2]}, after gcn ${n[3]} | guard count ${sh(nv.c)}, trace ${sh(nv.g)}` +
+        ` | marks at line start ${at[0] || 'none'} end ${at[1] || 'none'} gcn ${at[2] || 'none'} of ${L.length} | ${p}`;
+    const from = at[1] ? Math.max(0, at[1] - 1 - 3) : Math.max(0, L.length - 60);
+    const tail = L.slice(from, from + 60).map((l) => (l.length > 200 ? l.slice(0, 200) : l));
+    const cut = L.length - from - tail.length;
+    return [head, cnt, ...(at[1] ? [] : ['(no @@LITE-MARK end line: the last lines follow)']), ...tail, ...(cut > 0 ? [`(${cut} more line(s) cut)`] : [])].join('\n');
+}
+// an --out dir whose raw/driver holds run.<k>.txt = texts[k - 1] (null = no file); fn(out) runs, the dir is removed
+function withRaw(texts, fn) {
+    const d = mkdtempSync(join(tmpdir(), 'ad-f64-'));
+    try {
+        const rd = join(d, 'out', 'raw', 'driver');
+        mkdirSync(rd, { recursive: true });
+        texts.forEach((x, i) => { if (x !== null) writeFileSync(join(rd, `run.${i + 1}.txt`), x); });
+        return fn(join(d, 'out'));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+}
+const F64_RAW_NOEND = l2Edit(F64_RAW, [['@@LITE-MARK end\n', '']]);
+const F64_RAW_NOGCN = l2Edit(F64_RAW, [['@@LITE-MARK gcn\n', '']]);
+test('allocation-diff guardDump after the gcStretch factoring (no spawn): byte-identical to the HEAD body on the CI raw, no end, no gcn, a 70-line raw (tail cut, a 250-char line) and a missing file; the CI counts line', () => {
+    const long = ['@@LITE-MARK start', '@@LITE-MARK end', ...Array.from({ length: 66 }, (_, i) => (i === 5 ? 'x'.repeat(250) : F64_L73)), '@@LITE-MARK gcn', F64_L73].join('\n') + '\n';
+    const nvs = [guardNv(L2_CI), guardNv(l2Edit(L2_CI, l2Reason('no guard count in run 1'))), guardNv(l2Edit(L2_CI, l2Reason('trace lost 1 GC line in run 2 (guard count 13, trace 12)')))];
+    assert.deepEqual(nvs.map((x) => x && x.k), [1, 1, 2]);
+    let n = 0;
+    for (const texts of [[F64_RAW], [F64_RAW_NOEND], [F64_RAW_NOGCN], [long], [null], [F64_RAW, null]]) {
+        withRaw(texts, (out) => {
+            for (const nv of nvs) { assert.equal(guardDump(out, nv), guardDumpHead(out, nv)); n++; }
+        });
+    }
+    assert.equal(n, 18);
+    withRaw([F64_RAW], (out) => {
+        const D = guardDump(out, nvs[0]).split('\n');
+        assert.equal(D[1], 'GC lines: before start 6, start..end 0, end..gcn 6, after gcn 1 | guard count 13, trace 12 | marks at line start 7 end 8 gcn 15 of 16 | ' + join(out, 'raw', 'driver', 'run.1.txt'));
+    });
+});
+test('allocation-diff D-F64 baseline line (Q-B100-BASEDIAG (a), no spawn): the CI raw -> "run 1 6/0/6/1 count 13"; g / ? / none per run; raw missing; a missing mark prints no number; one line, never throws', () => {
+    const H = `D-F64 baseline (${process.version} ${process.platform}/${process.arch}): `;
+    const C2 = l2Edit(L2_CI, l2Reason('trace lost 1 GC line in run 2 (guard count 13, trace 12)'));
+    const cases = [
+        ['the CI sighting (run 1 NO-VERDICT, runs 2 / 3 not written)', [F64_RAW, null, null], L2_CI, 'run 1 6/0/6/1 count 13; run 2 raw missing; run 3 raw missing'],
+        ['the CI sighting, 3 raws: runs after the NO-VERDICT run -> ?', [F64_RAW, F64_RAW, F64_RAW], L2_CI, 'run 1 6/0/6/1 count 13; run 2 6/0/6/1 count ?; run 3 6/0/6/1 count ?'],
+        ['the NO-VERDICT in run 2: run 1 -> g', [F64_RAW, F64_RAW, F64_RAW], C2, 'run 1 6/0/6/1 count 12; run 2 6/0/6/1 count 13; run 3 6/0/6/1 count ?'],
+        ['a ZERO run: every run -> g', [F64_RAW, F64_RAW, F64_RAW], l2Edit(L2_CI, L2_ZERO), 'run 1 6/0/6/1 count 12; run 2 6/0/6/1 count 12; run 3 6/0/6/1 count 12'],
+        ['no guard count in run 1 -> none', [F64_RAW, F64_RAW, null], l2Edit(L2_CI, l2Reason('no guard count in run 1')), 'run 1 6/0/6/1 count none; run 2 6/0/6/1 count ?; run 3 raw missing'],
+        ['a non-guard NO-VERDICT -> ? everywhere', [F64_RAW, F64_RAW, F64_RAW], l2Edit(L2_CI, l2Reason('old-generation GC in the window in run 2 (Mark-Compact)')), 'run 1 6/0/6/1 count ?; run 2 6/0/6/1 count ?; run 3 6/0/6/1 count ?'],
+        ['fail-closed control: no gcn mark / no end mark -> the mark named, no number', [F64_RAW_NOGCN, F64_RAW_NOEND, F64_RAW], l2Edit(L2_CI, L2_ZERO), 'run 1 no @@LITE-MARK gcn; run 2 no @@LITE-MARK end; run 3 6/0/6/1 count 12'],
+    ];
+    for (const [what, texts, stdout, want] of cases) withRaw(texts, (out) => assert.equal(f64Base(out, stdout, 3), H + want, what));
+    // the fail-closed control has teeth: its entries hold no digit at all past the run index
+    withRaw([F64_RAW_NOGCN], (out) => {
+        const e = f64Base(out, L2_CI, 1).slice(H.length);
+        assert.equal(e, 'run 1 no @@LITE-MARK gcn');
+        assert.doesNotMatch(e.slice('run 1 '.length), /\d/);
+    });
+    // never throws: no dir, no stdout, a directory where the raw file should be
+    assert.equal(f64Base(undefined, undefined, 2), H + 'run 1 raw missing; run 2 raw missing');
+    withRaw([], (out) => { mkdirSync(join(out, 'raw', 'driver', 'run.1.txt')); assert.equal(f64Base(out, null, 1), H + 'run 1 raw missing'); });
+    for (const [, texts, stdout] of cases) withRaw(texts, (out) => assert.ok(!f64Base(out, stdout, 3).includes('\n')));
+});
 // A8 (R20): the preload returns at once in a Worker (no fence, no count); the Worker's trace lines reach the trace only.
 // No t.diagnostic of r.diag here (b98 U8c T3 exemption): "the guard did not count" is this row's EXPECTED reason (D-WORKER
 // by design), not a guard sighting; r.msg still carries the dump into a failure message.
@@ -1598,10 +1772,188 @@ test('allocation-diff -h: the A4 Driver-contract paragraph (scalar replacement i
     });
 });
 
+// --- b100 Q-ADZ-NC (PLAN-GA TASK 4, ASSERTION 3): this file's OWN fake node + canned traces (a JS port of the GA-B1a
+// golden cells.sh, .handoff/frozen/b100-ga/golden/: the self-test's LS / LMC lines and win / rep / mkd shapes), matrix M
+// = 13 cells at --runs 3 plus -h. The fake node: --version v26.8.2, a --v8-options list, else (a run) a per-driver-dir run
+// counter n, cat ./trace.<n>.txt or ./trace.txt, and (with --require) the guard count on fd 3 (./count, else the GC lines
+// of that trace before gcn). Parity: `git show 6643647:allocation-diff.sh` (sha256/8 d7a6ec3e, tag v1.1.1) vs the live
+// root, same rig, same paths: 10 cells byte-identical (stdout, stderr, exit); the 3 --zero null-control cells differ in
+// exactly the reason (and for 311,312,312 the verdict) line; -h in exactly the TASK 2 header lines. History pin: skipped
+// when 6643647 is unreachable, FAILS under CI_STRICT (CI=true).
+const ZN_SHA = '6643647';
+const ZN_SHA8 = 'd7a6ec3e';
+const CI_STRICT = process.env.CI === 'true';
+const PKG = dirname(SCRIPT);
+const GITENV = (() => { const e = { ...ENV }; for (const k of Object.keys(e)) if (k.startsWith('GIT_')) delete e[k]; return e; })();
+const haveZn = skip ? 'POSIX hosts only' : (capSync('git', ['cat-file', '-e', `${ZN_SHA}^{commit}`], { cwd: PKG, env: GITENV }, 30000, 'git cat-file').status === 0 ? true : `commit ${ZN_SHA} not available (shallow clone?)`);
+const ZN_SKIP = skip || (haveZn === true || CI_STRICT ? false : haveZn);
+function znOldRoot(dir) {
+    if (haveZn !== true) assert.fail(`${haveZn} (CI=true: a history row fails, never skips)`);
+    const g = capSync('git', ['show', `${ZN_SHA}:allocation-diff.sh`], { cwd: PKG, env: GITENV, encoding: 'buffer' }, 30000, 'git show allocation-diff.sh');
+    assert.equal(g.status, 0, `git show ${ZN_SHA}:allocation-diff.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    assert.equal(createHash('sha256').update(g.stdout).digest('hex').slice(0, 8), ZN_SHA8);
+    const p = join(dir, 'old-allocation-diff.sh');
+    writeFileSync(p, g.stdout);
+    chmodSync(p, 0o755);
+    return p;
+}
+const ZN_LS = '[30520:0x7966000000]       39 ms: Scavenge 5.0 (6.1) -> 4.3 (6.6) MB, pooled: 0.0 MB, 0.48 / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; ';
+const ZN_LMC = '[71888:0x78e8000000]       15 ms: Mark-Compact 4.5 (5.4) -> 4.0 (5.4) MB, pooled: 0.0 MB, 1.03 / 0.00 ms (average mu = 0.921, current mu = 0.921) testing; GC in old space requested';
+const znRep = (l, n) => Array(n).fill(l).join('\n');
+const znWin = (b) => [A1_ST, b, A1_END, ZN_LS, A1_GCN].join('\n');
+const ZN_Z0 = [A1_ST, A1_END, ZN_LS, ZN_LS, A1_GCN].join('\n');
+// [dir, trace.txt, { run: trace.<run>.txt }, count]
+const ZN_DRV = [
+    ['y3', znWin(znRep(ZN_LS, 3))], ['y3b', znWin(znRep(ZN_LS, 3))], ['y5', znWin(znRep(ZN_LS, 5))], ['y1', znWin(ZN_LS)],
+    ['z0', ZN_Z0], ['p0', [A1_ST, A1_END, A1_GCN].join('\n')],
+    ['nc', znWin(znRep(ZN_LS, 3)), { 2: znWin(znRep(ZN_LS, 4)) }],
+    ['mc', znWin(ZN_LS + '\n' + ZN_LMC)],
+    ['d666', znWin(znRep(ZN_LS, 666))], ['e666', znWin(znRep(ZN_LS, 666)), { 3: znWin(znRep(ZN_LS, 667)) }],
+    ['glost', znWin(znRep(ZN_LS, 3)), {}, '5'],
+    ['z311', znWin(znRep(ZN_LS, 312)), { 1: znWin(znRep(ZN_LS, 311)) }],
+    ['z001', ZN_Z0, { 3: znWin(ZN_LS) }], ['z100', ZN_Z0, { 1: znWin(ZN_LS) }],
+    // the precedence row (GA-B1a reviewer nit 1): run 1 young 0, run 2 a young GC and a Mark-Compact in the window
+    ['z0mc', ZN_Z0, { 2: znWin(ZN_LS + '\n' + ZN_LMC) }],
+];
+const ZN_V8O = ['  --expose-gc (expose gc extension)', '        type: bool  default: --no-expose-gc',
+    '  --allow-natives-syntax (allow natives syntax)', '        type: bool  default: --no-allow-natives-syntax'];
+function znRig() {
+    const d = mkdtempSync(join(tmpdir(), 'ad-zn-'));
+    const bash = process.env.BASH && process.env.BASH.startsWith('/') ? process.env.BASH : '/bin/bash';
+    const fk = join(d, 'fk'); const dr = join(d, 'dr');
+    for (const x of [fk, dr, join(d, 'cwd'), join(d, 'tmp')]) mkdirSync(x);
+    writeFileSync(join(fk, 'node'), [`#!${bash}`, 'd=$(dirname "$0")',
+        "case \"$1\" in --version) echo v26.8.2; exit 0 ;; --v8-options) printf '%s\\n' " + ZN_V8O.map((l) => `'${l}'`).join(' ') + '; exit 0 ;; esac',
+        'c="$d/$(basename "$PWD").n"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$c"',
+        'req=""; pv=""', 'for a in "$@"; do if [ "$pv" = --require ]; then req=$a; fi; pv=$a; done',
+        'if [ -f "./trace.$n.txt" ]; then tf="./trace.$n.txt"; else tf=./trace.txt; fi', 'cat "$tf"',
+        'if [ -n "$req" ]; then',
+        "  if [ -f ./count ]; then cat ./count >&3; else awk '$0 == \"@@LITE-MARK gcn\" { exit } /\\[[0-9]+:0x/ { c++ } END { printf \"%d\\n\", c }' \"$tf\" >&3; fi",
+        'fi', 'exit 0', ''].join('\n'));
+    chmodSync(join(fk, 'node'), 0o755);
+    const drv = {};
+    for (const [name, text, per = {}, cnt] of ZN_DRV) {
+        const p = join(dr, name); mkdirSync(p);
+        writeFileSync(join(p, 'driver.js'), '');
+        writeFileSync(join(p, 'trace.txt'), text + '\n');
+        for (const [k, t] of Object.entries(per)) writeFileSync(join(p, `trace.${k}.txt`), t + '\n');
+        if (cnt !== undefined) writeFileSync(join(p, 'count'), cnt + '\n');
+        drv[name] = join(p, 'driver.js');
+    }
+    const run = (script, args) => {
+        for (const f of readdirSync(fk)) if (f.endsWith('.n')) rmSync(join(fk, f));
+        const r = capSync('bash', [script, ...args], { encoding: 'utf8', cwd: join(d, 'cwd'), env: { ...ENV, TMPDIR: join(d, 'tmp') } }, 120000, `${AD_RUN} ${basename(script)}`);
+        return { status: r.status, stdout: r.stdout, stderr: r.stderr, out: r.stdout + r.stderr, L: r.stdout.split('\n') };
+    };
+    return { d, drv, run, NO: '--node=' + join(fk, 'node'), done: () => rmSync(d, { recursive: true, force: true }) };
+}
+function withZn(fn) { const g = znRig(); try { return fn(g); } finally { g.done(); } }
+// [cell, args (after --node), exit, VERDICT] -- exit / verdict as the 6643647 root gives them (the GA-B1a golden rc list)
+const ZN_M = [
+    ['d-3v3', ['--runs', '3', 'y3', 'y3b'], 0, 'SAME'], ['d-3v5', ['--runs', '3', 'y3', 'y5'], 1, 'DIFF'],
+    ['d-nc', ['--runs', '3', 'y3', 'nc'], 2, 'NO-VERDICT'], ['d-666x3-e666', ['--runs', '3', 'd666', 'e666'], 2, 'NO-VERDICT'],
+    ['z-000', ['--runs', '3', '--zero', 'z0'], 0, 'ZERO'], ['z-111', ['--runs', '3', '--zero', 'y1'], 1, 'NONZERO'],
+    ['z-333', ['--runs', '3', '--zero', 'y3'], 1, 'NONZERO'], ['z-mc', ['--runs', '3', '--zero', 'mc'], 2, 'NO-VERDICT'],
+    ['z-glost', ['--runs', '3', '--zero', 'glost'], 2, 'NO-VERDICT'], ['z-p0', ['--runs', '3', '--zero', 'p0'], 2, 'NO-VERDICT'],
+    ['z-311-312-312', ['--runs', '3', '--zero', 'z311'], 2, 'NO-VERDICT'], ['z-001', ['--runs', '3', '--zero', 'z001'], 2, 'NO-VERDICT'],
+    ['z-100', ['--runs', '3', '--zero', 'z100'], 2, 'NO-VERDICT'],
+];
+const ZN_NV = '  NO-VERDICT -- driver: null control: ';
+// the 3 changed cells: [new exit, exact-once edits that turn the 6643647 stdout into the live root's]
+const ZN_CHANGED = {
+    'z-311-312-312': [1, [[ZN_NV + 'run 2 differs from run 1 (1 kind(s) differ, first: run 1 x311 | run 2 x312  Scavenge)\n', '  NONZERO -- young GC(s) in the window in every run (young per run 311,312,312)\n'],
+        ['VERDICT NO-VERDICT\n', 'VERDICT NONZERO\n']]],
+    'z-001': [2, [[ZN_NV + 'run 3 differs from run 1 (1 kind(s) differ, first: run 1 x0 | run 3 x1  Scavenge)\n', ZN_NV + 'run 3 differs from run 1 (--zero: run 1 young 0 | run 3 young 1)\n']]],
+    'z-100': [2, [[ZN_NV + 'run 2 differs from run 1 (1 kind(s) differ, first: run 1 x1 | run 2 x0  Scavenge)\n', ZN_NV + 'run 2 differs from run 1 (--zero: run 1 young 1 | run 2 young 0)\n']]],
+};
+// -h: the TASK 2 header lines (PLAN-GA spec item 5), "# " stripped as usage() strips it
+const znH = (ls) => ls.map((l) => l.replace(/^# ?/, '')).join('\n') + '\n';
+const ZN_HELP = [
+    [znH(['#   --zero             gate mode: exactly one DRIVER. No young GC in the window of run 1 (and every run equal to',
+        '#                      run 1) -> ZERO, exit 0; else NONZERO, exit 1. Takes no value. ZERO means less than one']),
+     znH(['#   --zero             gate mode: exactly one DRIVER. No young GC in the window in any run -> ZERO, exit 0; a young',
+        '#                      GC in the window in every run -> NONZERO, exit 1 (the counts may differ from run to run); in',
+        '#                      some runs only -> NO-VERDICT (null control), exit 2. Takes no value. ZERO means less than one'])],
+    [znH(['#   --runs N           node runs per side, 2..20 (default 5). Run 1 vs runs 2..N is the null control.']),
+     znH(['#   --runs N           node runs per side, 2..20 (default 5). Run 1 vs runs 2..N is the null control (with --zero:',
+        '#                      young 0 vs young >= 1 per run).'])],
+    [znH(['#   null control: run <k> differs from run 1 (<n> kind(s) differ, first: run 1 x<a> | run <k> x<b>  <kind>)']),
+     znH(['#   null control: run <k> differs from run 1 (<n> kind(s) differ, first: run 1 x<a> | run <k> x<b>  <kind>)',
+        '#   null control: run <k> differs from run 1 (--zero: run 1 young <a> | run <k> young <b>)   (--zero only: the first',
+        '#                                    run with young 0 where run 1 has young >= 1, or the reverse; the line above is',
+        '#                                    diff mode only)'])],
+    [znH(['#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ...";']),
+     znH(['#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ..." ("  NONZERO',
+        '#   -- young GC(s) in the window in every run (young per run <y1>,<y2>,..)" when the runs\' young multisets differ);'])],
+];
+const znVerdict = (r) => r.L.filter((l) => l.startsWith('VERDICT ')).join('|');
+function znParity(oldP, newP) {
+    return withZn((g) => {
+        const res = [];
+        for (const [cell, args, rc, v] of ZN_M) {
+            const a = args.map((x) => (g.drv[x] ? g.drv[x] : x));
+            const o = g.run(oldP, [g.NO, ...a]);
+            const n = g.run(newP, [g.NO, ...a]);
+            // the rig reproduces the golden cell on the old root (else a rig that broke every cell alike would pass)
+            assert.deepEqual([o.status, znVerdict(o)], [rc, 'VERDICT ' + v], `${cell} on ${ZN_SHA}\n${o.out}`);
+            assert.equal(o.stderr, '', `${cell} on ${ZN_SHA}: stderr`);
+            const ch = ZN_CHANGED[cell];
+            if (ch) {
+                assert.deepEqual([n.status, n.stdout, n.stderr], [ch[0], l2Edit(o.stdout, ch[1]), o.stderr], `${cell}: only the reason / verdict line differs\n${n.out}`);
+            } else {
+                assert.deepEqual([n.status, n.stdout, n.stderr], [o.status, o.stdout, o.stderr], `${cell}: byte-identical to ${ZN_SHA}\n${n.out}`);
+            }
+            res.push(cell);
+        }
+        const oh = g.run(oldP, ['-h']); const nh = g.run(newP, ['-h']);
+        assert.deepEqual([oh.status, nh.status, oh.stderr, nh.stderr], [2, 2, '', '']);
+        assert.equal(nh.stdout, l2Edit(oh.stdout, ZN_HELP), '-h: only the TASK 2 header lines differ');
+        return res;
+    });
+}
+test(`allocation-diff Q-ADZ-NC parity (fake node, history pin ${ZN_SHA}): ${ZN_M.length} matrix cells, ${ZN_M.length - Object.keys(ZN_CHANGED).length} byte-identical to git show ${ZN_SHA}:allocation-diff.sh, ${Object.keys(ZN_CHANGED).join(' / ')} differ in exactly the reason (and verdict) line, -h in exactly the TASK 2 lines`, { skip: ZN_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-znp-'));
+    try {
+        assert.equal(znParity(znOldRoot(dir), SCRIPT).length, 13);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test(`allocation-diff Q-ADZ-NC parity: revert check (the ${ZN_SHA} root on both sides) fails the row`, { skip: ZN_SKIP }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-znr-'));
+    try {
+        const p = znOldRoot(dir);
+        assert.throws(() => znParity(p, p), (e) => { if (capErr(e)) throw e; t.diagnostic('revert: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+// precedence (GA-B1a reviewer nit 1): the O-record check comes before the --zero class loop. --zero --runs 2, run 1 young 0,
+// run 2 a young GC + a Mark-Compact in the window -> exit 2, the old-generation reason naming run 2 (the class loop would
+// name the null control instead: M-orderO)
+const ZN_ORDER_NV = '  NO-VERDICT -- driver: old-generation GC in the window in run 2 (Mark-Compact)';
+function znOrderOk(script) {
+    withZn((g) => {
+        const r = g.run(script, [g.NO, '--runs', '2', '--zero', g.drv.z0mc]);
+        assert.equal(r.status, 2, r.out);
+        assert.equal(znVerdict(r), 'VERDICT NO-VERDICT', r.out);
+        const nv = r.L.filter((l) => l.startsWith('  NO-VERDICT -- '));
+        assert.deepEqual(nv, [ZN_ORDER_NV], `NO-VERDICT line(s) ${JSON.stringify(nv)}\n${r.out}`);
+        assert.equal(r.L.filter((l) => l.startsWith('  driver: run 1 young 0, old 0 in the window; ') && l.endsWith('; young per run 0,1')).length, 1, r.out);
+        assert.equal(r.stderr, '', r.out);
+    });
+}
+test('allocation-diff Q-ADZ-NC precedence (fake node): --zero, run 1 young 0, run 2 a Mark-Compact in the window -> exit 2 "old-generation GC in the window in run 2 (Mark-Compact)", never the null control', { skip }, () => {
+    znOrderOk(SCRIPT);
+});
+test('allocation-diff Q-ADZ-NC precedence: revert check (M-orderO, the --zero class loop above the O loop) fails the row', { skip }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-zno-'));
+    try {
+        const p = variant(dir, 'M-orderO', M_ORDER_O);
+        assert.throws(() => znOrderOk(p), (e) => { if (capErr(e)) throw e; t.diagnostic('M-orderO: ' + e.message.split('\n')[0]); return e instanceof assert.AssertionError; });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // --- anchors: every edit this file makes (mutants, wiring, Y7, -h and refusal teeth, the g3 live teeth) matches EXACTLY once in the script
 test('allocation-diff anchors: every mutant / wiring / Y7 / teeth anchor matches exactly once in allocation-diff.sh', () => {
     const all = [...MUTANTS.map((m) => [m[0], m[3]]), ...EW, Y7, ...HELP_TEETH, ...RF.flatMap((r) => r[2]), ...A1_TEETH, ...A1_OPEN_TEETH, A1_LIVE_TEETH,
-        ['M-preten-pin-live', M_PRETEN_PIN], ['M-worker-live', M_WORKER], ['M-r8-live', M_R8]];
+        ['M-preten-pin-live', M_PRETEN_PIN], ['M-worker-live', M_WORKER], ['M-r8-live', M_R8], ['M-orderO', M_ORDER_O]];
     assert.ok(all.length >= MUTANTS.length + 20);
     for (const [name, edits] of all) {
         for (const [from, to] of edits) {

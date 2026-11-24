@@ -8,6 +8,7 @@
 //   G-T2c die fragment: subshell guard, REPORT=/dev/null, REPORT unset, an unwritable report
 //   G-T3a allocation-diff, a backslash in the driver dir: head sha256/8 == node's slice (twin only where the host tool escapes)
 //   G-T4  five tools x {POSIXLY_CORRECT=1, POSIXLY_CORRECT=, SHELLOPTS=posix}: -h; one real allocation-diff --zero row
+//         (ZERO, or the ruled guard NO-VERDICT "trace lost 1 GC line" with young 0,0: Q-B97-L2ROW (a), canned pin + HEAD parity)
 //         (the twin and the `set +o posix` mutant exist on bash major < 4 only)
 //   G-T5  bytecode-budget / deopt-diff --driver import check: comments refused, real imports accepted, known limits pinned
 // Results: bash 3.2 macOS host only (CI legs bash 5 / uutils / other nodes are not claimed here).
@@ -288,11 +289,96 @@ function t4real(root) {
     const r = spawn(BASH, [join(root, ALLOC), '--node', process.execPath, '--runs', '2', '--zero', f], { cwd: d, env: cleanEnv({ POSIXLY_CORRECT: '1', PC_OUT: pc }) }, 'allocation-diff --zero (posix)', 120000);
     return { r, pc: existsSync(pc) ? readFileSync(pc, 'utf8') : null };
 }
-test('G-T4 real: allocation-diff --runs 2 --zero under POSIXLY_CORRECT=1 -> VERDICT ZERO (exit 0) and the driver sees process.env.POSIXLY_CORRECT === undefined', { skip }, () => {
+// G-T4 real verdict predicate (Q-B98-L2TWINS (a) / Q-B97-L2ROW (a); a local copy of the allocation-diff.test l2Ok /
+// audit-g3 a2Ok shape): 'zero' (exit 0, VERDICT ZERO) or 'guard1' (exit 2 whose ONLY NO-VERDICT reason is "trace lost 1
+// GC line in run k (guard count c, trace c-1)", k in [1-2]); either way the counts line reads run 1 young 0, old 0 and
+// young per run 0,0. Anything else throws AssertionError.
+const T4_COUNTS = /^ {2}driver: run 1 young 0, old 0 in the window; .*; young per run 0,0$/;
+const T4_GUARD1 = /^ {2}NO-VERDICT -- driver: trace lost 1 GC line in run ([1-2]) \(guard count (\d+), trace (\d+)\)$/;
+function t4Ok(r) {
+    const m = r.stdout.slice(-600) + r.stderr.slice(-300);
+    const L = lines(r.stdout);
+    assert.equal(L.filter((l) => T4_COUNTS.test(l)).length, 1, 'one counts line, young 0,0 / old 0\n' + m);
+    const v = L.filter((l) => l.startsWith('VERDICT ')).join('|');
+    const nv = L.filter((l) => l.startsWith('  NO-VERDICT -- '));
+    if (r.status === 0) {
+        assert.equal(v, 'VERDICT ZERO', m);
+        assert.equal(nv.length, 0, m);
+        return 'zero';
+    }
+    assert.equal(r.status, 2, `exit ${r.status} (want 0 ZERO or 2 "trace lost 1 GC line")\n${m}`);
+    assert.equal(v, 'VERDICT NO-VERDICT', m);
+    assert.equal(nv.length, 1, 'exactly one NO-VERDICT line\n' + m);
+    const x = T4_GUARD1.exec(nv[0]);
+    assert.ok(x, 'the only NO-VERDICT is "trace lost 1 GC line" in run 1 or 2\n' + m);
+    assert.equal(Number(x[3]), Number(x[2]) - 1, 'trace = guard count - 1\n' + m);
+    return 'guard1';
+}
+test('G-T4 real: allocation-diff --runs 2 --zero under POSIXLY_CORRECT=1 -> VERDICT ZERO (exit 0), or the ruled guard NO-VERDICT (exit 2, "trace lost 1 GC line", young 0,0; Q-B97-L2ROW (a)), and the driver sees process.env.POSIXLY_CORRECT === undefined', { skip }, (t) => {
     const { r, pc } = t4real(live.out);
+    assert.equal(pc, 'undefined');
+    const how = t4Ok(r);
+    if (how === 'guard1') t.diagnostic('G-T4 real accepted guard NO-VERDICT (Q-B98-L2TWINS (a) / Q-B97-L2ROW (a)): ' + lines(r.stdout).filter((l) => l.startsWith('  NO-VERDICT -- ') || T4_COUNTS.test(l)).join(' | '));
+});
+// canned pin (no spawn): a --runs 2 report shaped as the b96 CI sighting (137420421262 ubuntu-node26, run 1 guard count
+// 13, trace 12) cut to 2 runs; expected values come from the ruling text, not from running the tool
+const T4_NV = '  NO-VERDICT -- driver: trace lost 1 GC line in run 1 (guard count 13, trace 12)';
+const T4_CNT = '  driver: run 1 young 0, old 0 in the window; 12 GC line(s) before the fence, 6 after end; young per run 0,0';
+const t4Fx = (status, edits = []) => {
+    let s = ['allocation-diff  node v26.8.2  /opt/homebrew/bin/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)',
+        'driver  /tmp/t4real-1/driver.js  sha256/8 2b7a1c9e',
+        'mode    zero  runs 2  v8 flags --trace-gc --min-semi-space-size=1 --max-semi-space-size=1 --no-concurrent-recompilation --no-allocation-site-pretenuring',
+        '', T4_CNT, T4_NV, '', 'VERDICT NO-VERDICT', ''].join('\n');
+    for (const [from, to] of edits) {   // exact-once (split / join: no `$` expansion)
+        if (s.split(from).length !== 2) throw new Error(`t4Fx anchor matched ${s.split(from).length - 1} times: ${from}`);
+        s = s.split(from).join(to);
+    }
+    return { status, stdout: s, stderr: '' };
+};
+const T4_ZERO = [[T4_NV, '  ZERO -- no young GC in the window (every run equal to run 1)'], ['VERDICT NO-VERDICT', 'VERDICT ZERO']];
+const t4Why = (why) => [[T4_NV, '  NO-VERDICT -- driver: ' + why]];
+const t4Young = (cnt) => [[T4_CNT, cnt]];
+const T4_PASS = [
+    ['the guard1 sighting (run 1)', t4Fx(2), 'guard1'],
+    ['run 2 (guard count 14, trace 13)', t4Fx(2, t4Why('trace lost 1 GC line in run 2 (guard count 14, trace 13)')), 'guard1'],
+    ['a ZERO run', t4Fx(0, T4_ZERO), 'zero'],
+];
+const T4_FAIL = [
+    ['old-generation reason', t4Fx(2, t4Why('old-generation GC in the window in run 1 (Mark-Compact)'))],
+    ['no guard count', t4Fx(2, t4Why('no guard count in run 1'))],
+    ['null control reason', t4Fx(2, t4Why('null control: run 2 differs from run 1 (--zero: run 1 young 0 | run 2 young 1)'))],
+    ['trace lost 2 GC lines', t4Fx(2, t4Why('trace lost 2 GC lines in run 1 (guard count 14, trace 12)'))],
+    ['the guard did not count', t4Fx(2, t4Why('1 GC line in run 1 the guard did not count (guard count 12, trace 13)'))],
+    ['run 3 (out of [1-2])', t4Fx(2, t4Why('trace lost 1 GC line in run 3 (guard count 13, trace 12)'))],
+    ['trace != count - 1 (13, 11)', t4Fx(2, t4Why('trace lost 1 GC line in run 1 (guard count 13, trace 11)'))],
+    ['young per run 1,0', t4Fx(2, t4Young(T4_CNT.replace('young per run 0,0', 'young per run 1,0')))],
+    ['young per run 0,1', t4Fx(2, t4Young(T4_CNT.replace('young per run 0,0', 'young per run 0,1')))],
+    ['run 1 young 1', t4Fx(2, t4Young(T4_CNT.replace('run 1 young 0, old 0', 'run 1 young 1 [Scavenge 1], old 0')))],
+    ['run 1 old 1', t4Fx(2, t4Young(T4_CNT.replace('old 0 in the window', 'old 1 in the window')))],
+    ['young per run 0,0,0 (3 runs)', t4Fx(2, t4Young(T4_CNT.replace('young per run 0,0', 'young per run 0,0,0')))],
+    ['no counts line', t4Fx(2, t4Young(''))],
+    ['status 1', t4Fx(1)],
+    ['status 1 NONZERO', t4Fx(1, [[T4_NV, '  NONZERO -- 1 young GC(s) in the window (every run equal to run 1)'], ['VERDICT NO-VERDICT', 'VERDICT NONZERO']])],
+    ['status 2 with VERDICT ZERO', t4Fx(2, [['VERDICT NO-VERDICT', 'VERDICT ZERO']])],
+    ['status 0 with VERDICT NO-VERDICT', t4Fx(0, [T4_ZERO[0]])],
+    ['status 0, VERDICT ZERO, a NO-VERDICT line', t4Fx(0, [T4_ZERO[1]])],
+    ['two NO-VERDICT lines', t4Fx(2, [[T4_NV, T4_NV + '\n' + T4_NV.replace('in run 1', 'in run 2')]])],
+];
+test(`G-T4 real canned pin (no spawn): t4Ok -> ${T4_PASS.length} fixtures pass ('guard1' / 'zero'), ${T4_FAIL.length} throw AssertionError (other reasons, run 3, 2 lines lost, young != 0, exit 1, verdict / status mismatch, two NO-VERDICT)`, (t) => {
+    for (const [n, fx, want] of T4_PASS) assert.equal(t4Ok(fx), want, n);
+    for (const [n, fx] of T4_FAIL) {
+        assert.throws(() => t4Ok(fx), (e) => { t.diagnostic(`refused ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+    }
+});
+// parity: the HEAD (6643647) G-T4 real verdict body, inlined: it throws on the guard1 fixture t4Ok accepts
+function t4Strict(r) {
     assert.equal(r.status, 0, r.stdout.slice(-300) + r.stderr.slice(-300));
     assert.ok(lines(r.stdout).includes('VERDICT ZERO'), r.stdout.slice(-300));
-    assert.equal(pc, 'undefined');
+}
+test('G-T4 real parity (no spawn): the HEAD strict body (status 0 + VERDICT ZERO) throws on the guard1 fixture and passes the ZERO fixture; t4Ok accepts both', () => {
+    assert.throws(() => t4Strict(t4Fx(2)), assert.AssertionError);
+    t4Strict(t4Fx(0, T4_ZERO));
+    assert.deepEqual([t4Ok(t4Fx(2)), t4Ok(t4Fx(0, T4_ZERO))], ['guard1', 'zero']);
 });
 test(`G-T4 real twin: the ${OLD_SHA} allocation-diff exits 2 with "syntax error" under POSIXLY_CORRECT=1 (red on old; bash < 4 only)`, { skip: skip || posixSkip || OLDSKIP }, () => {
     const { r, pc } = t4real(oldRoots());

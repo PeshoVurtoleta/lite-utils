@@ -1,12 +1,13 @@
 // test/audit-g3.test.mjs -- b63 lane g3, helper H: the allocation-diff.sh rows of .handoff/lanes/g3/PLAN-b63-g3.md ASSERTIONS
 // A1-A10 (ADDENDUM A4: tool selected by AD_G3_ROOT, no in-test git history; ADDENDUM A5: the mutant twin of A1 is the coder's,
 // in test/allocation-diff.test.mjs). Oracle: the PLAN text (refusal die texts of TASK 1 / TASK 4, NO-VERDICT shapes, exit
-// codes, -h phrases, self-test count 83, the heredoc +1 line), never what a root printed. Tool under test: the repo-root
+// codes, -h phrases, self-test count 85, the heredoc +1 line), never what a root printed. Tool under test: the repo-root
 // allocation-diff.sh, or the file named by AD_G3_ROOT (an absolute path; e.g. the frozen build
 // .handoff/frozen/b63-g3/allocation-diff.sh, sha256/8 e0b55101). Every behaviour row (A1 A4 A5 A6 A7 A8 A10) must FAIL on
 // that frozen build; the controls (A2 A3 A9) must pass on it.
 //   A1  D-LIT --zero --runs 3: exit 1 or 2, no VERDICT ZERO, run 1 young >= 1, head ends with the pretenuring pin
-//   A2  D-F64 --zero --runs 3: exit 0 VERDICT ZERO, or the accepted guard NO-VERDICT exit 2 ('trace lost 1 GC line', Q-B98-L2TWINS (a)); young 0 in every run, old 0 (control)
+//   A2  D-F64 --zero --runs 3: exit 0 VERDICT ZERO, or the accepted guard NO-VERDICT exit 2 ('trace lost 1 GC line', Q-B98-L2TWINS (a)); young 0 in every run, old 0 (control);
+//       run with --out under mk(): one BASEDIAG t.diagnostic per invocation (Q-B100-BASEDIAG (a)), canned-pinned on the 45133611956 dump
 //   A3  retention: 3 invocations, TMPDIR a fresh dir: 0 entries left; the driver dir holds only driver.js (control)
 //   A4  --v8-flags refusals (pretenuring x3 spellings, stress-concurrent-inlining x3): exit 2, exactly one die line, 0 spawns
 //   A5  --node <d>/a=b/node: exit 2, the R26 die text, 0 spawns
@@ -14,7 +15,7 @@
 //   A7  darwin only: the same with GREP_OPTIONS=-P and the real grep
 //   A8  D-WORKER --zero --runs 2: exit 2, NO-VERDICT "the guard did not count", never "@@LITE-MARK gcn"
 //   A9  D-FORK --zero --runs 2: exit 2, "@@LITE-MARK gcn given twice" (control)
-//   A10 the gcn heredoc = the old 1989-byte heredoc + one line before `const v8`; -h phrases; --self-test 83 ok
+//   A10 the gcn heredoc = the old 1989-byte heredoc + one line before `const v8`; -h phrases; --self-test 85 ok
 // Drivers are inlined (.handoff/ and audit/ are gitignored and absent on CI). Fixtures: private dirs under one mkdtemp top
 // (removed in after()). Every child is capSync'd. No timing assertions. Counts (GC events) only: DETERMINISTIC tier.
 import { test, before, after, beforeEach } from 'node:test';
@@ -247,8 +248,60 @@ function a2Ok(r) {
 }
 const a2Lines = (r) => { const ls = r.stdout.split('\n'); return `${ls.find((l) => l.startsWith('  NO-VERDICT -- '))} | ${ls.find((l) => /^ {2}driver: run 1 young/.test(l))}`; };
 
+// BASEDIAG (Q-B100-BASEDIAG (a)): ONE line per tool invocation, built from <out>/raw/driver/run.<k>.txt, so every CI leg
+// records its D-F64 baseline with no download: `D-F64 baseline (<ver> <plat>/<arch>): run k a/b/c/d count C; ...` where
+// a/b/c/d = GC lines before @@LITE-MARK start / start..end / end..gcn / after gcn (the guardDump stretch counter of
+// test/allocation-diff.test.mjs, a local copy). C = the guard NO-VERDICT's guard count for its run (`none` for "no guard
+// count"), g = a+b+c for the runs judge's guard loop passed, `?` after the guard NO-VERDICT run and on every other
+// outcome (a non-guard NO-VERDICT, or no VERDICT ZERO / NONZERO line). An unreadable raw file reads `run k raw missing`;
+// a raw text missing a mark reads `run k no @@LITE-MARK <mark>` (no number). Never throws.
+const BD_GC = /^\[\d+:0x[0-9a-f]+\]/;
+const BD_MARKS = ['@@LITE-MARK start', '@@LITE-MARK end', '@@LITE-MARK gcn'];
+const BD_NV = /^ {2}NO-VERDICT -- driver: (.*)$/;
+const BD_GUARD = [/^trace lost \d+ GC lines? in run (\d+) \(guard count (\d+), trace \d+\)$/, /^\d+ GC lines? in run (\d+) the guard did not count \(guard count (\d+), trace \d+\)$/, /^no guard count in run (\d+)()$/];
+function bdStretch(txt) {
+    const L = String(txt).split('\n');
+    if (L.length && L[L.length - 1] === '') L.pop();
+    const n = [0, 0, 0, 0];
+    let seg = 0;
+    for (let i = 0; i < L.length; i++) {
+        if (seg < 3 && L[i] === BD_MARKS[seg]) { seg++; continue; }
+        if (BD_GC.test(L[i])) n[seg]++;
+    }
+    return { n, seg };
+}
+// readRun(k) -> the raw text of run k, or throws; runs = the --runs value
+function baseDiag(stdout, readRun, runs) {
+    const head = `D-F64 baseline (${process.version} ${process.platform}/${process.arch}): `;
+    try {
+        let nvK = 0, nvC = '?', pre = false;   // nvK 0: judge's guard loop passed every run
+        const nvL = String(stdout).split('\n').map((l) => BD_NV.exec(l)).find((m) => m) || null;
+        if (nvL !== null) {
+            const g = BD_GUARD.map((re) => re.exec(nvL[1])).find((m) => m) || null;
+            if (g !== null) { nvK = Number(g[1]); nvC = g[2] === '' ? 'none' : g[2]; }
+            else pre = true;
+        } else if (!/^VERDICT (ZERO|NONZERO)$/m.test(String(stdout))) pre = true;
+        const parts = [];
+        for (let k = 1; k <= runs; k++) {
+            let txt;
+            try { txt = readRun(k); } catch { parts.push(`run ${k} raw missing`); continue; }
+            if (typeof txt !== 'string') { parts.push(`run ${k} raw missing`); continue; }
+            const { n, seg } = bdStretch(txt);
+            if (seg < 3) { parts.push(`run ${k} no ${BD_MARKS[seg]}`); continue; }
+            const c = pre ? '?' : nvK === 0 || k < nvK ? String(n[0] + n[1] + n[2]) : k === nvK ? nvC : '?';
+            parts.push(`run ${k} ${n.join('/')} count ${c}`);
+        }
+        return head + parts.join('; ');
+    } catch (e) {
+        return head + 'not read (' + String(e && e.message ? e.message : e).split('\n')[0] + ')';
+    }
+}
+const bdRead = (out) => (k) => readFileSync(join(out, 'raw', 'driver', `run.${k}.txt`), 'latin1');
+
 test('A2 D-F64 --zero --runs 3: ZERO or the ruled guard NO-VERDICT (trace lost 1 GC line), young 0 in each run, old 0 (control, same on old)', { skip: nodeSkip }, (t) => {
-    const r = run(driverDir(D_F64), ['--zero', '--runs', '3']);
+    const out = join(mk('a2out'), 'out');   // made by the tool; the raw traces feed the BASEDIAG line
+    const r = run(driverDir(D_F64), ['--zero', '--runs', '3', '--out', out]);
+    t.diagnostic(baseDiag(r.stdout, bdRead(out), 3));
     const how = a2Ok(r);
     if (how === 'guard1') t.diagnostic('A2 accepted guard NO-VERDICT (Q-B98-L2TWINS (a) / Q-B97-L2ROW (a)): ' + a2Lines(r));
 });
@@ -299,6 +352,53 @@ test('A2 canned pin: guard1 sightings pass, everything else fails (no spawn)', (
     // parity: the HEAD body refuses the CI sighting and accepts a ZERO run
     assert.throws(() => a2Strict(a2Fix()), assert.AssertionError);
     a2Strict(zero);
+});
+
+// BASEDIAG canned pin (no spawn). Fixture: raw/driver/run.1.txt of CI run 45133611956 (ubuntu-latest node v26.13.1, the
+// L2 guard dump: marks at line start 7 end 8 gcn 15 of 16; lines 5-16 verbatim from the dump, lines 1-4 = the 4 GC lines
+// the dump cut, rebuilt in the same grammar). Expected values come from the dump's counts line (before start 6,
+// start..end 0, end..gcn 6, after gcn 1; guard count 13), not from running the helper.
+const BD_L = (ms, a, b, c, d, t) => `[3171108:0x2f326000]       ${ms} ms: Scavenge ${a} (${b}) -> ${c} (${d}) MB, pooled: 0.0 MB, ${t} / 0.00 ms (average mu = 1.000, current mu = 1.000) allocation failure; `;
+const BD_DUP = BD_L(73, '8.2', '10.3', '7.3', '10.3', '0.23');
+const BD_CI = [BD_L(41, '1.0', '1.8', '0.9', '2.8', '0.61'), BD_L(44, '2.0', '2.8', '1.9', '3.8', '0.55'), BD_L(47, '3.9', '5.8', '3.8', '6.0', '1.10'),
+    BD_L(50, '6.1', '7.8', '6.0', '8.8', '1.75'), BD_L(52, '7.1', '8.8', '7.1', '9.0', '1.92'), BD_L(54, '7.5', '9.0', '7.2', '9.8', '1.48'),
+    '@@LITE-MARK start', '@@LITE-MARK end',
+    BD_L(63, '8.1', '10.3', '7.3', '10.3', '0.48'), BD_L(65, '8.2', '10.3', '7.3', '10.3', '0.28'), BD_L(67, '8.2', '10.3', '7.3', '10.3', '0.20'),
+    BD_L(69, '8.2', '10.3', '7.3', '10.3', '0.19'), BD_L(71, '8.2', '10.3', '7.3', '10.3', '0.18'), BD_DUP,
+    '@@LITE-MARK gcn', BD_DUP, ''].join('\n');
+const BD_CLEAN = BD_CI.split(`@@LITE-MARK gcn\n${BD_DUP}\n`).join('@@LITE-MARK gcn\n');   // 6/0/6/0: the run judge passed
+const BD_HEAD = `D-F64 baseline (${process.version} ${process.platform}/${process.arch}): `;
+const bdFrom = (m) => (k) => { if (!(k in m)) throw new Error(`ENOENT run.${k}.txt`); return m[k]; };
+test('A2 BASEDIAG canned pin (no spawn): the 45133611956 dump reads "run 1 6/0/6/1 count 13"; one line; no gcn mark prints no number; never throws', () => {
+    assert.equal(bdStretch(BD_CI).n.join('/'), '6/0/6/1');
+    assert.equal(BD_CI.split('\n').length - 1, 16, 'the dump fixture holds 16 lines');
+    // the CI sighting: run 1 is the NO-VERDICT run (its guard count), runs 2..3 come after it
+    const ci = baseDiag(a2Fix().stdout, bdFrom({ 1: BD_CI, 2: BD_CLEAN, 3: BD_CLEAN }), 3);
+    assert.equal(ci, BD_HEAD + 'run 1 6/0/6/1 count 13; run 2 6/0/6/0 count ?; run 3 6/0/6/0 count ?');
+    // a NO-VERDICT in run 2: run 1 passed the guard loop (g = a+b+c), run 3 is `?`
+    const r2 = a2Fix({ reason: 'trace lost 1 GC line in run 2 (guard count 13, trace 12)' }).stdout;
+    assert.equal(baseDiag(r2, bdFrom({ 1: BD_CLEAN, 2: BD_CI, 3: BD_CLEAN }), 3), BD_HEAD + 'run 1 6/0/6/0 count 12; run 2 6/0/6/1 count 13; run 3 6/0/6/0 count ?');
+    // ZERO: every run passed; a missing raw file reads "raw missing"
+    const zero = a2Fix({ status: 0, reason: null, verdict: 'ZERO' }).stdout;
+    assert.equal(baseDiag(zero, bdFrom({ 1: BD_CLEAN, 3: BD_CLEAN }), 3), BD_HEAD + 'run 1 6/0/6/0 count 12; run 2 raw missing; run 3 6/0/6/0 count 12');
+    // "no guard count": its run reads `none`; a NO-VERDICT that precedes the guard loop leaves every count `?`
+    assert.equal(baseDiag(a2Fix({ reason: 'no guard count in run 1' }).stdout, bdFrom({ 1: BD_CLEAN }), 1), BD_HEAD + 'run 1 6/0/6/0 count none');
+    assert.equal(baseDiag(a2Fix({ reason: 'driver exited 1 in run 2' }).stdout, bdFrom({ 1: BD_CLEAN, 2: BD_CLEAN }), 2), BD_HEAD + 'run 1 6/0/6/0 count ?; run 2 6/0/6/0 count ?');
+    assert.equal(baseDiag(a2Fix({ reason: 'old-generation GC in the window in run 2 (Mark-Compact)' }).stdout, bdFrom({ 1: BD_CLEAN, 2: BD_CLEAN, 3: BD_CLEAN }), 3), BD_HEAD + 'run 1 6/0/6/0 count ?; run 2 6/0/6/0 count ?; run 3 6/0/6/0 count ?');
+    assert.equal(baseDiag('', bdFrom({ 1: BD_CLEAN }), 1), BD_HEAD + 'run 1 6/0/6/0 count ?');
+    // fail-closed control: a raw text with no gcn mark (or no end / start mark) prints no number for that run
+    const noGcn = BD_CI.split('@@LITE-MARK gcn\n').join('');
+    for (const [txt, mark] of [[noGcn, 'gcn'], [BD_CI.split('@@LITE-MARK end\n').join(''), 'end'], ['', 'start']]) {
+        const d = baseDiag(a2Fix().stdout, bdFrom({ 1: txt }), 1);
+        assert.equal(d, BD_HEAD + `run 1 no @@LITE-MARK ${mark}`);
+        assert.ok(!/\d/.test(d.slice(BD_HEAD.length + 'run 1'.length)), `a number after "run 1": ${d}`);
+    }
+    // exactly one line; never throws (a throwing reader, a non-string read, a null stdout)
+    for (const d of [ci, baseDiag(null, () => { throw new Error('x'); }, 3), baseDiag(undefined, () => 7, 2)]) {
+        assert.equal(d.split('\n').length, 1, d);
+        assert.ok(d.startsWith(BD_HEAD), d);
+    }
+    assert.equal(baseDiag(undefined, () => 7, 2), BD_HEAD + 'run 1 raw missing; run 2 raw missing');
 });
 
 test('A3 retention: 3 runs of the tool leave TMPDIR empty and the driver dir with only driver.js (control)', { skip: nodeSkip }, () => {
@@ -413,10 +513,10 @@ test('A10 -h: exit 2; each new phrase exactly once, the old workers phrase never
     assert.equal(count(o, 'allocation in workers or other isolates'), 0);
 });
 
-test('A10 --self-test: exit 0, last line "self-test: 83 check(s) ok", no FAIL line', { skip }, () => {
+test('A10 --self-test: exit 0, last line "self-test: 85 check(s) ok", no FAIL line', { skip }, () => {
     const r = spawn(BASH, [TOOL, '--self-test'], { cwd: mk('st'), env: cleanEnv({ TMPDIR: mk('sttmp') }) }, 'allocation-diff --self-test', 600000);
     const ls = r.stdout.split('\n').filter((l) => l !== '');
     assert.equal(r.status, 0, msg(r).slice(-1500));
-    assert.equal(ls[ls.length - 1], 'self-test: 83 check(s) ok');
+    assert.equal(ls[ls.length - 1], 'self-test: 85 check(s) ok');
     assert.ok(!ls.some((l) => l.startsWith('FAIL ')), 'a FAIL line');
 });
