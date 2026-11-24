@@ -6,7 +6,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,6 +34,18 @@ after(() => { for (const d of DIRS) rmSync(d, { recursive: true, force: true });
 const C6 = ['--n', '1000000', '--windows', '3'];
 const T = ['--n', '100000', '--windows', '3', '--warm', '0'];
 const why = (r) => `exit ${r.status} signal ${r.signal}\n--- stdout:\n${String(r.stdout).slice(0, 2000)}\n--- stderr:\n${String(r.stderr).slice(0, 2000)}`;
+// b101 G-B (Q-B99-FIXA3 (a), Q-B100-GBSWEEP (a), Q-B100-GBLANE (a)): a live row whose point is not the measurement accepts
+// "exit 0, or a sole selfCheck VOID". scVoidOnly(r): exit 2 by itself (no signal), exactly ONE stderr line holds
+// `NO VERDICT`, and it is the run-mode selfCheck VOID text (src scRowMiss 'VOID in window ...' -> run() 'selfCheck: ' +
+// reason + ' (no lane measured)' -> report() 'alloc-per-op: NO VERDICT: ' + r). The --self-test form (no suffix) and a
+// lane VOID ('VOID: lane k, ...') are refused. Pinned by the no-spawn row after A3.
+const SC_VOID_RE = /^alloc-per-op: NO VERDICT: selfCheck: (?:positive|negative): VOID in window \d+ \([1-9]\d* VOID window\(s\); C-11: a VOID anywhere is a miss\) \(no lane measured\)$/;
+function scVoidOnly(r) {
+    if (r.signal !== null || r.status !== 2) return false;
+    const nv = String(r.stderr).split('\n').filter((l) => l.includes('NO VERDICT'));
+    return nv.length === 1 && SC_VOID_RE.test(nv[0]);
+}
+const scVoidLine = (r) => String(r.stderr).split('\n').find((l) => l.includes('NO VERDICT'));
 
 // bench(src) -> path of a fresh bench file in its own dir
 function bench(src, name = 'bench.mjs') {
@@ -71,9 +83,15 @@ test('A1(b) setup adds a box lane `added` to f64 k: rows [k, added], exit 1 [SNA
     assert.equal(r.status, 1, why(r));
     assert.deepEqual(rowsOf(r), ['k', 'added']);
 });
-test('A1(c) `lanes = {}` filled by setup with f64, --max 1: exit 0 PASS, f64 reads under 1 B/op [SNAP-red: exit 2 "is empty"]', () => {
+test('A1(c) `lanes = {}` filled by setup with f64, --max 1: exit 0 PASS, f64 reads under 1 B/op, or a sole selfCheck VOID with floor null [SNAP-red: exit 2 "is empty"]', (t) => {
     const { dir, p } = bench(F64 + 'export const lanes = {};\nexport function setup() { lanes.k = f64; }\n');
     const r = run(['--json', ...C6, '--max', '1', p], dir);
+    // loadBench and selectLanes run before selfCheck: "is empty" is a different reason, so the VOID branch still kills SNAP
+    if (scVoidOnly(r)) {
+        t.diagnostic('selfCheck VOID NO VERDICT accepted (Q-B100-GBSWEEP (a)): ' + scVoidLine(r));
+        assert.equal(lastJson(r).floor, null, why(r));
+        return;
+    }
     assert.equal(r.status, 0, why(r));
     const row = lastJson(r).benches[0].rows[0];
     assert.equal(row.lane, 'k');
@@ -142,11 +160,13 @@ test('A3 a bench that imports TOOL?again=1 during a run: exit 2, stdout \'\', "i
     assert.equal(String(r.stdout), '', why(r));
     assert.match(String(r.stderr), /import threw: the tool file was imported again/, why(r));
 });
-test('A3 the direct run sets the key: setup prints it, stderr has "APO-KEY true" (kills M10) [SNAP-red: undefined]', () => {
+test('A3 the direct run sets the key: setup prints it, stderr has "APO-KEY true"; exit 0 or a sole selfCheck VOID (kills M10) [SNAP-red: undefined]', (t) => {
     const { dir, p } = bench(F64 + `export const lanes = { k: f64 };\nexport function setup() { process.stderr.write('APO-KEY ' + globalThis[Symbol.for(${JSON.stringify(KEY_NAME)})] + '\\n'); }\n`);
     const r = run([...T, p], dir, { nodeFlags: ['--expose-gc'] });
-    assert.equal(r.status, 0, why(r));
+    // setup runs before selfCheck (CI log b98 :4931), so the key line is checked on both branches (M10 is killed on both)
     assert.match(String(r.stderr), /^APO-KEY true$/m, why(r));
+    if (scVoidOnly(r)) t.diagnostic('selfCheck VOID NO VERDICT accepted (Q-B99-FIXA3 (a)): ' + scVoidLine(r));
+    else assert.equal(r.status, 0, why(r));
 });
 test('A3 in-process import of TOOL and TOOL?twice=1: both resolve, the key stays undefined (kills M9) [SNAP-green by design]', () => {
     const dir = mkdir();
@@ -156,11 +176,55 @@ test('A3 in-process import of TOOL and TOOL?twice=1: both resolve, the key stays
     assert.equal(r.status, 0, why(r));
     assert.match(String(r.stdout), /^KEY undefined$/m, why(r));
 });
-test('A3 `--lane -x` on a lane named -x, T: exit 0, rows [-x] (kills M-LD) [SNAP-green by design]', () => {
+test('A3 `--lane -x` on a lane named -x, T: exit 0, rows [-x], or a sole selfCheck VOID with floor null (kills M-LD) [SNAP-green by design]', (t) => {
     const { dir, p } = bench(F64 + "export const lanes = { '-x': f64 };\n");
     const r = run(['--json', ...T, '--lane', '-x', p], dir, { nodeFlags: ['--expose-gc'] });
+    // parseArgs / selectLanes run before selfCheck: a refused `-x` is a different reason, so the VOID branch still kills M-LD
+    if (scVoidOnly(r)) {
+        t.diagnostic('selfCheck VOID NO VERDICT accepted (Q-B100-GBSWEEP (a)): ' + scVoidLine(r));
+        assert.equal(lastJson(r).floor, null, why(r));
+        return;
+    }
     assert.equal(r.status, 0, why(r));
     assert.deepEqual(rowsOf(r), ['-x']);
+});
+
+// b101 G-B pin (no spawn): scVoidOnly against canned results. PASS = the b98 CI vector (macos node 24, run 137526351987,
+// log :4931-4932, prefixes cut: .handoff/b100/evidence/gb-void-vector.txt) and a negative-VOID variant; FAIL = 13 vectors
+// that must stay red. Plus the TOOL-text pin: the three fragments that build the accepted line are present in TOOL.
+const SC_VOID_CI = 'alloc-per-op: NO VERDICT: selfCheck: positive: VOID in window 0 (1 VOID window(s); C-11: a VOID anywhere is a miss) (no lane measured)';
+const SC_VOID_NEG = 'alloc-per-op: NO VERDICT: selfCheck: negative: VOID in window 2 (2 VOID window(s); C-11: a VOID anywhere is a miss) (no lane measured)';
+const SC_PASS = [
+    ['b98 CI vector (positive VOID)', { status: 2, signal: null, stderr: 'APO-KEY true\n' + SC_VOID_CI + '\n' }],
+    ['negative VOID', { status: 2, signal: null, stderr: 'APO-KEY true\n' + SC_VOID_NEG + '\n' }],
+];
+const SC_FAIL = [
+    ['VOID line + an uncaught line', { status: 2, signal: null, stderr: SC_VOID_CI + '\nalloc-per-op: NO VERDICT: uncaught: Error: x\n' }],
+    ['positive box-peak miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: box peak 3 B/op < POS_MIN_BPO 8 (the harness does not see a box) (no lane measured)\n' }],
+    ['positive window-null miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: window 1 is null (not a finite number) (no lane measured)\n' }],
+    ['negative band miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: negative: empty peak 9 B/op outside [-1, 2] (no lane measured)\n' }],
+    ['fence miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: fence: recorded 0 < forced 1 (the GC fence does not see a forced GC) (no lane measured)\n' }],
+    ['exit 1 with the VOID line', { status: 1, signal: null, stderr: SC_VOID_CI + '\n' }],
+    ['exit 2, empty stderr', { status: 2, signal: null, stderr: '' }],
+    ['exit 2, only APO-KEY true', { status: 2, signal: null, stderr: 'APO-KEY true\n' }],
+    ['status null / SIGKILL with the VOID line', { status: null, signal: 'SIGKILL', stderr: SC_VOID_CI + '\n' }],
+    ['the --self-test form (no suffix)', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: VOID in window 0 (1 VOID window(s); C-11: a VOID anywhere is a miss)\n' }],
+    ['a lane VOID', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: VOID: lane k, 1 VOID window(s), first window 0\n' }],
+    ['prefixed VOID line', { status: 2, signal: null, stderr: 'x ' + SC_VOID_CI + '\n' }],
+    ['suffixed VOID line', { status: 2, signal: null, stderr: SC_VOID_CI + ' x\n' }],
+];
+test('G-B pin: scVoidOnly accepts 2/2 canned selfCheck VOID results and refuses 13/13 others; TOOL holds the 3 producer fragments (no spawn)', () => {
+    for (const [name, r] of SC_PASS) assert.equal(scVoidOnly(r), true, `PASS vector "${name}" must be accepted`);
+    for (const [name, r] of SC_FAIL) assert.equal(scVoidOnly(r), false, `FAIL vector "${name}" must be refused`);
+    assert.equal(SC_PASS.length, 2);
+    assert.equal(SC_FAIL.length, 13);
+    assert.ok(existsSync(TOOL), `TOOL ${TOOL} does not exist (null is not zero)`);
+    const text = readFileSync(TOOL, 'utf8');
+    for (const frag of [
+        "return 'VOID in window ' + row.voidAt + ' (' + row.voids + ' VOID window(s); C-11: a VOID anywhere is a miss)';",
+        "reasons.push('selfCheck: ' + sc.reason + ' (no lane measured)');",
+        "for (const r of reasons) process.stderr.write('alloc-per-op: NO VERDICT: ' + r + '\\n');",
+    ]) assert.ok(text.includes(frag), `TOOL ${TOOL} lacks the producer fragment: ${frag}`);
 });
 
 // ================= A4: -h text (stays red until batch A2 lands) =================

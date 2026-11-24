@@ -72,6 +72,24 @@ function spyLines(spy) {
     return readFileSync(spy, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
 }
 const why = (r) => `exit ${r.status} signal ${r.signal}\n--- stdout:\n${String(r.stdout).slice(0, 2000)}\n--- stderr:\n${String(r.stderr).slice(0, 2000)}`;
+// b101 G-B (Q-B99-FIXA3 (a), Q-B100-GBSWEEP (a), Q-B100-GBLANE (a)): a live row whose point is not the measurement accepts
+// "exit 0, or a sole selfCheck VOID". scVoidOnly(r): exit 2 by itself (no signal), exactly ONE stderr line holds
+// `NO VERDICT`, and it is the run-mode selfCheck VOID text (src scRowMiss 'VOID in window ...' -> run() 'selfCheck: ' +
+// reason + ' (no lane measured)' -> report() 'alloc-per-op: NO VERDICT: ' + r; a re-spawned child's stderr is inherited
+// and the parent adds no line for a child exit 2). The --self-test form (no suffix) and a lane VOID ('VOID: lane k, ...')
+// are refused. Pinned by the no-spawn G-B pin row after TASK 3; the TOOL-text pin is in alloc-per-op-fixa.test.mjs.
+const SC_VOID_RE = /^alloc-per-op: NO VERDICT: selfCheck: (?:positive|negative): VOID in window \d+ \([1-9]\d* VOID window\(s\); C-11: a VOID anywhere is a miss\) \(no lane measured\)$/;
+function scVoidOnly(r) {
+    if (r.signal !== null || r.status !== 2) return false;
+    const nv = String(r.stderr).split('\n').filter((l) => l.includes('NO VERDICT'));
+    return nv.length === 1 && SC_VOID_RE.test(nv[0]);
+}
+const scVoidLine = (r) => String(r.stderr).split('\n').find((l) => l.includes('NO VERDICT'));
+// exit 0, or a sole selfCheck VOID (one t.diagnostic on the VOID branch)
+function okOrScVoid(t, r) {
+    if (scVoidOnly(r)) t.diagnostic('selfCheck VOID NO VERDICT accepted (Q-B100-GBSWEEP (a)): ' + scVoidLine(r));
+    else assert.equal(r.status, 0, why(r));
+}
 function lastJson(r) {
     const lines = String(r.stdout).split('\n').filter((l) => l.trim() !== '');
     assert.ok(lines.length >= 1, `stdout is empty, no JSON line\n${why(r)}`);
@@ -195,9 +213,9 @@ test('C-20 parseArgs accepts `--self-test` and `--self-test --json`; `--self-tes
 });
 
 // ================= A3 one re-spawn, execArgv passed on =================
-test('A3 valid f64 run: exit 0, exactly 2 spy lines; line 2 child "1", ppid = line 1 pid, execArgv holds the spy import and --expose-gc, not --no-concurrent-recompilation (kills: execArgv dropped, flag forced)', () => {
+test('A3 valid f64 run: exit 0 (or a sole selfCheck VOID), exactly 2 spy lines; line 2 child "1", ppid = line 1 pid, execArgv holds the spy import and --expose-gc, not --no-concurrent-recompilation (kills: execArgv dropped, flag forced)', (t) => {
     const { r, spy } = measured(['--n', '100000', '--windows', '3', '--warm', '0', A]);
-    assert.equal(r.status, 0, why(r));
+    okOrScVoid(t, r);
     const L = spyLines(spy);
     assert.equal(L.length, 2, 'parent + one re-spawned child (the control: the spy sees real children)');
     assert.equal(L[0].child, null);
@@ -207,9 +225,9 @@ test('A3 valid f64 run: exit 0, exactly 2 spy lines; line 2 child "1", ppid = li
     assert.ok(L[1].execArgv.includes('--expose-gc'), 'the child is started with --expose-gc');
     assert.ok(!L[1].execArgv.includes('--no-concurrent-recompilation'), 'the flag is never forced');
 });
-test('A3 caller passes --expose-gc: no re-spawn, exactly 1 spy line, exit 0', () => {
+test('A3 caller passes --expose-gc: no re-spawn, exactly 1 spy line, exit 0 (or a sole selfCheck VOID)', (t) => {
     const { r, spy } = measured(['--n', '100000', '--windows', '3', '--warm', '0', A], { nodeFlags: ['--expose-gc'] });
-    assert.equal(r.status, 0, why(r));
+    okOrScVoid(t, r);
     assert.ok(String(r.stdout).includes('f64'), `the run printed its report (an exit 0 with no output is no run)\n${why(r)}`);
     assert.equal(spyLines(spy).length, 1);
 });
@@ -259,6 +277,37 @@ test('TASK 3 re-spawn: a child exit status 7 (outside {0,1,2}) -> exit 2, /child
     assert.match(String(r.stderr), /child exited with status 7/);
     assert.equal(String(r.stdout), '');
     assert.equal(spyLines(spy).length, 2);
+});
+
+// b101 G-B pin (no spawn): scVoidOnly against canned results. PASS = the b98 CI vector (macos node 24, run 137526351987,
+// log :4931-4932, prefixes cut: .handoff/b100/evidence/gb-void-vector.txt) and a negative-VOID variant; FAIL = 13 vectors
+// that must stay red. The same vectors as alloc-per-op-fixa.test.mjs (each file pins its own copy of the helper).
+const SC_VOID_CI = 'alloc-per-op: NO VERDICT: selfCheck: positive: VOID in window 0 (1 VOID window(s); C-11: a VOID anywhere is a miss) (no lane measured)';
+const SC_VOID_NEG = 'alloc-per-op: NO VERDICT: selfCheck: negative: VOID in window 2 (2 VOID window(s); C-11: a VOID anywhere is a miss) (no lane measured)';
+const SC_PASS = [
+    ['b98 CI vector (positive VOID)', { status: 2, signal: null, stderr: 'APO-KEY true\n' + SC_VOID_CI + '\n' }],
+    ['negative VOID', { status: 2, signal: null, stderr: 'APO-KEY true\n' + SC_VOID_NEG + '\n' }],
+];
+const SC_FAIL = [
+    ['VOID line + an uncaught line', { status: 2, signal: null, stderr: SC_VOID_CI + '\nalloc-per-op: NO VERDICT: uncaught: Error: x\n' }],
+    ['positive box-peak miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: box peak 3 B/op < POS_MIN_BPO 8 (the harness does not see a box) (no lane measured)\n' }],
+    ['positive window-null miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: window 1 is null (not a finite number) (no lane measured)\n' }],
+    ['negative band miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: negative: empty peak 9 B/op outside [-1, 2] (no lane measured)\n' }],
+    ['fence miss', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: fence: recorded 0 < forced 1 (the GC fence does not see a forced GC) (no lane measured)\n' }],
+    ['exit 1 with the VOID line', { status: 1, signal: null, stderr: SC_VOID_CI + '\n' }],
+    ['exit 2, empty stderr', { status: 2, signal: null, stderr: '' }],
+    ['exit 2, only APO-KEY true', { status: 2, signal: null, stderr: 'APO-KEY true\n' }],
+    ['status null / SIGKILL with the VOID line', { status: null, signal: 'SIGKILL', stderr: SC_VOID_CI + '\n' }],
+    ['the --self-test form (no suffix)', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: selfCheck: positive: VOID in window 0 (1 VOID window(s); C-11: a VOID anywhere is a miss)\n' }],
+    ['a lane VOID', { status: 2, signal: null, stderr: 'alloc-per-op: NO VERDICT: VOID: lane k, 1 VOID window(s), first window 0\n' }],
+    ['prefixed VOID line', { status: 2, signal: null, stderr: 'x ' + SC_VOID_CI + '\n' }],
+    ['suffixed VOID line', { status: 2, signal: null, stderr: SC_VOID_CI + ' x\n' }],
+];
+test('G-B pin: scVoidOnly accepts 2/2 canned selfCheck VOID results and refuses 13/13 others (no spawn)', () => {
+    for (const [name, r] of SC_PASS) assert.equal(scVoidOnly(r), true, `PASS vector "${name}" must be accepted`);
+    for (const [name, r] of SC_FAIL) assert.equal(scVoidOnly(r), false, `FAIL vector "${name}" must be refused`);
+    assert.equal(SC_PASS.length, 2);
+    assert.equal(SC_FAIL.length, 13);
 });
 
 // ================= A4 preflight API (before the spawn) =================
