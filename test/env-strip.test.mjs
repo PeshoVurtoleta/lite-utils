@@ -1,11 +1,15 @@
 // test/env-strip.test.mjs (STAGED, b43 G-ENV-ORACLE G1; spec .handoff/PLAN-b42-genv-oracle.md, rows E1-E7)
-// The Q-ENV oracle: each of the 4 bash tools (bytecode-budget, deopt-diff, allocation-diff, ic-diff) unsets NODE_OPTIONS,
+// The Q-ENV oracle: each of the 5 bash tools (bytecode-budget, deopt-diff, allocation-diff, ic-diff, shape-diff) unsets NODE_OPTIONS,
 // NODE_V8_COVERAGE, NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS at its top, so NO node spawn sees one.
 //   fake node  -> logs `$1` + ` +NAME` per name that is SET, one line per spawn (a leak never aborts the run)
 //   real node  -> a logging wrapper that execs the real node; the 4 vars point into a private dir: no coverage entry,
 //                 no compile-cache dir, no redirected-warnings file may appear
-// Expected values are the spec's (rc / VERDICT / spawn counts bb 6 (5 on the pre-G1 control root) / dd 8 / alloc 8 / ic 9, no ' +NODE_' in any line). The control rows
+// Expected values are the spec's (rc / VERDICT / spawn counts bb 6 (5 on the pre-G1 control root) / dd 8 / alloc 8 / ic 9 / sd 8, no ' +NODE_' in any line). The control rows
 // (E4 fake, E5 real) run the SAME probes against the roots of the pre-G-ENV commit 0560272 and must show the leak.
+// 1.2.0 (PLAN-SD-X2 tasks 3-4, b107): shape-diff (sd) has no 0560272 root, so E4 / E5 / E6 iterate PIN4; its fake-node
+// control is E4sd = the prototype eb7c1b65 (Q-B103-SDTWIN (a)), whose --v8-options probe strips only 2 of the 4 names
+// (proto:168; proto:768 strips all 4 on --version and every driver run) and which has no Q-ENV unset line: exactly 1 leak line.
+// sd spawns 8 = 1 --version + 1 --v8-options + 2 drivers x 3 runs (default --runs 3, shape-diff.sh:1476).
 // Every row works in its own mkdtemp dir, removed in finally; E7 checks the dirs are gone. Every spawn is capSync.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,7 +46,19 @@ const TOOLS = {
     dd: { root: 'deopt-diff.sh', sha8: 'f3f2ab7e', rc: 0, verdict: 'SAME', spawns: 8 },
     alloc: { root: 'allocation-diff.sh', sha8: 'd9523fa9', rc: 0, verdict: 'SAME', spawns: 8 },
     ic: { root: 'ic-diff.sh', sha8: 'ea7975cc', rc: 0, verdict: 'SAME', spawns: 9 },
+    sd: { root: 'shape-diff.sh', rc: 0, verdict: 'SAME', spawns: 8 },   // no 0560272 root: E4sd runs the prototype instead
 };
+const PIN4 = ['bb', 'dd', 'alloc', 'ic'];   // the 4 keys with a 0560272 root (E4 / E5 / E6)
+// the E5sd mutant (Q-B107-E5SD (a)): 2 exact-once edits of a private copy of the live sd root -- the Q-ENV unset line
+// (shape-diff.sh:59) deleted and the per-spawn PROBE_ENV (:931) emptied, so --version and every driver run see all 4 names
+const SD_MUT = [
+    ['unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS   # Q-ENV', ':   # Q-ENV'],
+    ['PROBE_ENV=(env -u NODE_OPTIONS -u NODE_V8_COVERAGE -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS)', 'PROBE_ENV=(env)'],
+];
+// the sd old twin (Q-B103-SDTWIN (a)): `git show 4dc6a53:research/shape-diff/shape-diff.prototype.sh`, sha256/8 eb7c1b65
+const PROTO = { pin: '4dc6a53', path: 'research/shape-diff/shape-diff.prototype.sh', sha8: 'eb7c1b65' };
+const hasProto = capSync('git', ['-C', ROOT, 'cat-file', '-e', `${PROTO.pin}^{commit}`], { env: S5_ENV }, 30000, 'git cat-file proto').status === 0
+    ? true : `no git history with ${PROTO.pin}: not checked, never passed`;
 
 // ---- canned inputs (verbatim from the cited tests / evidence) ----
 // bb: repro-head.mjs:8
@@ -59,6 +75,16 @@ const V8V = 'v8-version,14,6,202,34,-node.28,0';
 const CC_GET = 'code-creation,JS,10,98536,0x3bcd762b6930,5,get file:///w/drv.js:2:13,0x29a78805a970,~';
 const L01 = 'LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,';
 const MONO = [V8V, CC_GET, L01, ''].join('\n');
+// sd: G-E's canned SAME pair, verbatim: test/fixtures/shape-diff/canned/e2e/mono/map.log:1-7 (the isolate map log) and
+// .../e2e/mono/out.txt:1-3 (the trace stdout); target fn mk. The same driver dir on both sides -> SAME (1 site each)
+const SD_MAP = ['v8-version,14,6,202,34,-node.28,0', 'v8-platform,macos,macos',
+    'code-creation,JS,10,200,0x200000100,64,mk file:///w/mono/driver.mjs:2:1,0x300000001,~',
+    'code-creation,JS,13,300,0x200001000,256,mk file:///w/mono/driver.mjs:2:1,0x300000001,*',
+    'map-details,305,0x101,type: JS_OBJECT_TYPE\\n - elements kind: HOLEY_ELEMENTS\\n',
+    'map-details,306,0x102,type: JS_OBJECT_TYPE\\n - elements kind: HOLEY_ELEMENTS\\n',
+    'map,Transition,310,0x101,0x102,0x200001010,2,20,,x', ''].join('\n');
+const SD_OUT = ['[generalizing]x:d{Any;const}->d{Any;mutable} (uninitialized field) [~mk+7 at file:///w/mono/driver.mjs:2]',
+    '[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+7 at file:///w/mono/driver.mjs:2]', 'done', ''].join('\n');
 
 // ---- env: the host env minus the 4 names and everything that steers bash / git editors, then the probe values ----
 const DROP = [...NAMES, 'NODE', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'CDPATH',
@@ -150,6 +176,14 @@ function setup(tool, mode, d, node) {
         put(x('D'), { 'driver.js': `${WARN}const fs = require('node:fs');\nconst keep = [];\nfs.writeSync(1, '${S} start\\n');\nfor (let i = 0; i < 50000; i++) keep.push({ i });\nfs.writeSync(1, '${S} end\\n');\n` });
         return { cwd, args: [`--node=${node}`, '--runs', '2', x('D/driver.js'), x('D/driver.js')] };
     }
+    if (tool === 'sd') {
+        if (mode === 'fake') {   // fakeNode cats ./trace.txt and copies ./ic.log to isolate-0x1000-$$-run.log (shape-diff.sh:943 glob)
+            put(x('mono'), { 'driver.mjs': '', 'ic.log': SD_MAP, 'trace.txt': SD_OUT });
+            return { cwd, args: ['--node', node, '--fn', 'mk', x('mono/driver.mjs'), x('mono/driver.mjs')] };
+        }
+        put(x('D'), { 'driver.mjs': `${WARN}function f(i) { const o = { x: i | 0 }; o.x = i + 0.5; return o; }\nlet s = 0; for (let i = 0; i < 5000; i++) s += f(i).x;\nif (s === 7) console.log("");\n` });
+        return { cwd, args: ['--node', node, '--fn', 'f', x('D/driver.mjs'), x('D/driver.mjs')] };
+    }
     if (mode === 'fake') {   // ic
         put(x('mono'), { 'driver.js': '', 'ic.log': MONO });
         return { cwd, args: ['--node', node, '--fn', 'get', x('mono/driver.js'), x('mono/driver.js')] };
@@ -158,10 +192,34 @@ function setup(tool, mode, d, node) {
     return { cwd, args: ['--node', node, '--runs', '2', '--fn', 'get', x('D/driver.js'), x('D/driver.js')] };
 }
 
-// the root of a tool: the live root ('new') or `git show 0560272:<root>` ('old', sha8 checked against the G0 constant)
+// the root of a tool: the live root ('new'), `git show 0560272:<root>` ('old', sha8 checked against the G0 constant) or,
+// for sd, `git show 4dc6a53:<prototype>` ('proto', sha8 eb7c1b65)
 function rootOf(tool, which, d) {
     const T = TOOLS[tool];
     if (which === 'new') return join(ROOT, T.root);
+    if (which === 'proto') {
+        assert.equal(tool, 'sd', 'only shape-diff has a prototype twin');
+        const r = capSync('git', ['-C', ROOT, 'show', `${PROTO.pin}:${PROTO.path}`], { env: S5_ENV, maxBuffer: 1 << 26 }, 60000, 'env-strip git show proto');
+        assert.equal(r.status, 0, `git show ${PROTO.pin}:${PROTO.path} failed`);
+        assert.equal(createHash('sha256').update(r.stdout).digest('hex').slice(0, 8), PROTO.sha8, 'the prototype does not match its sha8');
+        mkdirSync(join(d, 'old'));
+        const p = join(d, 'old', 'shape-diff.prototype.sh');
+        writeFileSync(p, r.stdout);
+        return p;
+    }
+    if (which === 'mut') {   // E5sd (Q-B107-E5SD (a)): the live sd root with the Q-ENV unset line deleted and PROBE_ENV emptied
+        assert.equal(tool, 'sd', 'only shape-diff has the E5sd mutant');
+        let s = readFileSync(join(ROOT, T.root), 'utf8');
+        for (const [from, to] of SD_MUT) {
+            assert.equal(s.split(from).length - 1, 1, `E5sd mutant anchor must match exactly once: ${from.slice(0, 60)}`);
+            s = s.split(from).join(to);
+        }
+        mkdirSync(join(d, 'old'));
+        const p = join(d, 'old', 'shape-diff.e5sd.sh');
+        writeFileSync(p, s);
+        return p;
+    }
+    assert.ok(T.sha8, `${tool}: no ${PIN} root`);
     const r = capSync('git', ['-C', ROOT, 'show', `${PIN}:${T.root}`], { env: S5_ENV, maxBuffer: 1 << 26 }, 60000, `env-strip git show ${tool}`);
     assert.equal(r.status, 0, `git show ${PIN}:${T.root} failed`);
     assert.equal(createHash('sha256').update(r.stdout).digest('hex').slice(0, 8), T.sha8, `${tool}: the ${PIN} root does not match the G0 sha8`);
@@ -172,8 +230,8 @@ function rootOf(tool, which, d) {
 }
 
 // the caps of one tool run (ledger law 8: size to the slowest CI leg). ic real took 27-93 s on hosted macOS node 22 / 24 and
-// past 120 s twice (run 42458559718), against 2-26 s elsewhere; every other tool row stays under 8 s. All-hang bound of the 16
-// tool runs: 2 x 600 s + 14 x 120 s = 48 min, inside the 7200 s per-file limit (package.json --test-timeout=7200000)
+// past 120 s twice (run 42458559718), against 2-26 s elsewhere; every other tool row stays under 8 s (sd real: 8.9 s, one local darwin run, b107, PRELIMINARY host). All-hang bound of the 20
+// tool runs: 2 x 600 s + 18 x 120 s = 56 min, inside the 7200 s per-file limit (package.json --test-timeout=7200000)
 // and the 180 min job cap
 // (Q-B73-CITIME; was 120). SIGKILL because
 // SIGTERM cannot bound a hung foreground step: ic-diff traps TERM and bash runs the trap only after that step ends (with the
@@ -198,7 +256,7 @@ function runTool(tool, mode, which) {
         const log = existsSync(logf) ? readFileSync(logf, 'utf8').split('\n').filter(Boolean) : [];
         const tmpLeft = readdirSync(join(d, 'tmp'));
         const v = /^VERDICT (\S+)/m.exec(out);
-        // E7 (retention), checked on every one of the 16 tool runs
+        // E7 (retention), checked on every one of the 20 tool runs
         assert.deepEqual(tmpLeft, [], `${tool} ${mode} ${which}: TMPDIR holds entries after the run`);
         return {
             T, status: r.status, out, verdict: v ? v[1] : '', log,
@@ -268,21 +326,23 @@ for (const tool of Object.keys(TOOLS)) {
 }
 
 // ---- E3: real node behind the wrapper, the live roots ----
+function checkE3(tool, r) {   // E3's checks (E5sd asserts they throw on its mutant)
+    assert.equal(typeof r.status, 'number', `${tool}: the run ended by a signal or never ran${tail(r)}`);
+    const runs = r.log.filter((l) => { const a = l.split(' ')[0]; return a !== '--version' && a !== '--v8-options'; });
+    assert.ok(runs.length >= 1, `${tool}: no spawn past --version / --v8-options (the probe never ran)${tail(r)}`);
+    assert.deepEqual(leaks(r), [], `${tool}: a node spawn saw one of the 4 names${tail(r)}`);
+    assert.equal(r.covN, -1, `${tool}: NODE_V8_COVERAGE dir was created (${r.covN} entries)`);
+    assert.equal(r.ccMade, false, `${tool}: NODE_COMPILE_CACHE dir was created`);
+    assert.equal(r.warn, null, `${tool}: NODE_REDIRECT_WARNINGS file was written`);
+}
 for (const tool of Object.keys(TOOLS)) {
     test(`E3 ${tool} real node (live root): the 4 names reach no spawn; no coverage entry, no compile cache, no warn file`, { skip }, () => {
-        const r = runTool(tool, 'real', 'new');
-        assert.equal(typeof r.status, 'number', `${tool}: the run ended by a signal or never ran${tail(r)}`);
-        const runs = r.log.filter((l) => { const a = l.split(' ')[0]; return a !== '--version' && a !== '--v8-options'; });
-        assert.ok(runs.length >= 1, `${tool}: no spawn past --version / --v8-options (the probe never ran)${tail(r)}`);
-        assert.deepEqual(leaks(r), [], `${tool}: a node spawn saw one of the 4 names${tail(r)}`);
-        assert.equal(r.covN, -1, `${tool}: NODE_V8_COVERAGE dir was created (${r.covN} entries)`);
-        assert.equal(r.ccMade, false, `${tool}: NODE_COMPILE_CACHE dir was created`);
-        assert.equal(r.warn, null, `${tool}: NODE_REDIRECT_WARNINGS file was written`);
+        checkE3(tool, runTool(tool, 'real', 'new'));
     });
 }
 
 // ---- E4: control, fake node, the roots of 0560272: the same probes MUST show the leak ----
-for (const tool of Object.keys(TOOLS)) {
+for (const tool of PIN4) {
     test(`E4 ${tool} fake node (control, ${PIN} root): same shape as E2, every spawn line holds the coverage and warnings names`, { skip: skip || histSkip(hasPin) }, () => {
         histGate(hasPin);
         const r = runTool(tool, 'fake', 'old');
@@ -302,8 +362,17 @@ for (const tool of Object.keys(TOOLS)) {
     });
 }
 
+// ---- E4sd: control, fake node, the shape-diff prototype: E2's shape, exactly the 1 leak line, E2's leak check red ----
+test(`E4sd fake node (control, prototype ${PROTO.sha8}): rc 0 / SAME / 8 spawns, leaks = exactly the --v8-options line, and E2's leak check is red (skips without ${PROTO.pin} history, FAILS under CI=true)`, { skip: skip || histSkip(hasProto) }, () => {
+    histGate(hasProto);
+    const r = runTool('sd', 'fake', 'proto');
+    fakeShape(r, 'sd');
+    assert.deepEqual(leaks(r), ['--v8-options +NODE_V8_COVERAGE +NODE_REDIRECT_WARNINGS'], `sd prototype: the leak set${tail(r)}`);
+    assert.throws(() => assert.deepEqual(leaks(r), [], 'E2 leak check'), (e) => e instanceof assert.AssertionError && /E2 leak check/.test(e.message));
+});
+
 // ---- E5: control, real node, the roots of 0560272 ----
-for (const tool of Object.keys(TOOLS)) {
+for (const tool of PIN4) {
     test(`E5 ${tool} real node (control, ${PIN} root): coverage dir has an entry and the warn file holds the warning`, { skip: skip || histSkip(hasPin) }, (t) => {
         histGate(hasPin);
         const r = runTool(tool, 'real', 'old');
@@ -314,6 +383,15 @@ for (const tool of Object.keys(TOOLS)) {
     });
 }
 
+// ---- E5sd: control, real node, the E5sd mutant of the live sd root (no history needed) ----
+test('E5sd real node (control, mutant: Q-ENV unset line deleted + PROBE_ENV emptied): coverage entry, compile cache, the warn file holds the warning, and E3\'s checks throw', { skip }, () => {
+    const r = runTool('sd', 'real', 'mut');
+    assert.ok(r.covN >= 1, `sd mutant: no coverage entry (${r.covN})${tail(r)}`);
+    assert.equal(r.ccMade, true, `sd mutant: no compile cache dir${tail(r)}`);
+    assert.ok(r.warn !== null && r.warn.includes('env-strip'), `sd mutant: warn file lacks the warning (${JSON.stringify(r.warn)})${tail(r)}`);
+    assert.throws(() => checkE3('sd', r), (e) => e instanceof assert.AssertionError && /sd: a node spawn saw one of the 4 names/.test(e.message));
+});
+
 // ---- E6: the pin row (one spelling with the other history rows) ----
 test(`E6 pin: the ${PIN} history is reachable and holds the 4 control roots (skips when 0560272 is unreachable, FAILS under CI=true)`, { skip: skip || histSkip(hasPin) }, () => {
     histGate(hasPin);
@@ -321,7 +399,7 @@ test(`E6 pin: the ${PIN} history is reachable and holds the 4 control roots (ski
     const d = mkdtempSync(join(tmpdir(), 'es-'));
     MADE.push(d);
     try {
-        for (const tool of Object.keys(TOOLS)) {
+        for (const tool of PIN4) {
             rootOf(tool, 'old', d);   // asserts the sha8 constant
             rmSync(join(d, 'old'), { recursive: true, force: true });
         }
@@ -331,7 +409,8 @@ test(`E6 pin: the ${PIN} history is reachable and holds the 4 control roots (ski
 
 // ---- E7: retention (the per-run TMPDIR check is in runTool; this row runs last) ----
 test('E7 retention: every es- dir this file created is gone', { skip }, () => {
-    const floor = 9 + (hasPin === true ? 9 : 0);   // E1 + 8 live-root rows; + 8 control rows + E6 when the pin is reachable
+    // E1 + 10 live-root rows + E5sd; + 8 control rows + E6 when the 0560272 pin is reachable; + E4sd when the 4dc6a53 pin is reachable
+    const floor = 12 + (hasPin === true ? 9 : 0) + (hasProto === true ? 1 : 0);
     assert.ok(MADE.length >= floor, `coverage floor: ${MADE.length} dirs made, want >= ${floor}`);
     const left = MADE.filter((p) => existsSync(p));
     assert.deepEqual(left, [], 'a row left its temp dir behind');

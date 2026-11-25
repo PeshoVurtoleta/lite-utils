@@ -1,9 +1,13 @@
-// test/final-trap.test.mjs -- G-FINAL (Q-F2a) rows for the lib/prologue.sh EXIT trap in the 5 built roots: an exit
+// test/final-trap.test.mjs -- G-FINAL (Q-F2a) rows for the lib/prologue.sh EXIT trap in the 6 built roots: an exit
 // without FINAL=1 (a planned verdict sets it first) leaves as 2 NO-VERDICT, rc 0 included (a bash 3.2 `set -u` abort
 // exits 0), and stays 2 with stderr closed.
 // Oracle: .handoff/PLAN-b45-gfinal.md ASSERTIONS A1, A2, A3, A5 + addendum A1 (the stderr-closed row) -- never what a
-// script printed. Expected values are hand-derived: the trap text, the census (bb 3 / ibd 2 / dd 2 / alloc 2 / ic 2
-// command-position `exit 0` sites) and the raw `grep -c 'exit 0'` line counts (12 / 15 / 18 / 11 / 5).
+// script printed. Expected values are hand-derived: the trap text, the census (bb 3 / ibd 2 / dd 2 / alloc 2 / ic 2 /
+// sd 2 command-position `exit 0` sites) and the raw `grep -c 'exit 0'` line counts (12 / 15 / 18 / 11 / 5 / 7).
+// 1.2.0 (PLAN-SD-X2 tasks 1-2, b107): shape-diff (sd) is the 6th root (census by hand at shape-diff.sh edecd742: sites
+// :1503 `if self_test; then FINAL=1; exit 0;` and :1670 the verdict case; raw 7 = comment :18, quoted :1278 / :1300,
+// FAKE_EOF heredoc :1199 / :1208, code :1503 / :1670). Its old twin for A0 is the prototype eb7c1b65 (Q-B103-SDTWIN (a)):
+// an inline-rm trap, no G-SIG-1 trap line, no LC_ALL anchor. cleanEnv drops NODE (npm exports it; a root reads $NODE).
 // Teeth: every A1 / A2 / stderr-closed row has a must-fail twin = the same mutant of a copy of the live root with the
 // literal pre-G-FINAL trap line put back (exact-once, count-checked); the twin must turn the row's check red. The A3
 // scanner has exact-once mutants that must add exactly the violation they name.
@@ -19,6 +23,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, exist
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { capSync } from './spawn-cap.mjs';
 
 // Every row is synchronous spawnSync, which buffers each report until the event loop turns: a file death then shows
@@ -44,6 +49,7 @@ const TOOLS = {
     'deopt-diff': [2, 19, { comment: 4, quoted: 12, heredoc: 1, code: 2 }],
     'ic-diff': [2, 11, { comment: 2, quoted: 7, heredoc: 0, code: 2 }],
     'inlining-budget-diff': [2, 5, { comment: 1, quoted: 2, heredoc: 0, code: 2 }],
+    'shape-diff': [2, 7, { comment: 1, quoted: 2, heredoc: 2, code: 2 }],   // b107 census (header)
 };
 // the G-SIG-1 trap line (b70), the 465881b one (G-FINAL, silent on any rc 2) and the literal pre-G-FINAL one (each root
 // carries its own name for @SCRIPT@)
@@ -67,10 +73,17 @@ const DIR = realpathSync(mkdtempSync(join(tmpdir(), 'ft-root-')));
 after(() => rmSync(DIR, { recursive: true, force: true }));
 function cleanEnv(extra = {}) {   // no GIT_* location var, no editor, no NODE_* tool input, no G_FINAL_UNSET
     const e = { ...process.env };
-    for (const k of [...GITVARS, 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'G_FINAL_UNSET', 'FINAL']) delete e[k];
+    for (const k of [...GITVARS, 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'EDITOR', 'VISUAL', 'NODE', 'NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'G_FINAL_UNSET', 'FINAL']) delete e[k];
     e.NODE_V8_COVERAGE = undefined;   // node re-adds a deleted NODE_V8_COVERAGE to a child env; undefined strips it
     return { ...e, ...extra };
 }
+// the A0 old twin: the shape-diff prototype (Q-B103-SDTWIN (a)), a history row (the spelling of test/env-strip.test.mjs)
+const PROTO = { pin: '4dc6a53', path: 'research/shape-diff/shape-diff.prototype.sh', sha8: 'eb7c1b65' };
+const hasProto = skip ? 'POSIX hosts only' : capSync('git', ['-C', PKG, 'cat-file', '-e', `${PROTO.pin}^{commit}`], { env: cleanEnv() }, 30000, 'final-trap git cat-file').status === 0
+    ? true : `no git history with ${PROTO.pin}: not checked, never passed`;
+const CI_STRICT = process.env.CI === 'true';
+const histSkip = (have) => (have === true || CI_STRICT ? false : have);
+const histGate = (have) => { if (have !== true) assert.fail(`${have} (CI=true: a history row fails, never skips)`); };
 function once(src, from, to, what) {   // an exact-once, count-checked edit
     const n = src.split(from).length - 1;
     assert.equal(n, 1, `${what}: anchor must match exactly once, matched ${n}`);
@@ -150,14 +163,40 @@ function checkClosed(c, r) {   // stderr closed: nothing can be printed; the exi
     assert.equal(c.spawns(), 0, 'a node spawn');
 }
 
+function checkA0(t, src) {   // A0: the G-SIG-1 trap line once, the older ones never, the twins' anchors once each
+    assert.equal(src.split(NEW_TRAP(t)).length - 1, 1, 'G-SIG-1 trap line');
+    assert.equal(src.split(B66_TRAP(t)).length - 1, 0, '465881b trap line');
+    assert.equal(src.split(OLD_TRAP(t)).length - 1, 0, 'pre-G-FINAL trap line');
+    assert.equal(src.split(SIGARM).length - 1, 1, 'sig_arm call (the A4 / A5 twin anchor)');
+    assert.equal(src.split(ANCHOR).length - 1, 1, 'LC_ALL anchor');
+}
+
+test('cleanEnv control: no NODE key while process.env.NODE is set (npm exports NODE; a root that reads it bypasses the PATH fake)', () => {
+    const had = Object.prototype.hasOwnProperty.call(process.env, 'NODE'), was = process.env.NODE;
+    if (!had) process.env.NODE = '/nonexistent/final-trap-node';
+    try {
+        assert.equal(typeof process.env.NODE, 'string', 'process.env.NODE is set for the row');
+        const e = cleanEnv();
+        assert.equal(Object.prototype.hasOwnProperty.call(e, 'NODE'), false, `cleanEnv() kept NODE=${e.NODE}`);
+        assert.equal(Object.prototype.hasOwnProperty.call(cleanEnv({ NODE: 'x' }), 'NODE'), true, 'an explicit extra still wins (the row reads the drop, not a broken spread)');
+    } finally { if (!had) delete process.env.NODE; else process.env.NODE = was; }
+});
+
+test(`A0 twin shape-diff: the prototype ${PROTO.sha8} (${PROTO.pin}) has no G-SIG-1 trap line and no LC_ALL anchor -> the A0 check is red (skips without ${PROTO.pin} history, FAILS under CI=true)`, { skip: skip || histSkip(hasProto) }, () => {
+    histGate(hasProto);
+    const r = capSync('git', ['-C', PKG, 'show', `${PROTO.pin}:${PROTO.path}`], { env: cleanEnv(), encoding: 'utf8', maxBuffer: 1 << 26 }, 60000, 'final-trap git show proto');
+    assert.equal(r.status, 0, `git show ${PROTO.pin}:${PROTO.path} failed: ${r.stderr}`);
+    assert.equal(createHash('sha256').update(r.stdout).digest('hex').slice(0, 8), PROTO.sha8, 'the prototype sha8');
+    const src = r.stdout;
+    assert.equal(src.split(NEW_TRAP('shape-diff')).length - 1, 0, 'the prototype carries no G-SIG-1 trap line');
+    assert.equal(src.split(ANCHOR).length - 1, 0, 'the prototype carries no LC_ALL anchor (its line has no comment)');
+    assert.equal(src.split('\nexport LC_ALL=C\n').length - 1, 1, 'the prototype sets LC_ALL=C on a bare line (the scan read the right file)');
+    assert.throws(() => checkA0('shape-diff', src), (e) => e instanceof assert.AssertionError && /G-SIG-1 trap line/.test(e.message));
+});
+
 for (const t of Object.keys(TOOLS)) {
     test(`A0 ${t}: the root carries the G-FINAL trap line exactly once (the twins' anchor) and not the pre-G-FINAL one`, { skip }, () => {
-        const src = live(t);
-        assert.equal(src.split(NEW_TRAP(t)).length - 1, 1, 'G-SIG-1 trap line');
-        assert.equal(src.split(B66_TRAP(t)).length - 1, 0, '465881b trap line');
-        assert.equal(src.split(OLD_TRAP(t)).length - 1, 0, 'pre-G-FINAL trap line');
-        assert.equal(src.split(SIGARM).length - 1, 1, 'sig_arm call (the A4 / A5 twin anchor)');
-        assert.equal(src.split(ANCHOR).length - 1, 1, 'LC_ALL anchor');
+        checkA0(t, live(t));
     });
 
     // ---- A1 (every host) ----
@@ -376,7 +415,7 @@ test('A3 scanner control: the alloc FAKE_NODE heredoc exit 0 lines are heredoc, 
 // =====================================================================================================================
 // A5: 20 cycles of the A1 / A2 mutants over every root: 0 node spawns, 0 entries left in a private TMPDIR / cwd
 // =====================================================================================================================
-test('A5: 20 cycles x 5 roots x (A1 exit 0, A2 unset) -> every run rc 2, 0 node spawns, TMPDIR and cwd stay empty', { skip }, () => {
+test('A5: 20 cycles x 6 roots x (A1 exit 0, A2 unset) -> every run rc 2, 0 node spawns, TMPDIR and cwd stay empty', { skip }, () => {
     const c = mkCase();
     let runs = 0;
     for (let k = 0; k < 20; k++) {
@@ -388,7 +427,7 @@ test('A5: 20 cycles x 5 roots x (A1 exit 0, A2 unset) -> every run rc 2, 0 node 
             }
         }
     }
-    assert.equal(runs, 200);
+    assert.equal(runs, 240);
     assert.equal(c.spawns(), 0, 'a node spawn');
     assert.deepEqual(readdirSync(c.tmp), [], 'TMPDIR entries left');
     assert.deepEqual(readdirSync(c.cwd), [], 'cwd entries left');

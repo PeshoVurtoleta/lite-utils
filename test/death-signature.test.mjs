@@ -102,14 +102,32 @@ const HOOK = 'beforeEach(() => new Promise((r) => setImmediate(r)));';
 const SYNC_FILES = ['ext-audit.test.mjs', 'build.test.mjs', 'bytecode-budget.test.mjs', 'bytecode-budget-stage.test.mjs',
   'bytecode-budget-diff-boundary.test.mjs', 'inlining-budget-diff.test.mjs', 'death-signature.test.mjs',
   'ext-audit-alloc.test.mjs', 'deopt-diff-live.test.mjs', 'bytecode-budget-order.test.mjs', 'env-strip.test.mjs',
-  'tracked.test.mjs', 'final-trap.test.mjs', 'judge-drain.test.mjs'];
+  'tracked.test.mjs', 'final-trap.test.mjs', 'judge-drain.test.mjs',
+  // 1.2.0 (Q-B103-DEATHROW (a)): the two shape-diff files their owners declare await-free (0 `await`, b107 census)
+  'shape-diff.test.mjs', 'shape-diff-live.test.mjs'];
+const SD_FILES = ['shape-diff.test.mjs', 'shape-diff-live.test.mjs'];
+
+// one file's check: the hook line exactly once, beforeEach imported from node:test
+function hookCheck(f, src) {
+  assert.equal(src.split('\n').filter((l) => l === HOOK).length, 1, f + ': the hook line exactly once');
+  assert.match(src, /^import \{ [^}]*\bbeforeEach\b[^}]* \} from 'node:test';$/m, f + ': beforeEach imported from node:test');
+}
 
 test('hook row: every all-sync test file and every death fixture has the beforeEach flush hook exactly once', () => {
+  assert.equal(SYNC_FILES.length, 16, 'SYNC_FILES: 14 + the 2 shape-diff files');
   const files = SYNC_FILES.map((f) => 'test/' + f).concat(readdirSync(join(ROOT, FIX)).sort().map((f) => FIX + f));
   assert.ok(files.length >= SYNC_FILES.length + 4, 'fixtures listed: ' + files.join(' '));
-  for (const f of files) {
-    const src = readFileSync(join(ROOT, f), 'utf8');
-    assert.equal(src.split('\n').filter((l) => l === HOOK).length, 1, f + ': the hook line exactly once');
-    assert.match(src, /^import \{ [^}]*\bbeforeEach\b[^}]* \} from 'node:test';$/m, f + ': beforeEach imported from node:test');
+  for (const f of files) hookCheck(f, readFileSync(join(ROOT, f), 'utf8'));
+});
+
+test('hook row control: each shape-diff file with its hook line stripped (a private in-memory copy) fails the check /exactly once/', () => {
+  for (const f of SD_FILES) {
+    assert.ok(SYNC_FILES.includes(f), f + ' is in SYNC_FILES');
+    const src = readFileSync(join(ROOT, 'test', f), 'utf8');
+    const lines = src.split('\n');
+    assert.equal(lines.filter((l) => l === HOOK).length, 1, f + ': the live file holds the hook line once (the strip anchor)');
+    const stripped = lines.filter((l) => l !== HOOK).join('\n');
+    assert.equal(stripped.length, src.length - HOOK.length - 1, f + ': exactly the hook line and its newline removed');
+    assert.throws(() => hookCheck('test/' + f, stripped), (e) => e instanceof assert.AssertionError && /: the hook line exactly once/.test(e.message));
   }
 });
