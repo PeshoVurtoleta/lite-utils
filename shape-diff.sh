@@ -960,7 +960,8 @@ run_side() { # side dir base k
 
 # =============================================================================================
 # --self-test: canned traces + diff_fn + unattr guard + N1/N4/N5/N6/D8/D9/D11/D12 + D-A / D-B / D5 / version gate checks,
-# and fake-node end-to-end rows (e2e, argv, --out and need() refusals, sparkplug refusals)
+# and fake-node end-to-end rows (e2e, argv, --out and need() refusals, sparkplug refusals; rows 41-44 replay a real
+# node 22 / 24 / 26 / 27 capture excerpt)
 # =============================================================================================
 self_test() {
   local oks=0 fails=0 H L1 L2 L3 L4 OUT1 OUT2 old msdir
@@ -1346,6 +1347,115 @@ FAKE_EOF
   check "sparkplug refusals: --v8-flags --always-sparkplug / --sparkplug / --no_concurrent_sparkplug -> exit 2, 0 spawns, 0 mktemp, the refusal once; --maglev control -> SAME, 6 trace runs" \
     "$(spawn -- "$NO" --v8-flags --always-sparkplug --fn mk "$DM" "$DM2")|$(has "shape-diff: --v8-flags must not set --always-sparkplug: conflicts with script's synchronous --no-sparkplug / --no-concurrent-recompilation flags")#$(spawn -- "$NO" --v8-flags --sparkplug --fn mk "$DM" "$DM2")|$(has "shape-diff: --v8-flags must not set --sparkplug: conflicts with script's synchronous --no-sparkplug / --no-concurrent-recompilation flags")#$(spawn -- "$NO" --v8-flags --no_concurrent_sparkplug --fn mk "$DM" "$DM2")|$(has "shape-diff: --v8-flags must not set --no_concurrent_sparkplug: conflicts with script's synchronous --no-sparkplug / --no-concurrent-recompilation flags")#$(spawn -- "$NO" --v8-flags --maglev --fn mk "$DM" "$DM2")|$(has 'VERDICT SAME')|$(awk 'substr($0, 1, 20) == "--maglev --log-maps " { n++ } END { print n + 0 }' "$sd/fk.log")" \
     "2|0|0|1#2|0|0|1#2|0|0|1#0|8|1|1|6"
+
+  # --- Tests 41-44: a real node 22 / 24 / 26 / 27 capture replayed (27 is an alpha build: a re-cut changes its two heredocs
+  # and its FAKE_VER together). Each SD_CAP<M>_{LOG,OUT} heredoc is test/fixtures/shape-diff/real/<M>/excerpt/run.{log,out}
+  # byte for byte. A row checks the MAP records of the log and the SHAPE records of the stdout trace against the golden
+  # strings (the SHAPE record is the only part that sees a lost ` (+N maps)` payload), then runs ONE A/B on the fake node:
+  # BEFORE = the excerpt, AFTER = the excerpt minus its one map,Normalize line, --runs 2 --fn Point,work ---
+  local CAP22L CAP22O CAP24L CAP24O CAP26L CAP26O CAP27L CAP27O CAPM CAPS
+  IFS= read -r -d '' CAP22L <<'SD_CAP22_LOG' || true
+v8-version,12,4,254,21,-node.57,0
+v8-platform,macos,macos
+map-details,16166,0x0a5fc595ecc1,0xa5fc595ecc1: [Map] in OldSpace\n - map: 0x0a5fc5951b49 <MetaMap (0x0a5fc5951bd9 <NativeContext[287]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: HOLEY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x0a5fc595ec49 <Map[32](PACKED_ELEMENTS)>\n - prototype_validity cell: 0x13b80bdc1249 <Cell value= 1>\n - instance descriptors (own) #1: 0x0a5fc595ea81 <Other heap object (STRONG_DESCRIPTOR_ARRAY_TYPE)>\n - prototype: 0x0a5fc595de61 <JSArray[0]>\n - constructor: 0x0a5fc595d869 <JSFunction Array (sfi = 0x13b80bdfbb99)>\n - dependent code: 0x13b80bdc0c51 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x13b80bdc17f9: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x13b80bdf1b99 <AccessorInfo name= 0x13b80bdc17f9 <String[6]: #length>\x2C data= 0x13b80bdc0069 <undefined>>\n
+code-creation,JS,9,597333,0x1092db5c9ee8,118,work file:///w/unstable-all.mjs:37:14,0x3b6cb813458,~
+code-creation,JS,9,597333,0x1092db5ca008,14,Point file:///w/unstable-all.mjs:14:14,0x3b6cb813560,~
+map-details,597500,0x03b6cb819ce1,0x3b6cb819ce1: [Map] in OldSpace\n - map: 0x0a5fc5951b49 <MetaMap (0x0a5fc5951bd9 <NativeContext[287]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: DICTIONARY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x0a5fc595ecc1 <Map[32](HOLEY_ELEMENTS)>\n - prototype_validity cell: 0x13b80bdc1249 <Cell value= 1>\n - instance descriptors (own) #1: 0x0a5fc595ea81 <DescriptorArray[1]>\n - prototype: 0x0a5fc595de61 <JSArray[0]>\n - constructor: 0x0a5fc595d869 <JSFunction Array (sfi = 0x13b80bdfbb99)>\n - dependent code: 0x13b80bdc0c51 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x13b80bdc17f9: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x13b80bdf1b99 <AccessorInfo name= 0x13b80bdc17f9 <String[6]: #length>\x2C data= 0x13b80bdc0069 <undefined>>\n
+map,Transition,597541,0x0a5fc595ecc1,0x03b6cb819ce1,0x1092db5c9f38,43,31,,symbol(hash 28443365)
+map,Normalize,597583,0x03b6cb819b61,0x03b6cb819d71,0x1092db5c9f45,44,19,DeletingProperty,
+map,Deprecate,597583,0x03b6cb819b61,0x000000000000,0x1092db5ca00a,14,30,,
+map,Deprecate,597583,0x03b6cb819b09,0x000000000000,0x1092db5ca00a,14,30,,
+SD_CAP22_LOG
+  CAP22L=${CAP22L%$'\n'}
+  IFS= read -r -d '' CAP22O <<'SD_CAP22_OUT' || true
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+60 at file:///w/unstable-all.mjs:42 for 0x2edc9f0a7de1 <JSArray[3]> from 0x03b6cb819981 <FixedArray[3]> to 0x2edc9f0a81f1 <FixedDoubleArray[3]>
+[generalizing]x:s{Any;const}->d{Any;const} (+1 maps) [new ~Point+2 at file:///w/unstable-all.mjs:14]
+SD_CAP22_OUT
+  CAP22O=${CAP22O%$'\n'}
+  IFS= read -r -d '' CAP24L <<'SD_CAP24_LOG' || true
+v8-version,13,6,233,17,-node.63,0
+v8-platform,macos,macos
+map-details,17292,0x2e0bca4a11e1,0x2e0bca4a11e1: [Map]\n - map: 0x2e0bca4937a1 <MetaMap (0x2e0bca493831 <NativeContext[302]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: HOLEY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x2e0bca4a1161 <Map[32](PACKED_ELEMENTS)>\n - prototype_validity cell: 0x15a43ff012c9 <Cell value= 1>\n - instance descriptors (own) #1: 0x2e0bca4a0f79 <Other heap object (STRONG_DESCRIPTOR_ARRAY_TYPE)>\n - prototype: 0x2e0bca4a0359 <JSArray[0]>\n - constructor: 0x2e0bca49fd29 <JSFunction Array (sfi = 0x39c3326cf229)>\n - dependent code: 0x15a43ff00d19 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x15a43ff094c1: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x15a43ff11791 <AccessorInfo name= 0x15a43ff094c1 <String[6]: #length>\x2C data= 0x15a43ff00011 <undefined>>\n
+code-creation,JS,9,485250,0x10896bd1f1b8,118,work file:///w/unstable-all.mjs:37:14,0xd4b9f49fdb0,~
+code-creation,JS,9,485250,0x10896bd1f2d8,14,Point file:///w/unstable-all.mjs:14:14,0xd4b9f49fe88,~
+map-details,485417,0x0d4b9f4a2649,0xd4b9f4a2649: [Map]\n - map: 0x2e0bca4937a1 <MetaMap (0x2e0bca493831 <NativeContext[302]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: DICTIONARY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x2e0bca4a11e1 <Map[32](HOLEY_ELEMENTS)>\n - prototype_validity cell: 0x15a43ff012c9 <Cell value= 1>\n - instance descriptors (own) #1: 0x2e0bca4a0f79 <DescriptorArray[1]>\n - prototype: 0x2e0bca4a0359 <JSArray[0]>\n - constructor: 0x2e0bca49fd29 <JSFunction Array (sfi = 0x39c3326cf229)>\n - dependent code: 0x15a43ff00d19 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x15a43ff094c1: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x15a43ff11791 <AccessorInfo name= 0x15a43ff094c1 <String[6]: #length>\x2C data= 0x15a43ff00011 <undefined>>\n
+map,Transition,485417,0x2e0bca4a11e1,0x0d4b9f4a2649,0x10896bd1f208,43,31,,symbol(hash 28443365)
+map,Normalize,485458,0x0d4b9f4a24d9,0x0d4b9f4a26e1,0x10896bd1f215,44,19,DeletingProperty,
+map,Deprecate,485458,0x0d4b9f4a24d9,0x000000000000,0x10896bd1f2da,14,30,,
+map,Deprecate,485458,0x0d4b9f4a2481,0x000000000000,0x10896bd1f2da,14,30,,
+SD_CAP24_LOG
+  CAP24L=${CAP24L%$'\n'}
+  IFS= read -r -d '' CAP24O <<'SD_CAP24_OUT' || true
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+60 at file:///w/unstable-all.mjs:42 for 0x3250142cc111 <JSArray[3]> from 0x0d4b9f4a2309 <FixedArray[3]> to 0x3250142cc521 <FixedDoubleArray[3]>
+[generalizing]x:s{Any;const}->d{Any;const} (+1 maps) [new ~Point+2 at file:///w/unstable-all.mjs:14]
+SD_CAP24_OUT
+  CAP24O=${CAP24O%$'\n'}
+  IFS= read -r -d '' CAP26L <<'SD_CAP26_LOG' || true
+v8-version,14,6,202,34,-node.28,0
+v8-platform,macos,macos
+map-details,13220,0x0cac66122429,0xcac66122429: [Map] in OldSpace\n - map: 0x0cac661187c9 <MetaMap (0x0cac66118859 <NativeContext[306]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: HOLEY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x0cac661223a9 <Map[32](PACKED_ELEMENTS)>\n - prototype_validity_cell: 0x1d76def81351 <Cell value= [cleared]>\n - instance descriptors (own) #1: 0x0cac661221b9 <Other heap object (STRONG_DESCRIPTOR_ARRAY_TYPE)>\n - prototype: 0x0cac66121591 <JSArray[0]>\n - constructor: 0x0cac661213e9 <JSFunction Array (sfi = 0x2a00ff784de9)>\n - dependent code: 0x1d76def80df1 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x1d76def818f1: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x0116726c8049 <AccessorInfo name= 0x1d76def818f1 <String[6]: #length>\x2C data= 0x1d76def80011 <undefined>>\n
+code-creation,JS,10,469829,0xd29acfdd3f0,123,work file:///w/unstable-all.mjs:37:14,0xf3cc8599c20,~
+code-creation,JS,10,469845,0xd29acfdd518,14,Point file:///w/unstable-all.mjs:14:14,0xf3cc8599cf8,~
+map-details,469994,0x0f3cc859c749,0xf3cc859c749: [Map] in OldSpace\n - map: 0x0cac661187c9 <MetaMap (0x0cac66118859 <NativeContext[306]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: DICTIONARY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x0cac66122429 <Map[32](HOLEY_ELEMENTS)>\n - prototype_validity_cell: 0x1d76def81351 <Cell value= [cleared]>\n - instance descriptors (own) #1: 0x0cac661221b9 <DescriptorArray[1]>\n - prototype: 0x0cac66121591 <JSArray[0]>\n - constructor: 0x0cac661213e9 <JSFunction Array (sfi = 0x2a00ff784de9)>\n - dependent code: 0x1d76def80df1 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0x1d76def818f1: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x0116726c8049 <AccessorInfo name= 0x1d76def818f1 <String[6]: #length>\x2C data= 0x1d76def80011 <undefined>>\n
+map,Transition,470018,0x0cac66122429,0x0f3cc859c749,0x0d29acfdd444,43,31,,symbol(hash 28443365)
+map,Normalize,470049,0x0f3cc859c601,0x0f3cc859c7e1,0x0d29acfdd452,44,19,DeletingProperty,
+map,Deprecate,470056,0x0f3cc859c601,0x000000000000,0x0d29acfdd51a,14,30,,
+map,Deprecate,470059,0x0f3cc859c5a9,0x000000000000,0x0d29acfdd51a,14,30,,
+SD_CAP26_LOG
+  CAP26L=${CAP26L%$'\n'}
+  IFS= read -r -d '' CAP26O <<'SD_CAP26_OUT' || true
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+63 at file:///w/unstable-all.mjs:42 for 0x3f7d1a25da79 <JSArray[3]> from 0x0f3cc859c411 <FixedArray[3]> to 0x3f7d1a25de99 <FixedDoubleArray[3]>
+[generalizing]x:s{Any;const}->d{Any;const} (+1 maps) [new ~Point+2 at file:///w/unstable-all.mjs:14]
+SD_CAP26_OUT
+  CAP26O=${CAP26O%$'\n'}
+  IFS= read -r -d '' CAP27L <<'SD_CAP27_LOG' || true
+v8-version,15,6,75,50,-node.11,0
+v8-platform,macos,macos
+map-details,13825,0x2eafbb663c79,0x2eafbb663c79: [Map] in OldSpace\n - map: 0x2eafbb659de9 <MetaMap (0x2eafbb659e79 <NativeContext[308]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: HOLEY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x2eafbb663bf9 <Map[32](PACKED_ELEMENTS)>\n - prototype_validity_cell: 0x0e6276bc13d1 <Cell value= [cleared]>\n - instance descriptors (own) #1: 0x2eafbb663a11 <DescriptorArray[1]>\n - prototype: 0x2eafbb662df1 <JSArray[0]>\n - constructor: 0x2eafbb662c49 <JSFunction Array (sfi = 0x1e5228fac689)>\n - dependent code: 0x0e6276bc0e39 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0xe6276bc1969: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x30ef15ca8609 <AccessorInfo name= 0x0e6276bc1969 <String[6]: #length>\x2C data= 0x0e6276bc0011 <undefined>>\n
+code-creation,JS,10,486071,0x3ee2319dc760,118,work file:///w/unstable-all.mjs:37:14,0x38978df6aa0,~
+code-creation,JS,10,486086,0x3ee2319dc880,14,Point file:///w/unstable-all.mjs:14:14,0x38978df6b78,~
+map-details,486248,0x038978df91a1,0x38978df91a1: [Map] in OldSpace\n - map: 0x2eafbb659de9 <MetaMap (0x2eafbb659e79 <NativeContext[308]>)>\n - type: JS_ARRAY_TYPE\n - instance size: 32\n - inobject properties: 0\n - unused property fields: 0\n - elements kind: DICTIONARY_ELEMENTS\n - enum length: invalid\n - stable_map\n - back pointer: 0x2eafbb663c79 <Map[32](HOLEY_ELEMENTS)>\n - prototype_validity_cell: 0x0e6276bc13d1 <Cell value= [cleared]>\n - instance descriptors (own) #1: 0x2eafbb663a11 <DescriptorArray[1]>\n - prototype: 0x2eafbb662df1 <JSArray[0]>\n - constructor: 0x2eafbb662c49 <JSFunction Array (sfi = 0x1e5228fac689)>\n - dependent code: 0x0e6276bc0e39 <Other heap object (WEAK_ARRAY_LIST_TYPE)>\n - construction counter: 0\n\n  [0]: 0xe6276bc1969: [String] in ReadOnlySpace: #length (const accessor descriptor\x2C p: 0\x2C attrs: [W__]) @ 0x30ef15ca8609 <AccessorInfo name= 0x0e6276bc1969 <String[6]: #length>\x2C data= 0x0e6276bc0011 <undefined>>\n
+map,Transition,486274,0x2eafbb663c79,0x038978df91a1,0x3ee2319dc7b0,43,31,,symbol(hash 28443365)
+map,Normalize,486315,0x038978df9069,0x038978df9239,0x3ee2319dc7bd,44,19,DeletingProperty,
+map,Deprecate,486323,0x038978df9069,0x000000000000,0x3ee2319dc882,14,30,,
+map,Deprecate,486326,0x038978df9011,0x000000000000,0x3ee2319dc882,14,30,,
+SD_CAP27_LOG
+  CAP27L=${CAP27L%$'\n'}
+  IFS= read -r -d '' CAP27O <<'SD_CAP27_OUT' || true
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+60 at file:///w/unstable-all.mjs:42 for 0x1c4da424c2a9 <JSArray[3]> from 0x038978df8e81 <FixedArray[3]> to 0x1c4da424c6b9 <FixedDoubleArray[3]>
+[generalizing]x:s{Any;const}->d{Any;const} (+1 maps) [new ~Point+2 at file:///w/unstable-all.mjs:14]
+SD_CAP27_OUT
+  CAP27O=${CAP27O%$'\n'}
+  CAPM='K Point;R Point;K work;R work;M work|MAP_ELEM_DICT|unstable-all.mjs:43:31|HOLEY_ELEMENTS -> DICTIONARY_ELEMENTS|1;M work|MAP_NORMALIZE|unstable-all.mjs:44:19|DeletingProperty|1;M Point|MAP_DEPRECATE|unstable-all.mjs:14:30|-|2;'
+  CAPS='E work|ELEM|unstable-all.mjs:42|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS|1;E Point|GEN|unstable-all.mjs:14|x:s{Any;const}->d{Any;const} (+1 maps)|1;'
+  st_cap() { # M VER -> "MAP records#SHAPE records#rc|node spawns|mktemp|VERDICT DIFF|work DIFF|Point SAME|removed record"
+    local lg="CAP$1L" ou="CAP$1O" d="$e/cap$1"
+    mkdir -p "$d/b" "$d/a"
+    printf '%s\n' "${!lg}" >"$d/b/map.log"; printf '%s\n' "${!ou}" >"$d/b/out.txt"; printf '1;\n' >"$d/b/driver.mjs"
+    grep -v '^map,Normalize,' "$d/b/map.log" >"$d/a/map.log" || true
+    cp "$d/b/out.txt" "$d/a/out.txt"; printf '1;\n' >"$d/a/driver.mjs"
+    printf '%s#%s#%s|%s|%s|%s|%s' "$(mrec Point,work "${!lg}")" "$(srec Point,work "${!ou}")" \
+      "$(spawn FAKE_VER="$2" -- "$NO" --runs 2 --fn Point,work "$d/b/driver.mjs" "$d/a/driver.mjs")" "$(has 'VERDICT DIFF')" \
+      "$(has '  work: DIFF -- shape-instability multiset differs (before 3 | after 2 site(s))')" \
+      "$(has '  Point: SAME -- identical shape-instability multiset (before 2 | after 2 site(s))')" \
+      "$(endc '  before=1 after=0  work  MAP_NORMALIZE  DeletingProperty')"
+  }
+
+  # Test 41
+  check "real capture node 22 (v22.23.5): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME" \
+    "$(st_cap 22 v22.23.5)" "$CAPM#$CAPS#1|6|1|1|1|1|1"
+
+  # Test 42
+  check "real capture node 24 (v24.22.3): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME" \
+    "$(st_cap 24 v24.22.3)" "$CAPM#$CAPS#1|6|1|1|1|1|1"
+
+  # Test 43
+  check "real capture node 26 (v26.8.2): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME" \
+    "$(st_cap 26 v26.8.2)" "$CAPM#$CAPS#1|6|1|1|1|1|1"
+
+  # Test 44
+  check "real capture node 27 (v27.0.0-alpha.0.1.0): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME" \
+    "$(st_cap 27 v27.0.0-alpha.0.1.0)" "$CAPM#$CAPS#1|6|1|1|1|1|1"
 
   echo
   if [[ $fails -eq 0 ]]; then
