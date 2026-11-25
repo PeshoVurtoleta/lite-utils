@@ -9,10 +9,12 @@ Status: adopted 2026-11-02 (maintainer accepted every item below; the Phase 7 sh
 1.1.0 RELEASED 2026-11-22: commit 65e500c, tag v1.1.0, npm `@zakkster/lite-utils` 1.1.0 (alloc-per-op, minor 1).
 1.1.1 RELEASED 2026-11-23: commit 6643647, tag v1.1.1, npm `@zakkster/lite-utils` 1.1.1 (the maintenance patch, post-1.0
 minors item 2).
-1.1.2 PREPARED 2026-11-24 (b102; the 1.1.2 patch: G-A the allocation-diff --zero null control, Q-ADZ-NC (a);
-G-B alloc-per-op test rows; G-C the deopt-diff T11 SIGPIPE fix): the maintainer commits, tags v1.1.2 and publishes.
-Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5) starting with 1.2.0 shape-diff (Q-M-ORDER2 (a)), then
-1.3.0 code-size-diff. The guard fix F-H1 stays after 1.1.2 (the H3d mechanism is UNVERIFIED).
+1.1.2 RELEASED 2026-11-24 (17:09Z): commit 37efd97, tag v1.1.2, npm latest 1.1.2
+(b102; the 1.1.2 patch: G-A the allocation-diff --zero null control, Q-ADZ-NC (a); G-B alloc-per-op test rows;
+G-C the deopt-diff T11 SIGPIPE fix).
+1.2.0 shape-diff IN PROGRESS (b103 spec + plans; b104 first coder wave). Then the post-1.0 minors (section 3,
+"Post-1.0 minors"; D-5) in the Q-M-ORDER2 (a) order: 1.3.0 code-size-diff next. The guard fix F-H1 is PARKED
+per Q-B103-FH1 (a) (2026-11-25): no F-H1 planner until a probe after 1.2.0 names the H3d mechanism (UNVERIFIED).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
 ## 0. Scope
@@ -48,6 +50,8 @@ belong here.
 - S-1 Four new scripts, not nine. Ranking (build order): bytecode-budget, deopt-diff, allocation-diff,
   ic-diff. tiering-diff folds into deopt-diff; map/hidden-class diff folds into ic-diff; warmup-cost is
   dropped as a timing script; escape-analysis and ArrayBuffer-count are deferred (section 5).
+  2026-11-25, Q-B103-S1AMEND (a): map / hidden-class diff: shape-diff's since 1.2.0 (Q-SD-ICDIFF (a), Q-SD-KEEP (a));
+  ic-diff never shipped a map section.
 - S-2 Shared code: authored once in `lib/*.sh` fragments (D-2, 2026-11-02: split into as many
   fragments as byte-identity needs -- six in Phase 1 (prologue, msdiff, common, args, modes,
   nullctl), plus v8limits, v8probe and stage in Phase 2; the count is not fixed -- so generated
@@ -168,8 +172,6 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   sample as a fixture. If V8 no longer logs IC transitions in a parseable form, the phase stops and the
   maintainer decides (record in NEXT.md).
 - Verdict: per function + call site, the final IC state (0 / 1 / P / N / megamorphic) as a multiset.
-- REPORTED section (absorbs map diff): deprecated maps, dictionary-mode normalizations
-  (`--trace-maps` / `--log-maps`, only the lines that name the function's receiver maps).
 
 ### Phase 6 -- docs (after the Phase 7 audit fixes; D-4) -- shipped in 1.0.0
 - README per the suite blueprint (LiteSepforge spine, adapted: one section per script with usage, verdict,
@@ -229,16 +231,15 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      maintainer 2026-11-22). No new surface.
      STATUS: RELEASED 2026-11-23 (commit 6643647, tag v1.1.1, npm 1.1.1): fixes 727e315 / ccd531f, tests 9acc7d4 /
      feb9210, docs 5173e8e.
-     Order from slot 3 superseded by Q-M-ORDER2 (a) (maintainer 2026-11-23): 1.2.0 shape-diff (L2) -> 1.3.0 code-size-diff
-     (L4) -> 1.4.0 import-audit (L1) -> 1.5.0 suite-run (L6) -> heap-count-diff (L5, kept); items 3-7 below are the
-     2026-11-12 order.
-  3. 1.2.0 import-audit (L1 below).
+     Items 3-7 follow Q-M-ORDER2 (a) (maintainer 2026-11-23); the 2026-11-12 order (import-audit first, shape-diff last)
+     is history.
+  3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23; IN PROGRESS (b103 / b104).
   4. 1.3.0 code-size-diff (L4 below).
-  5. 1.4.0 suite-run (L6 below).
-  6. heap-count-diff (L5 below): KEPT (Q-HCD (a), maintainer 2026-11-22), after 1.4.0 and before shape-diff.
+  5. 1.4.0 import-audit (L1 below).
+  6. 1.5.0 suite-run (L6 below).
+  7. heap-count-diff (L5 below): KEPT (Q-HCD (a), maintainer 2026-11-22), after 1.5.0 suite-run.
      Its research burst lands the bash 3.2 port (R2-L5-1), a streaming count past the ~512 MiB string-length
      ceiling (readFileSync + JSON.parse, R2-L5-2) and a stated per-run cost before any planner pass.
-  7. shape-diff (L2 below): last.
   ablation-run (L3 below) is not a minor: if ever wanted, a mode of deopt-diff / allocation-diff.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
   Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
@@ -256,14 +257,19 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   `--maglev-escape-analysis`, both accepted (exit 0, output not probed). `--turbo-escape`,
   `--log-code`, `--log-maps`, `--log-maps-details` and `--trace-gc-object-stats` are listed; output
   not probed.
-- L1 import-audit.sh (top pick): what importing a module does to everyone else -- globals changed,
-  open timers / handles, import-time allocation, V8 protector cells invalidated. Checks the
+- L1 import-audit.sh (top pick on 2026-11-03; 1.4.0 per Q-M-ORDER2 (a)): what importing a module does to everyone
+  else -- globals changed, open timers / handles, import-time allocation, V8 protector cells invalidated. Checks the
   `sideEffects: false` law; expected DETERMINISTIC except import-time allocation, which reuses
   allocation-diff machinery and so is STATISTICAL, REPORTED only (S-5); light on V8 internals.
 - L2 shape-diff.sh: per-site elements-kind and field-representation stability, dictionary-mode
-  objects (`--trace-elements-transitions`, `--trace-generalization`; `--log-maps` is already
-  ic-diff's opt-in map section, S-1 / Phase 5). Hard part is attribution (`<unknown>:<unknown>`,
+  objects (three sources: `--trace-elements-transitions`, `--trace-generalization`, `--log-maps`; shape-diff owns
+  --log-maps (Q-SD-ICDIFF (a); ic-diff never parsed it)). Hard part is attribution (`<unknown>:<unknown>`,
   node-internal noise; likely the ic-diff pc -> code-creation join).
+  Lead D-F (UNVERIFIED): a `(+N maps)` line with identical representations (an attribute-only reconfigure) is
+  filtered as a no-op; a Deprecate map event probably still catches it. Stated limit D-E: the owner key is
+  path-stripped, so two same-named helpers in different files share one key and instability moving between them
+  reads SAME (not probed; G-E's twins row backs it).
+  Node floor: node >= 22, gated by the TASK 0a A/B (falls back to >= 24 if it reads DIFFER).
 - L3 optimization-ablation mode for deopt-diff / allocation-diff (not a new script): run with one
   optimization off (`--no-turbo-escape`, inlining off); indirect answer to the deferred
   escape-analysis item. Probe that the `--no-` forms are accepted.
@@ -271,7 +277,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   catches inlining bloat that bytecode-budget cannot see; reuses ic-diff's code-creation parser.
 - L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
-- L6 suite-wide runner: run the five scripts over every package's drivers; store the
+- L6 suite-wide runner: run the shipped bash tools over every package's drivers; store the
   REPORTED tables as a per-package baseline.
 
 ## 4. Known drift to fix
@@ -326,5 +332,6 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   (read as "after 1.1.0, before 1.2.0"; confirmed by Q-B79-PATCH, b79). Shape: section 3, "Post-1.0 minors".
 - D-6 ANSWERED 2026-11-22 (after the 1.1.0 release): Q-PATCH-NAME (a), in the maintainer's words "Yes, 1.1.1": the
   post-1.1.0 maintenance patch is versioned 1.1.1. Q-HCD (a) (b95, chosen option "Keep at slot 6"): heap-count-diff
-  stays a minor, after 1.4.0 suite-run and before shape-diff; its research burst lands R2-L5-1, R2-L5-2 and a stated
-  per-run cost first. Shape: section 3, "Post-1.0 minors", items 2 and 6.
+  stays a minor, after 1.4.0 suite-run and before shape-diff (superseded by Q-M-ORDER2 (a), maintainer 2026-11-23: now
+  item 7, after 1.5.0 suite-run; shape-diff is 1.2.0); its research burst lands R2-L5-1, R2-L5-2 and a stated
+  per-run cost first. Shape: section 3, "Post-1.0 minors", items 2 and 7.
