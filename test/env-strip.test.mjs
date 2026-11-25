@@ -1,4 +1,4 @@
-// test/env-strip.test.mjs (STAGED, b43 G-ENV-ORACLE G1; spec .handoff/PLAN-b42-genv-oracle.md, rows E1-E7)
+// test/env-strip.test.mjs (STAGED, b43 G-ENV-ORACLE G1; spec .handoff/PLAN-b42-genv-oracle.md, rows E1-E7; + row N1, b108: the cap of each tool run)
 // The Q-ENV oracle: each of the 5 bash tools (bytecode-budget, deopt-diff, allocation-diff, ic-diff, shape-diff) unsets NODE_OPTIONS,
 // NODE_V8_COVERAGE, NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS at its top, so NO node spawn sees one.
 //   fake node  -> logs `$1` + ` +NAME` per name that is SET, one line per spawn (a leak never aborts the run)
@@ -230,14 +230,31 @@ function rootOf(tool, which, d) {
 }
 
 // the caps of one tool run (ledger law 8: size to the slowest CI leg). ic real took 27-93 s on hosted macOS node 22 / 24 and
-// past 120 s twice (run 42458559718), against 2-26 s elsewhere; every other tool row stays under 8 s (sd real: 8.9 s, one local darwin run, b107, PRELIMINARY host). All-hang bound of the 20
-// tool runs: 2 x 600 s + 18 x 120 s = 56 min, inside the 7200 s per-file limit (package.json --test-timeout=7200000)
-// and the 180 min job cap
+// past 120 s twice (run 42458559718), against 2-26 s elsewhere. sd real (E3 sd, E5sd: 8 spawns, 6 of them --log-maps trace
+// runs that each write a 12-16 MB map log, which the root NUL-checks (tr | cmp) and parses (MAP_AWK) per run) took
+// 15.6 / 14.2 s (ubuntu node 22), 5.8 / 3.8 s (ubuntu node 27a), 71.6 / 83.8 s (macOS node 22) and past 120 s / 120.1 s
+// (macOS node 27a; E3 sd killed) in nightly 45633599155 (b107, 853c134); locally 7.4-9.8 s on darwin node 22-27 (b108 N1,
+// PRELIMINARY host, single runs, .handoff/evidence/b108/n1/run1-4.log), 1.5x a shape-diff-live row (--runs 3 vs 2), the
+// wrapper adding no measurable time (one pair of runs: 7673 ms wrapped vs 7389 ms direct): hosted-macOS slowness, not a
+// hang. SD_REAL_CAP = 600 s = about 5x the slowest sd real observation (120.1 s), the IC_REAL_CAP factor (about 5x)
+// (hosted macOS spread across legs of one run: 72 s vs > 120 s for sd, 19 s vs 58 s for E3 ic). SD_REAL_FLOOR = 2 x 120 s
+// (the slowest observation, 120.1 s, rounded down): the N1 row fails a cap that leaves less than one doubling of headroom. Every other tool row stays
+// under 8 s. All-hang bound of the 20 tool runs: 4 x 600 s (E3 ic, E5 ic, E3 sd, E5sd) + 16 x 120 s = 72 min; with the
+// non-tool caps (2 git cat-file x 30 s, 14 E1 spawns x 60 s, 13 git show x 60 s = 28 min) 100 min, inside the 7200 s
+// per-file limit (package.json --test-timeout=7200000) and the 180 min job cap (ci.yml / nightly.yml timeout-minutes)
 // (Q-B73-CITIME; was 120). SIGKILL because
 // SIGTERM cannot bound a hung foreground step: ic-diff traps TERM and bash runs the trap only after that step ends (with the
 // pipes spawnSync has closed by then, which is why run 42458559718 read "killed by SIGPIPE"). LEDGER #73.
 const TOOL_CAP = 120000;
 const IC_REAL_CAP = 600000;
+const SD_REAL_CAP = 600000;
+const SD_REAL_FLOOR = 240000;   // 2 x 120 s (the slowest sd real CI observation, 120.1 s, rounded down: E5sd, macOS node 27a, run 45633599155); SD_REAL_CAP is about 5x it
+// the cap of one tool run (b108 N1): pure, spawns nothing; runTool uses it, the N1 row asserts on it
+function capOf(tool, mode) {
+    if (mode === 'real' && tool === 'ic') return IC_REAL_CAP;
+    if (mode === 'real' && tool === 'sd') return SD_REAL_CAP;
+    return TOOL_CAP;
+}
 
 // one run of a tool; returns what the rows assert on, removes its dir in finally. mode fake | real, which new | old.
 function runTool(tool, mode, which) {
@@ -250,7 +267,7 @@ function runTool(tool, mode, which) {
         const node = mode === 'fake' ? fakeNode(d) : wrapper(d);
         const { args, cwd } = setup(tool, mode, d, node);
         const r = capSync('bash', [root, ...args], { encoding: 'utf8', cwd, killSignal: 'SIGKILL', env: probeEnv(d, mode === 'fake' ? '--st-probe' : '--trace-warnings') },
-            tool === 'ic' && mode === 'real' ? IC_REAL_CAP : TOOL_CAP, `env-strip ${tool} ${mode} ${which}`);
+            capOf(tool, mode), `env-strip ${tool} ${mode} ${which}`);
         const out = (r.stdout || '') + (r.stderr || '');
         const logf = join(d, 'fk', 'env.log');
         const log = existsSync(logf) ? readFileSync(logf, 'utf8').split('\n').filter(Boolean) : [];
@@ -274,6 +291,21 @@ function fakeShape(r, tool, spawns = TOOLS[tool].spawns) {   // the E2 / E4 shar
     assert.equal(r.verdict, T.verdict, `${tool} VERDICT${tail(r)}`);
     assert.equal(r.log.length, spawns, `${tool} node spawns${tail(r)}`);
 }
+
+// ---- N1: the cap each tool run gets (b108; spawns nothing) ----
+test('N1 cap: sd real runs (E3 sd, E5sd) get SD_REAL_CAP >= SD_REAL_FLOOR; ic real keeps IC_REAL_CAP; every fake run and the other real runs keep TOOL_CAP', () => {
+    assert.ok(capOf('sd', 'real') >= SD_REAL_FLOOR, `N1 cap: sd real gets ${capOf('sd', 'real')} ms, want >= SD_REAL_FLOOR ${SD_REAL_FLOOR} ms (2 x the slowest CI sd real run)`);
+    assert.equal(capOf('sd', 'real'), SD_REAL_CAP, 'N1 cap: sd real gets SD_REAL_CAP');
+    assert.equal(capOf('ic', 'real'), IC_REAL_CAP, 'N1 cap: ic real gets IC_REAL_CAP');
+    for (const tool of Object.keys(TOOLS)) {
+        assert.equal(capOf(tool, 'fake'), TOOL_CAP, `N1 cap: ${tool} fake gets TOOL_CAP`);
+        if (tool !== 'ic' && tool !== 'sd') assert.equal(capOf(tool, 'real'), TOOL_CAP, `N1 cap: ${tool} real gets TOOL_CAP`);
+    }
+    // the cap runTool hands capSync is capOf's: a call site that names a cap constant bypasses the checks above
+    const rt = runTool.toString();
+    assert.equal(rt.split('capOf(tool, mode)').length - 1, 1, 'N1 cap: runTool passes capOf(tool, mode) to its capSync');
+    assert.ok(!/\b(?:TOOL_CAP|IC_REAL_CAP|SD_REAL_CAP)\b/.test(rt), 'N1 cap: runTool names no cap constant (capOf is its one cap door)');
+});
 
 // ---- E1: logger teeth ----
 test('E1 logger teeth: the fake and the wrapper log exactly the names that are set (empty counts)', { skip }, () => {
