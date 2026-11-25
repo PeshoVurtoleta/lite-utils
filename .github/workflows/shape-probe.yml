@@ -1,0 +1,196 @@
+# shape-probe.yml -- DISPATCH-ONLY research workflow (G-L TASK 0b; ruling Q-B103-LINUX (a) as amended by A5
+# Q-B104-MAWK and A6 Q-B104-RAWLOGS; precedent Q-B82-LINUX (a); .handoff/b103/SPEC-1.2.0.md section 7). NOT part of CI:
+# no push / pull_request / schedule trigger, no gate, no self-test step. It measures (tier REPORTED, hosted CI) and
+# freezes nothing by itself: 1.2.0 does not ship until the maintainer has read 27/27 on every run below.
+# Each of 4 legs (ubuntu-latest x node 22 / 24 / 26, macos-latest x node 26 = control) runs the committed
+# research/shape-diff/probes/run-probes.sh (/bin/bash; it locates shape-diff.prototype.sh next to itself and uses the
+# `node` first on PATH, i.e. the setup-node one) once per awk: ubuntu 3 runs, macos 2 runs. ubuntu-latest's default awk
+# is GNU Awk 5.3.2 (b87 CI log), so mawk runs only via a shim:
+#   1. default awk (ubuntu: GNU Awk expected, mawk also accepted; macOS: BSD awk), run BEFORE any install
+#   2. gawk first on PATH via a shim dir ($RUNNER_TEMP/gawk-shim/awk -> $(command -v gawk)); gawk installed only if
+#      absent (apt-get on ubuntu, brew on macos); the step records how
+#   3. ubuntu only: mawk first on PATH via $RUNNER_TEMP/mawk-shim/awk -> $(command -v mawk); apt-get install mawk if absent
+# Each run records the identity of the awk FIRST ON PATH inside that run (first line of `awk --version`, else
+# `-W version`, else `-V`, all with </dev/null) to run-<r>.awk.txt. Versions recorded per leg: awk, cmp, tail, seq
+# (--version may fail on BSD: the failure is recorded), node -v, uname -a. A red run never stops the other runs or the
+# upload. The final step fails the leg unless, for EVERY run: exit 0, the LAST line of its log is
+# `shape-diff probes (v<matrix node>.x.y): 27 assertion(s) ok` (run-probes.sh's own line; on failure it prints
+# `<n> assertion(s) FAILED (<m> ok)` and exits 1; 27 = its assert_eq / assert_contains calls), and the awk identity
+# matches: mawk run `^mawk `, gawk run `^GNU Awk `, default run `^awk version ` on macOS and `^(mawk |GNU Awk )` on ubuntu.
+# Artifact per leg: shape-probe-<os>-node-<node> (retention 30 days): uploads stdout + stderr per run; raw V8 logs are
+# not kept (run-probes.sh deletes its mktemp dir on EXIT; research/ is not edited).
+# Dispatch (the file must be on the default branch first):
+#   gh workflow run shape-probe.yml --ref main
+#   gh run list --workflow shape-probe.yml --limit 1          # note the run id
+#   gh run watch <run-id>
+# Download (every artifact lands in <dir>/<artifact-name>/):
+#   gh run download <run-id> --dir <dir> --pattern 'shape-probe-*'
+# Pins: reused verbatim from alloc-probe.yml (resolved there read-only on 2026-11-15 with
+# `gh api repos/<action>/git/ref/tags/<tag>`); not re-resolved here. ci.yml uses the same majors by tag
+# (actions/checkout@v7, actions/setup-node@v7).
+
+name: shape-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    name: probe (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # nominal: the local suite is about a minute; 30 leaves room for a slow hosted runner
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: '22'
+          - os: ubuntu-latest
+            node: '24'
+          - os: ubuntu-latest
+            node: '26'
+          - os: macos-latest
+            node: '26'
+    steps:
+      - name: out dir
+        run: echo "OUT=$RUNNER_TEMP/shape-probe-out" >> "$GITHUB_ENV"
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (= tag v7)
+        with:
+          persist-credentials: false
+      - name: setup node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (= tag v7)
+        with:
+          node-version: ${{ matrix.node }}
+      - name: record versions
+        run: |
+          mkdir -p "$OUT"
+          {
+            echo "== node -v"; node -v || true
+            echo "== uname -a"; uname -a || true
+            echo "== default awk path"; command -v awk || true; readlink -f "$(command -v awk)" 2>&1 || true
+            echo "== awk --version"; awk --version </dev/null 2>&1 | head -n 3 || true
+            echo "== awk -W version"; awk -W version </dev/null 2>&1 | head -n 3 || true
+            echo "== awk -V"; awk -V </dev/null 2>&1 | head -n 3 || true
+            echo "== gawk present before install?"; command -v gawk || echo "no"
+            for t in cmp tail seq; do
+              echo "== $t path"; command -v "$t" || true
+              echo "== $t --version"; "$t" --version 2>&1 | head -n 2 || true
+              vrc=0; "$t" --version >/dev/null 2>&1 || vrc=$?
+              echo "(exit of $t --version: $vrc)"
+            done
+          } > "$OUT/versions.txt" 2>&1
+          cat "$OUT/versions.txt"
+      - name: awk identity helper
+        run: |
+          cat > "$RUNNER_TEMP/awk-id.sh" <<'EOS'
+          # usage: awk-id.sh -> first identity line of the awk first on PATH
+          for a in "--version" "-W version" "-V"; do
+            l="$(awk $a </dev/null 2>&1 | head -n 1)"
+            case "$l" in "mawk "*|"GNU Awk "*|"awk version "*) echo "$l"; exit 0 ;; esac
+          done
+          echo "UNKNOWN: $(awk --version </dev/null 2>&1 | head -n 1)"
+          EOS
+      - name: run-probes (default awk)
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          bash "$RUNNER_TEMP/awk-id.sh" | tee "$OUT/run-default-awk.awk.txt"
+          rc=0
+          /bin/bash research/shape-diff/probes/run-probes.sh > "$OUT/run-default-awk.log" 2>&1 || rc=$?
+          echo "$rc" > "$OUT/run-default-awk.rc"
+          cat "$OUT/run-default-awk.log"
+          echo "exit code: $rc"
+      - name: install gawk if absent
+        if: always()
+        run: |
+          if command -v gawk >/dev/null 2>&1; then
+            echo "gawk already present: $(command -v gawk)" | tee "$OUT/gawk-install.txt"
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            echo "gawk absent: sudo apt-get install -y gawk" | tee "$OUT/gawk-install.txt"
+            sudo apt-get update -q && sudo apt-get install -y gawk
+          else
+            echo "gawk absent: brew install gawk" | tee "$OUT/gawk-install.txt"
+            brew install gawk
+          fi
+          command -v gawk | tee -a "$OUT/gawk-install.txt"
+          gawk --version </dev/null 2>&1 | head -n 1 | tee -a "$OUT/gawk-install.txt"
+      - name: run-probes (gawk first on PATH)
+        if: always()
+        run: |
+          shim="$RUNNER_TEMP/gawk-shim"
+          mkdir -p "$shim"
+          ln -sf "$(command -v gawk)" "$shim/awk"
+          export PATH="$shim:$PATH"
+          echo "awk resolves to: $(command -v awk)" | tee "$OUT/gawk-shim.txt"
+          bash "$RUNNER_TEMP/awk-id.sh" | tee "$OUT/run-gawk.awk.txt"
+          rc=0
+          /bin/bash research/shape-diff/probes/run-probes.sh > "$OUT/run-gawk.log" 2>&1 || rc=$?
+          echo "$rc" > "$OUT/run-gawk.rc"
+          cat "$OUT/run-gawk.log"
+          echo "exit code: $rc"
+      - name: install mawk if absent (ubuntu only)
+        if: always() && runner.os == 'Linux'
+        run: |
+          if command -v mawk >/dev/null 2>&1; then
+            echo "mawk already present: $(command -v mawk)" | tee "$OUT/mawk-install.txt"
+          else
+            echo "mawk absent: sudo apt-get install -y mawk" | tee "$OUT/mawk-install.txt"
+            sudo apt-get update -q && sudo apt-get install -y mawk
+          fi
+          command -v mawk | tee -a "$OUT/mawk-install.txt"
+      - name: run-probes (mawk first on PATH, ubuntu only)
+        if: always() && runner.os == 'Linux'
+        run: |
+          shim="$RUNNER_TEMP/mawk-shim"
+          mkdir -p "$shim"
+          ln -sf "$(command -v mawk)" "$shim/awk"
+          export PATH="$shim:$PATH"
+          echo "awk resolves to: $(command -v awk)" | tee "$OUT/mawk-shim.txt"
+          bash "$RUNNER_TEMP/awk-id.sh" | tee "$OUT/run-mawk.awk.txt"
+          rc=0
+          /bin/bash research/shape-diff/probes/run-probes.sh > "$OUT/run-mawk.log" 2>&1 || rc=$?
+          echo "$rc" > "$OUT/run-mawk.rc"
+          cat "$OUT/run-mawk.log"
+          echo "exit code: $rc"
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (= tag v7)
+        with:
+          name: shape-probe-${{ matrix.os }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/shape-probe-out/
+          if-no-files-found: error
+          retention-days: 30
+      - name: verdict (27/27 + awk identity on every run)
+        if: always()
+        env:
+          LEG_NODE: ${{ matrix.node }}
+        run: |
+          bad=0
+          runs="default-awk gawk"
+          if [ "$RUNNER_OS" = "Linux" ]; then runs="default-awk gawk mawk"; fi
+          for r in $runs; do
+            case "$r" in
+              mawk) idre='^mawk ' ;;
+              gawk) idre='^GNU Awk ' ;;
+              *) if [ "$RUNNER_OS" = "Linux" ]; then idre='^(mawk |GNU Awk )'; else idre='^awk version '; fi ;;
+            esac
+            rc="$(cat "$OUT/run-$r.rc" 2>/dev/null || echo missing)"
+            id="$(head -n 1 "$OUT/run-$r.awk.txt" 2>/dev/null || echo missing)"
+            if [ "$rc" = "0" ] \
+              && tail -n 1 "$OUT/run-$r.log" | grep -Eq "^shape-diff probes \(v${LEG_NODE}\.[0-9]+\.[0-9]+\): 27 assertion\(s\) ok\$" \
+              && printf '%s\n' "$id" | grep -Eq "$idre"; then
+              echo "PASS $r: 27/27 (exit 0), awk: $id"
+            else
+              echo "FAIL $r: exit=$rc, awk: $id (want $idre), last line must be the 27-ok line"; bad=1
+            fi
+          done
+          exit "$bad"
