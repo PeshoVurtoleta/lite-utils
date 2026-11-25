@@ -33,7 +33,7 @@ const OLD_SHA = '57b93d1';
 const CI_STRICT = process.env.CI === 'true';
 const histSkip = (have) => (have === true || CI_STRICT ? false : have);
 const IBD = 'inlining-budget-diff.sh', ALLOC = 'allocation-diff.sh', BB = 'bytecode-budget.sh', DD = 'deopt-diff.sh', IC = 'ic-diff.sh';
-const SD = 'shape-diff.sh';   // 1.2.0 (b105 G-X B1): in G-T4 only; FIVE stays the 57b93d1 root set
+const SD = 'shape-diff.sh';   // 1.2.0 (b105 G-X B1): in G-T4; b108 X2-B2: in B1 too; FIVE stays the 57b93d1 root set
 const FIVE = [BB, DD, IC, ALLOC, IBD];
 
 // child env: no inherited steering of git / node / bash / editors; no global git config; V8 coverage undefined (a delete is not a strip)
@@ -650,7 +650,7 @@ function reportRow(root, tool) {
     if (!readFileSync(f).equals(Buffer.from(KEEP))) return `the inherited REPORT file changed: ${JSON.stringify(readFileSync(f, 'utf8'))}`;
     return null;
 }
-for (const tool of FIVE) {
+for (const tool of [...FIVE, SD]) {
     test(`B1 ${tool}: REPORT=<9-byte file> in the environment + --no-such-flag-xyz -> exit 2, the file's bytes unchanged`, { skip }, () => {
         assert.equal(reportRow(live.out, tool), null);
     });
@@ -664,6 +664,29 @@ test('MUT delete the `REPORT=""` line of lib/prologue.sh -> B1 red on bytecode-b
         if (why !== null) { red.push(tool); t.diagnostic(`report mutant ${tool}: ${why.slice(0, 100)}`); }
     }
     assert.deepEqual(red.sort(), [BB, IBD].sort(), 'the mutant must flip exactly bytecode-budget and inlining-budget-diff');
+});
+// shape-diff (b108 X2-B2, PLAN-SD-X2 task 8): sd assigns REPORT twice before its parse loop (the expanded prologue line and its own
+// pre-parse REPORT=/dev/null), so the prologue MUT above keeps sd green and is not its tooth. Its tooth: a private copy of the
+// built root with BOTH assignments dropped (each exact-once); each drop alone stays green (the other assignment still covers it)
+const SD_REP_PRO = 'REPORT=""   # die reads it: an inherited $REPORT is never a report file\n';
+const SD_REP_PRE = 'REPORT=/dev/null   # say tees here until --out names DIR/report.txt (lib/common.sh say)\n';
+function sdReportCopy(drops) {
+    let t = readFileSync(join(ROOT, SD), 'utf8');
+    for (const from of drops) {
+        const n = t.split(from).length - 1;
+        assert.equal(n, 1, `sd REPORT mutant: anchor ${JSON.stringify(from)} must match exactly once in ${SD}, matched ${n}`);
+        t = t.split(from).join('');
+    }
+    const d = mk('sd-report'); writeFileSync(join(d, SD), t); chmodSync(join(d, SD), 0o755);
+    return d;
+}
+test('MUT sd: drop both pre-parse REPORT assignments of shape-diff.sh (prologue REPORT="" + its REPORT=/dev/null) -> B1 red (the inherited file changed); each drop alone stays green', { skip }, (t) => {
+    assert.equal(reportRow(sdReportCopy([SD_REP_PRO]), SD), null, 'only the prologue line dropped: REPORT=/dev/null still covers the parse');
+    assert.equal(reportRow(sdReportCopy([SD_REP_PRE]), SD), null, 'only REPORT=/dev/null dropped: the prologue REPORT="" still covers the parse');
+    const why = reportRow(sdReportCopy([SD_REP_PRO, SD_REP_PRE]), SD);
+    assert.notEqual(why, null, 'the double-drop mutant survived');
+    t.diagnostic(`sd report mutant: ${why.slice(0, 120)}`);
+    assert.match(why, /^the inherited REPORT file changed: /, why);
 });
 
 // B5: a hard link of a TRACKED file in --before's directory or below it is refused "git-tracked"; one whose tracked twin lies above its

@@ -57,6 +57,15 @@
 //            20000. Live: rc 2, signal null, interrupted once, 1 VERDICT, exit < 10 s, the held driver dead, the group gone, TMPDIR
 //            0 (ibd: its 1 inl-diff-*). Twin aed6684: a named timeout whose ps dump names the held `sleep 30` (red). Also ROW PSUB
 //            (bash >= 5), described at its rows.
+// shape-diff (sd, 1.2.0 b108 X2-B2, PLAN-SD-X2 tasks 6-8 + Q-B103-SIGTEXT (a)): the 6th root joins ROW A1 and ROW A2 only (SIG_NAMES;
+// NAMES stays 5: the 465881b / 085c54d / aed6684 / 65e500c twins have no sd root); its driver run is the fake's DRIVER call by
+// --log-maps. Its teeth are private-copy mutants of the live root (exact-once): ROW A1o-sd (the main run's sig_arm re-arm dropped
+// -> the signal is only noted: interrupted 0 times, the held driver alive at exit) and ROW A2o-sd (the EXIT trap's rm dropped ->
+// exactly 1 shape-diff.* left). ROW MKSIG (Q-B105-MKSIG): a mktemp shim first on PATH sends INT / TERM / HUP to the tool while
+// sd's temp-dir mktemp runs -> rc 2, interrupted once, 1 VERDICT, TMPDIR [], 0 driver runs; its tooth drops the noted signal's
+// re-delivery (interrupted 0 times, 6 driver runs: a window witness). The hold line itself has no tooth (replaced by sig_arm the
+// rows stay green on bash 3.2 and 5.3): for it the MKSIG rows are regression pins (Q-B108-MKSIG-TOOTH). ROW T and ROW TR scan
+// shape-diff.sh too (0 spawns; TR live 8 -> 10 trap lines with rm), each with an in-memory sd mutant tooth.
 // Per-child caps are explicit (capSync / armCap, 60 s, 45 s for the G-SIG-2 signal rows; no raw timeout key: spawn-cap.test.mjs S5).
 // Private dirs under one mkdtemp top.
 import { test, before, after, beforeEach } from 'node:test';
@@ -117,7 +126,8 @@ function once(src, from, to, what) {   // an exact-once, count-checked edit
 
 // ---- tools ----
 const NAMES = ['bytecode-budget', 'deopt-diff', 'ic-diff', 'allocation-diff', 'inlining-budget-diff'];
-const SHORT = { 'bytecode-budget': 'bb', 'deopt-diff': 'dd', 'ic-diff': 'ic', 'allocation-diff': 'ad', 'inlining-budget-diff': 'ibd' };
+const SHORT = { 'bytecode-budget': 'bb', 'deopt-diff': 'dd', 'ic-diff': 'ic', 'allocation-diff': 'ad', 'inlining-budget-diff': 'ibd', 'shape-diff': 'sd' };
+const SIG_NAMES = [...NAMES, 'shape-diff'];   // ROW A1 / A2 only (1.2.0 b108): the twin rows stay NAMES (no sd root at their pins)
 const HOLD = () => 30;   // the held driver run's sleep, seconds (G-SIG-2: ad is killed at once too, so 30 s for all five)
 const LIVE = (t) => join(PKG, `${t}.sh`);
 const toolArgs = (t, a, b) => {
@@ -126,6 +136,7 @@ const toolArgs = (t, a, b) => {
         case 'deopt-diff': return ['--fn', 'add', a, b];
         case 'ic-diff': return ['--fn', 'get', a, b];
         case 'allocation-diff': return [a, b];
+        case 'shape-diff': return ['--fn', 'f', a, b];
         default: return ['--tiers', 'turbo', '--no-bytecode', '--fn', 'read.set', a, b];
     }
 };
@@ -161,7 +172,7 @@ function mutant(t, base, key, edits) {
 
 // ---- fake node + case ----
 function fakeText(dir) {
-    // drv = a DRIVER call (first one: stdin copied when catstdin exists and is not "probe"; held when `hold` exists).
+    // drv = a DRIVER call (--log-maps: every sd driver run; first one: stdin copied when catstdin exists and is not "probe"; held when `hold` exists).
     // drv2 = a PROBE call (bb: --print-bytecode with a filter other than `*`; ibd: --print-bytecode without
     // --trace-turbo-inlining): the first one copies stdin to stdin2.bin (catstdin, any content) and is held when `holdprobe` exists.
     return ['#!/bin/bash', `D=${JSON.stringify(dir)}`, 'printf "%s\\n" "$*" >> "$D/log"',
@@ -171,7 +182,7 @@ function fakeText(dir) {
         `  --v8-options) cat ${JSON.stringify(OPTS_FIX)}; exit 0 ;;`,
         'esac',
         'drv=0; drv2=0; pb=0; ti=0; star=0',
-        'for a; do case "$a" in -e|--trace-deopt-verbose|--log-ic|--trace-turbo-inlining|--trace-gc) drv=1 ;; esac; done',
+        'for a; do case "$a" in -e|--trace-deopt-verbose|--log-ic|--trace-turbo-inlining|--trace-gc|--log-maps) drv=1 ;; esac; done',
         'for a; do case "$a" in --print-bytecode) pb=1 ;; --trace-turbo-inlining) ti=1 ;; --print-bytecode-filter=\'*\') star=1 ;; esac; done',
         'if [ "$pb" = 1 ] && [ "$ti" = 0 ] && [ "$star" = 0 ]; then drv2=1; fi',
         'cs=""; [ -f "$D/catstdin" ] && cs=$(cat "$D/catstdin")',
@@ -277,7 +288,7 @@ const holdCase = (t) => mkCase(t, { hold: HOLD(t) });
 const oldHoldCase = (t) => mkCase(t, { hold: t === 'allocation-diff' ? 3 : 12 });   // > the 10 s bound: an old root that waits the driver out still overruns (ad: A3 / A2 only; its A1 twin is the 085c54d one)
 
 // ======================================================= A1 =======================================================
-for (const t of NAMES) for (const sig of SIGS) {
+for (const t of SIG_NAMES) for (const sig of SIGS) {
     test(`A1 ${SHORT[t]} SIG${sig} during the driver run: rc 2 no signal, interrupted once, 1 VERDICT, driver dead, exit in time`, { skip }, async () => {
         const c = holdCase(t);
         const r = await runTool({ root: LIVE(t), t, c, args: c.args(), sig, what: `${t} SIG${sig}` });
@@ -335,7 +346,7 @@ async function retentionCycle(t, root) {
     const runs = await Promise.all(SIGS.map((sig) => { const c = holdCase(t); return runTool({ root, t, c, args: c.args(), sig, what: `${t} SIG${sig} retention` }); }));
     return runs;
 }
-for (const t of NAMES) {
+for (const t of SIG_NAMES) {
     test(`A2 retention ${SHORT[t]}: 3 cycles x 3 signals, ${t === 'inlining-budget-diff' ? 'exactly 1 inl-diff-* dir, 0 inlining-budget-diff.* in TMPDIR' : '0 entries in TMPDIR'}`, { skip }, async () => {
         for (let cycle = 1; cycle <= 3; cycle++) {
             const runs = await retentionCycle(t, LIVE(t));
@@ -394,10 +405,10 @@ test('A2 tooth ibd: a mutant dropping the IBD_TMP trap leaves exactly 1 inlining
 // ======================================================= RMFAIL =======================================================
 // the fake sends the SIGTERM itself (kill -TERM $PPID from the probe call), so this runner sends none: it waits for the tool's
 // exit (armCap + noTimeout, law 1 / 8), then SIGKILLs its own detached group and the pid the fake wrote (law 10)
-async function runSelfSig(root, t, c, args, what, cap = 45000) {
+async function runSelfSig(root, t, c, args, what, cap = 45000, extra = {}) {   // extra: more child env (ROW MKSIG: PATH)
     const so = openSync(c.so, 'w'), se = openSync(c.se, 'w');
     let child;
-    try { child = spawnAsync(BASH, [root, ...args], { cwd: c.cwd, env: cleanEnv({ TMPDIR: c.tmp }), detached: true, stdio: ['ignore', so, se] }); }
+    try { child = spawnAsync(BASH, [root, ...args], { cwd: c.cwd, env: cleanEnv({ TMPDIR: c.tmp, ...extra }), detached: true, stdio: ['ignore', so, se] }); }
     finally { closeSync(so); closeSync(se); }
     const h = armCap(child, cap, 'SIGKILL');
     try {
@@ -496,6 +507,86 @@ test(`A2o OLD twin bb: the ${OLD_SHA} bytecode-budget leaves exactly 1 entry in 
     const c = oldHoldCase(t);
     const r = await runTool({ root: oldRoot(t), t, c, args: c.args(), sig: 'TERM', what: 'old bb SIGTERM retention' });
     assert.equal(ls(c.tmp).length, 1, `TMPDIR: ${JSON.stringify(ls(c.tmp))}\n${msg(r)}`);
+});
+// ---- shape-diff (1.2.0 b108 X2-B2): ROW A1o-sd, ROW A2o-sd, ROW MKSIG (Q-B105-MKSIG) ----
+const SDT = 'shape-diff';
+// sd re-arms the shared trap after its temp-dir mktemp (the Q-B105-MKSIG hold), so the held driver run is guarded by THAT sig_arm;
+// dropping it (exact-once: the no---out branch, the one the A1 rows take) leaves the hold's noting traps in place: the signal is only noted.
+// Not the prologue's sig_arm (final-trap SIGARM): dropping THAT one passes the A1 oracle (b108 measured, 0 problems x 3 signals: the
+// re-arm after mktemp guards the driver run), a vacuous twin
+const SD_REARM = '  sig_arm; [[ -z $SD_SIG ]] || _sig "$SD_SIG"\n  [[ -n "$TMP_DIR" ]] || die "cannot create temp dir"\n';
+const SD_NOREARM = [SD_REARM, '  [[ -z $SD_SIG ]] || _sig "$SD_SIG"\n  [[ -n "$TMP_DIR" ]] || die "cannot create temp dir"\n'];
+const SD_TRAP_RM = 'if [[ -n \\$TMP_DIR && -d \\$TMP_DIR ]]; then rm -rf -- \\"\\$TMP_DIR\\"; fi; ';
+const SD_HOLD = 'SD_SIG=""; trap \'SD_SIG=INT\' INT; trap \'SD_SIG=TERM\' TERM; trap \'SD_SIG=HUP\' HUP\n';
+for (const sig of SIGS) {
+    test(`A1o-sd mutant SIG${sig}: sd with the main run's sig_arm re-arm dropped fails the A1 oracle by name (the signal is only noted: interrupted 0 times, the held driver alive at exit)`, { skip }, async (t) => {
+        const m = mutant(SDT, 'live', 'no re-arm after mktemp', [SD_NOREARM]);
+        const c = oldHoldCase(SDT);
+        const r = await runTool({ root: m, t: SDT, c, args: c.args(), sig, what: `sd no-rearm SIG${sig}` });
+        const p = a1Problems(SDT, sig, r);
+        t.diagnostic(`A1o-sd SIG${sig}: ${p.join('; ')}`);
+        assert.ok(p.length > 0, `the mutant passed the A1 oracle (a vacuous row)\n${msg(r)}`);
+        assert.ok(p.some((x) => /interrupted|status|signal|OVERRUN/.test(x)), `mutant failed for an unexpected reason: ${p.join('; ')}`);
+        // b108 measured (bash 3.2.57): the noted signal ends drv_wait's `wait` early (a trapped signal), the run goes on and the
+        // tool exits rc 2 / 1 VERDICT while the held sleeper still runs: exactly these two problems
+        assert.deepEqual(p, [`"${SDT}: interrupted (SIG${sig})" appears 0 times, want 1`, 'the driver pid is still alive at tool exit'], msg(r));
+    });
+}
+test('A2o-sd mutant: sd with its EXIT trap\'s rm dropped leaves exactly 1 shape-diff.* in TMPDIR after SIGTERM in the driver run', { skip }, async () => {
+    const m = mutant(SDT, 'live', 'no TMP_DIR rm in trap', [[SD_TRAP_RM, '']]);
+    const c = holdCase(SDT);
+    const r = await runTool({ root: m, t: SDT, c, args: c.args(), sig: 'TERM', what: 'sd trap-rm mutant SIGTERM' });
+    assert.equal(ls(c.tmp).filter((n) => n.startsWith('shape-diff.')).length, 1, `TMPDIR: ${JSON.stringify(ls(c.tmp))}\n${msg(r)}`);
+    assert.equal(ls(c.tmp).length, 1, `TMPDIR: ${JSON.stringify(ls(c.tmp))}`);
+});
+// ROW MKSIG (Q-B105-MKSIG, SPEC-1.2.0 A9): a mktemp shim first on PATH runs the real mktemp, logs its argv, writes its pid, sends
+// SIG<X> to the tool (its process-group leader: the tool is spawned detached) and only then prints the dir: the signal lands while
+// sd's `TMP_DIR=$(mktemp -d .../shape-diff.XXXXXX)` runs. The hold notes it; sig_arm + re-delivery die through _sig after
+// TMP_DIR names the dir, so the EXIT trap removes it.
+const MKTEMP = existsSync('/usr/bin/mktemp') ? '/usr/bin/mktemp' : '/bin/mktemp';
+function mkShim(c, sig) {
+    const bin = join(c.dir, 'bin'); mkdirSync(bin);
+    writeFileSync(join(bin, 'mktemp'), ['#!/bin/bash', `D=${JSON.stringify(c.dir)}`, 'printf "%s\\n" "$*" >> "$D/mk.log"',
+        `out=$(${JSON.stringify(MKTEMP)} "$@") || exit $?`,
+        'echo $$ > "$D/pid.tmp"; mv "$D/pid.tmp" "$D/pid"',
+        'pg=$(ps -o pgid= -p $$ | tr -d " ")', `kill -${sig} "$pg"`,
+        'printf "%s\\n" "$out"', ''].join('\n'));
+    chmodSync(join(bin, 'mktemp'), 0o755);
+    return { PATH: `${bin}:${process.env.PATH}` };
+}
+async function mksigRun(root, sig) {
+    const c = mkCase(SDT);
+    const r = await runSelfSig(root, SDT, c, c.args(), `sd mksig SIG${sig}`, 45000, mkShim(c, sig));
+    const mk = existsSync(join(c.dir, 'mk.log')) ? rd(join(c.dir, 'mk.log')).split('\n').filter(Boolean) : [];
+    const node = rd(join(c.dir, 'log')).split('\n').filter(Boolean);
+    const w = `${msg(r)}\nTMPDIR: ${JSON.stringify(ls(c.tmp))}\nmktemp calls: ${JSON.stringify(mk)}\nnode calls: ${JSON.stringify(node)}`;
+    assert.equal(mk.length, 1, `exactly 1 mktemp call (the temp dir), want the shim hit\n${w}`);
+    assert.match(mk[0], /^-d .*\/shape-diff\.XXXXXX$/, w);
+    assert.ok(existsSync(c.pidf), `the shim never signalled (vacuous)\n${w}`);
+    return { r, c, mk, node, w, both: r.stdout + r.stderr };
+}
+for (const sig of SIGS) {
+    test(`MKSIG sd SIG${sig} while the temp-dir mktemp runs: rc 2 no signal, interrupted once, 1 VERDICT, TMPDIR [], 0 driver runs`, { skip }, async () => {
+        const { r, c, node, w, both } = await mksigRun(LIVE(SDT), sig);
+        assert.equal(r.status, 2, w);
+        assert.equal(r.signal, null, w);
+        assert.equal(both.split(`${SDT}: interrupted (SIG${sig})`).length - 1, 1, w);
+        assert.equal((both.match(/^VERDICT \S+$/gm) || []).length, 1, w);
+        assert.deepEqual(ls(c.tmp), [], w);
+        assert.equal(node.filter((l) => /--log-maps/.test(l)).length, 0, `0 driver runs after the signal\n${w}`);
+    });
+}
+// tooth (window witness): sd with the noted signal's re-delivery dropped (`sig_arm; [[ -z $SD_SIG ]] || _sig "$SD_SIG"` -> `sig_arm`,
+// exact-once, the no---out branch): the signal the shim sent was only NOTED by the hold, so the run goes on: interrupted 0 times and
+// all 6 driver runs (2 sides x --runs 3) happen. This proves the signal landed inside the hold window, not after sig_arm.
+// The hold line itself has NO tooth here: replaced by sig_arm (exact-once) the row stays green on bash 3.2.57 and 5.3.20 (b108,
+// measured: bash runs the trap only after `TMP_DIR=$(...)` has assigned, so the EXIT trap removes the dir either way) -> the three
+// MKSIG rows are regression pins for the hold (Q-B108-MKSIG-TOOTH)
+test('MKSIG tooth sd: re-delivery of the noted signal dropped -> SIGTERM in the mktemp window is only noted: interrupted 0 times, 6 driver runs', { skip }, async () => {
+    const m = mutant(SDT, 'live', 'no re-delivery after mktemp', [[SD_REARM, '  sig_arm\n  [[ -n "$TMP_DIR" ]] || die "cannot create temp dir"\n']]);
+    const { node, w, both } = await mksigRun(m, 'TERM');
+    assert.equal(both.split(`${SDT}: interrupted (SIGTERM)`).length - 1, 0, w);
+    assert.equal(node.filter((l) => /--log-maps/.test(l)).length, 6, w);
 });
 // no sig_arm-dropped mutant for A2: a killed bash still runs its EXIT trap (bash 3.2 measured: the trap cleans TMPDIR), so such a mutant
 // does not leak; the bb old twin above is the only retention tooth the spec names (the other four are regression pins here).
@@ -683,7 +774,8 @@ for (const t of NAMES) {
 // in lib/prologue.sh and once per root).
 const PRE_SHA = 'aed6684';
 const PRESKIP = skipFor(haveSha(PRE_SHA));
-const T_FILES = ['lib/prologue.sh', ...NAMES.map((t) => `${t}.sh`)];
+const T_FILES = ['lib/prologue.sh', ...SIG_NAMES.map((t) => `${t}.sh`)];   // Q-B103-SIGTEXT (a): shape-diff.sh joins the live list
+const T_TWIN_FILES = ['lib/prologue.sh', ...NAMES.map((t) => `${t}.sh`)];   // the aed6684 twin has no shape-diff.sh
 const T_RE = /(?:^|[;&|{(!]|\b(?:then|do|else|elif|if|while|until)\b)\s*wait(?=\s*(?:$|[;&|)}]|\d*[<>]))/g;
 function bareWaits(src) {   // -> [{ n, line }] one per operand-less wait command
     const hits = [];
@@ -703,27 +795,32 @@ test('T synthetic: the 6 must-match lines give exactly 1 hit each (6), the 6 mus
     assert.deepEqual(not, [0, 0, 0, 0, 0, 0], `must-not per line: ${JSON.stringify(T_NOMATCH)}`);
     assert.equal(bareWaits(T_NOMATCH.join('\n')).length, 0, 'must-not total');
 });
-test('T live: 0 operand-less wait commands in lib/prologue.sh and the 5 roots', () => {
+test('T live: 0 operand-less wait commands in lib/prologue.sh and the 6 roots (shape-diff.sh included)', () => {
     const hits = T_FILES.flatMap((f) => bareWaits(rd(join(PKG, f))).map((h) => `${f}:${h.n}: ${h.line}`));
     assert.equal(hits.length, 0, `operand-less wait:\n${hits.join('\n')}`);
 });
 test(`T twin ${PRE_SHA}: exactly 6 operand-less wait commands (1 in lib/prologue.sh, 1 per root; the live gate is red there)`, { skip: PRESKIP }, () => {
-    const per = T_FILES.map((f) => {
+    const per = T_TWIN_FILES.map((f) => {
         const g = spawn('git', ['show', `${PRE_SHA}:${f}`], { cwd: PKG }, `git show ${PRE_SHA}:${f}`, 30000);
         assert.equal(g.status, 0, `git show ${PRE_SHA}:${f} failed (CI_STRICT: an unreachable pin is a failure)`);
         return bareWaits(g.stdout).length;
     });
-    assert.deepEqual(per, [1, 1, 1, 1, 1, 1], `per file ${JSON.stringify(T_FILES)}`);
+    assert.deepEqual(per, [1, 1, 1, 1, 1, 1], `per file ${JSON.stringify(T_TWIN_FILES)}`);
     assert.equal(per.reduce((a, b) => a + b, 0), 6);
+});
+test('T tooth sd: an in-memory shape-diff.sh with _sig\'s reap made operand-less (wait "$p" -> wait) gives exactly 1 hit, in shape-diff.sh', () => {
+    const src = once(rd(LIVE('shape-diff')), 'for p in $k; do wait "$p" 2>/dev/null || true; done', 'for p in $k; do wait 2>/dev/null || true; done', 'sd T tooth');
+    const hits = T_FILES.flatMap((f) => bareWaits(f === 'shape-diff.sh' ? src : rd(join(PKG, f))).map((h) => f));
+    assert.deepEqual(hits, ['shape-diff.sh']);
 });
 
 // ---- ROW TR (b96, PLAN-GA ASSERTION 1): an EXIT trap runs `set +e` BEFORE its `rm` (a text gate; no spawn) ----
 // A `trap "` line (whole comment lines skipped) that holds an rm command is an OFFENDER when that rm stands before its `set +e`
 // (or there is no `set +e`): a failing rm under set -e ends the trap with rc 1 before `(exit $rc)` restores the run's code.
-// Live (5 roots + lib/*.sh): exactly 8 trap lines with rm, 0 offenders. The `git show 65e500c:<f>` twin has exactly 6 offenders
+// Live (6 roots + lib/*.sh): exactly 10 trap lines with rm (8 + shape-diff.sh's self-test and main-run traps), 0 offenders. The `git show 65e500c:<f>` twin has exactly 6 offenders
 // (ad 2, dd 2, ic 2; bb and ibd already had the order right). Synthetic lists pin the matcher (6 offender shapes match, the bb
 // and ibd shapes do not). An unreachable pin FAILs under CI_STRICT.
-const TR_FILES = [...readdirSync(join(PKG, 'lib')).filter((f) => f.endsWith('.sh')).sort().map((f) => `lib/${f}`), ...NAMES.map((t) => `${t}.sh`)];
+const TR_FILES = [...readdirSync(join(PKG, 'lib')).filter((f) => f.endsWith('.sh')).sort().map((f) => `lib/${f}`), ...SIG_NAMES.map((t) => `${t}.sh`)];   // + shape-diff.sh (Q-B103-SIGTEXT (a)); the 65e500c twin list stays NAMES
 function rmTraps(src) {   // -> [{ n, line, bad }] one per `trap "` line holding an rm command
     const hits = [];
     src.split('\n').forEach((line, i) => {
@@ -753,11 +850,20 @@ test('TR synthetic: the 6 offender shapes match (bad), the bb and ibd shapes are
     assert.equal(rmTraps('# trap "x=\\$?; rm -rf a; set +e" EXIT').length, 0);
     assert.equal(rmTraps('trap "set +e; echo hi" EXIT').length, 0);
 });
-test('TR live: exactly 8 trap lines with rm over the 5 roots and lib/*.sh, 0 with rm before set +e', () => {
+test('TR live: exactly 10 trap lines with rm over the 6 roots (shape-diff.sh: 2) and lib/*.sh, 0 with rm before set +e', () => {
     const all = TR_FILES.flatMap((f) => rmTraps(rd(join(PKG, f))).map((h) => ({ f, ...h })));
-    assert.equal(all.length, 8, `trap lines with rm: ${JSON.stringify(all.map((h) => `${h.f}:${h.n}`))}`);
+    assert.equal(all.filter((h) => h.f === 'shape-diff.sh').length, 2, 'shape-diff.sh trap lines with rm');
+    assert.equal(all.length, 10, `trap lines with rm: ${JSON.stringify(all.map((h) => `${h.f}:${h.n}`))}`);
     const bad = all.filter((h) => h.bad).map((h) => `${h.f}:${h.n}: ${h.line}`);
     assert.equal(bad.length, 0, `rm before set +e:\n${bad.join('\n')}`);
+});
+test('TR tooth sd: an in-memory shape-diff.sh with the main-run trap\'s rm moved before set +e adds exactly 1 offender (10 lines, 1 bad, in shape-diff.sh)', () => {
+    const from = 'sd_rc=\\$?; set +e; if [[ -n \\$TMP_DIR && -d \\$TMP_DIR ]]; then rm -rf -- \\"\\$TMP_DIR\\"; fi; (exit';
+    const to = 'sd_rc=\\$?; if [[ -n \\$TMP_DIR && -d \\$TMP_DIR ]]; then rm -rf -- \\"\\$TMP_DIR\\"; fi; set +e; (exit';
+    const src = once(rd(LIVE('shape-diff')), from, to, 'sd TR tooth');
+    const all = TR_FILES.flatMap((f) => rmTraps(f === 'shape-diff.sh' ? src : rd(join(PKG, f))).map((h) => ({ f, ...h })));
+    assert.equal(all.length, 10);
+    assert.deepEqual(all.filter((h) => h.bad).map((h) => h.f), ['shape-diff.sh']);
 });
 test(`TR twin ${B95_SHA}: exactly 8 trap lines with rm, exactly 6 offenders (ad 2, dd 2, ic 2; the live gate is red there)`, { skip: B95SKIP }, () => {
     const lt = spawn('git', ['ls-tree', '--name-only', B95_SHA, 'lib/'], { cwd: PKG }, `git ls-tree ${B95_SHA} lib/`, 30000);
