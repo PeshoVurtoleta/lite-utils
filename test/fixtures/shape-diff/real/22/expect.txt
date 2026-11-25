@@ -1,0 +1,17 @@
+# real/22/expect.txt -- raw-grep counts on the rewritten UNTRIMMED captures (b105 G-L B0c)
+unstable-all.log lines=19624 v8-version=1 map=5036 Transition=2779 map-details=5513 map-create=5440 code-move=0 unresolved_nonzero_pcs=0
+unstable-all.log code-creation Builtin=1810 BytecodeHandler=494 Eval:~=84 JS:~=497 RegExp=2 Script:~=1
+unstable-all.out generalizing=2253 elements_transition=8
+unstable-all.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+helper-del.log lines=19927 v8-version=1 map=5204 Transition=2768 map-details=5685 map-create=5413 code-move=0 unresolved_nonzero_pcs=0
+helper-del.log code-creation Builtin=1810 BytecodeHandler=494 Eval:~=84 JS:~=492 RegExp=2 Script:~=1
+helper-del.out generalizing=2244 elements_transition=7
+helper-del.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+clean-and-literal.log lines=19550 v8-version=1 map=5011 Transition=2771 map-details=5492 map-create=5420 code-move=0 unresolved_nonzero_pcs=0
+clean-and-literal.log code-creation Builtin=1810 BytecodeHandler=494 Eval:~=84 JS:~=493 RegExp=2 Script:~=1
+clean-and-literal.out generalizing=2246 elements_transition=7
+clean-and-literal.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+d-a-events.log lines=19640 v8-version=1 map=5029 Transition=2778 map-details=5510 map-create=5438 code-move=0 unresolved_nonzero_pcs=0
+d-a-events.log code-creation Builtin=1810 BytecodeHandler=494 Eval:~=84 JS:*=5 JS:~=505 RegExp=2 Script:~=1
+d-a-events.out generalizing=2242 elements_transition=9
+d-a-events.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0

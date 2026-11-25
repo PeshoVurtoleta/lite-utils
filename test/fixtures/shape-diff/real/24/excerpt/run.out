@@ -1,0 +1,2 @@
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~work+60 at file:///w/unstable-all.mjs:42 for 0x3250142cc111 <JSArray[3]> from 0x0d4b9f4a2309 <FixedArray[3]> to 0x3250142cc521 <FixedDoubleArray[3]>
+[generalizing]x:s{Any;const}->d{Any;const} (+1 maps) [new ~Point+2 at file:///w/unstable-all.mjs:14]

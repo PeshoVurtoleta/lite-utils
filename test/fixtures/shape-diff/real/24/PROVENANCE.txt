@@ -1,0 +1,68 @@
+# real/24/PROVENANCE.txt -- b105 G-L B0c TASK 0c (PLAN-SD-L 0c; SPEC-1.2.0 Q-B103-CAPMAJORS / CAPSIZE, A2 (i))
+node=v24.22.3
+node_bin_sha256=ba7073582822078d8c90bca3facacc46690bc5366fab4b815aeef9148cd6e854
+v8=13.6.233.17-node.63
+platform_arch=darwin-arm64
+host_os=Darwin 27.2.0 arm64 macOS 27.2.1
+date_utc=2026-11-25T01:52:41Z
+quiet_lock=rc=0 quiet-lock: free | host PRELIMINARY (load1 7.31, baseline 2.21, 12 cores; load1 7.31 >= baseline 2.21 + 1; other busy node: node pid 19041 95.6%)
+flags=--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot
+logfile=--logfile=/w/run.log (private realpath cwd rewritten to /w; driver run as ./<name>.mjs with cwd /w; V8 writes /w/isolate-0x<addr>-<pid>-run.log)
+frozen_proto_sha256=eb7c1b65ff99eef69e45d167a25e9d84157ef4ba2fc154515cb32f1f75e67e1b
+trim_awk_sha256=d383f518837af44eb9606d5b12d10058a72525b6c65ae350d4577935b4692c03
+map_awk_sha256=a4105180785a9e39248799b2627a37b51b42ede63f9240cb24e23b3b07fea0d5  shape_awk_sha256=5d498e45af6db4bb8c125c4d283983c1ee6ec5c739c8a1377971360de85a9ffc
+budget=2097152 bytes per major dir (trimmed .log + .out); placed=NONE; placed_bytes=0
+
+[unstable-all] driver=research/shape-diff/probes/unstable-all.mjs driver_sha256=b154148bc0650efb0a461e475e6800c01d1d432fe34a09e02cadcb39eec7d779 fns=Point,work,fieldGen,litDirty,Holder
+  rc=0 rewrite_count log=9 out=22 residual(/Users/,/var/folders,/private/,node,node-real,tmpdir) log=0/0/0/0/0/0 out=0/0/0/0/0/0
+  untrimmed_log bytes=11712326 sha256=bf515311affa36d7cf69f335370456226bfa1a440e926cd947fa1ae6ece1c8c7
+  trimmed_log   bytes=6623747 sha256=49d29c7dea865442e5687d7780d92b5cbc477e003799e1dc225601cfd58fa36a
+  out           bytes=281430 sha256=e0da034931b0f42bd71448b446a0b467a431631282e833ac68e35d2c75094130 non_ascii=false
+  map_records inc_trans=0 lines=262 X=false untrimmed=ec652912684f7c324b6a12050e9a02fea250574b7d527717f17bc787f9898e2e trimmed=ec652912684f7c324b6a12050e9a02fea250574b7d527717f17bc787f9898e2e EQUAL | mutant(+code-creation drop)=46dbd3c738cb30af55faa00e9c3ab432d1bc9a662e67cc2c1d4f9b50c444dc14 DIFFERS (control has teeth)
+  map_records inc_trans=1 lines=273 X=false untrimmed=1dffd3c3d6923aedea513127a350c36b5ee3ad00bf152a1e1eba9c7b685f6ede trimmed=1dffd3c3d6923aedea513127a350c36b5ee3ad00bf152a1e1eba9c7b685f6ede EQUAL | mutant(+code-creation drop)=46dbd3c738cb30af55faa00e9c3ab432d1bc9a662e67cc2c1d4f9b50c444dc14 DIFFERS (control has teeth)
+  shape_records sha256=b2c2833b7522685e8999cb728ce9db2e2ac2320b18753a5ff279a3fbcae3198a X=false
+  placed_in_fixture=no (over budget; gz in .handoff/evidence/b103-cap/24/)
+
+[helper-del] driver=research/shape-diff/probes/helper-del.mjs driver_sha256=8867e1f78978d10a03c0f27825b34f62fc833477655b29d7b9f8744a94de3bd6 fns=mk,del
+  rc=0 rewrite_count log=4 out=12 residual(/Users/,/var/folders,/private/,node,node-real,tmpdir) log=0/0/0/0/0/0 out=0/0/0/0/0/0
+  untrimmed_log bytes=11846092 sha256=ec264e7a938d8dd28845c3b12f54bcea28ab95cc35c0aaa169c04a9bcc1badc5
+  trimmed_log   bytes=6619706 sha256=9b534eeb55865e8f6603068292237f3aa4f83b67a317ad5a91c77ecd60375216
+  out           bytes=279962 sha256=df59e06e617bef114f1a768f103bb4e3cc84a403291c09e4caa3fbd17af65cc7 non_ascii=false
+  map_records inc_trans=0 lines=249 X=false untrimmed=468d068035a8e4c81aae03cc6bc1a3d2df1a41dd7cee314c19b2136940dbcec5 trimmed=468d068035a8e4c81aae03cc6bc1a3d2df1a41dd7cee314c19b2136940dbcec5 EQUAL | mutant(+code-creation drop)=80a250c1ea663a363d94edc1e36d7cd81047f4334f346c6bbc948a34d422b746 DIFFERS (control has teeth)
+  map_records inc_trans=1 lines=251 X=false untrimmed=48df83a3cb31610fad2ead0f4573791cbfac115e6ddf4979172cb148d06d51a8 trimmed=48df83a3cb31610fad2ead0f4573791cbfac115e6ddf4979172cb148d06d51a8 EQUAL | mutant(+code-creation drop)=80a250c1ea663a363d94edc1e36d7cd81047f4334f346c6bbc948a34d422b746 DIFFERS (control has teeth)
+  shape_records sha256=1c29f186f36cd62d3a5cb17dbc7f3b97a530d31c724e4c77f96c085206fc2fa6 X=false
+  placed_in_fixture=no (over budget; gz in .handoff/evidence/b103-cap/24/)
+
+[clean-and-literal] driver=research/shape-diff/probes/clean-and-literal.mjs driver_sha256=388b27fee68be7e28d0c0c96e2f3acaddc7b4e145ab0e32b77fab79030fd6e1b fns=Point,makeLit,work
+  rc=0 rewrite_count log=5 out=14 residual(/Users/,/var/folders,/private/,node,node-real,tmpdir) log=0/0/0/0/0/0 out=0/0/0/0/0/0
+  untrimmed_log bytes=11682820 sha256=eaef0d8020fd7a71be021cec34d5878c329ab4fb9251f2c9882b9fecfe0b6e10
+  trimmed_log   bytes=6605214 sha256=5c600acfb8f209acfb4f52f7b3ad73b20a929d7e6308ef80d538ab92e77c872f
+  out           bytes=280442 sha256=ac5845d75ced30d72b340051cb25ff7ad2aa842e0b320e6ecc197eb6de0e5f01 non_ascii=false
+  map_records inc_trans=0 lines=252 X=false untrimmed=d3d1348814a387ef959106b3585a40a533f8135ea173cc8d86e70141bef32343 trimmed=d3d1348814a387ef959106b3585a40a533f8135ea173cc8d86e70141bef32343 EQUAL | mutant(+code-creation drop)=5e2f1db2a21073475f92e113a3666d5e7db5f007e3ba377122865102511675de DIFFERS (control has teeth)
+  map_records inc_trans=1 lines=258 X=false untrimmed=7f65fef8de8b484fcefd32ee31a86dc68f1bab7ccd95dbf49c8f994247d7ae09 trimmed=7f65fef8de8b484fcefd32ee31a86dc68f1bab7ccd95dbf49c8f994247d7ae09 EQUAL | mutant(+code-creation drop)=5e2f1db2a21073475f92e113a3666d5e7db5f007e3ba377122865102511675de DIFFERS (control has teeth)
+  shape_records sha256=fbd512570467725e90a24618bc4b58c1033486d881add2e3cb550bd52f8d8b4b X=false
+  placed_in_fixture=no (over budget; gz in .handoff/evidence/b103-cap/24/)
+
+[d-a-events] driver=test/fixtures/shape-diff/real/_src/d-a-events.mjs driver_sha256=264d4965a077b8a8b1479731938d818c3e10093d9e3ae310a5ee176725e9ee62 fns=mk,setMaxListeners
+  rc=0 rewrite_count log=5 out=0 residual(/Users/,/var/folders,/private/,node,node-real,tmpdir) log=0/0/0/0/0/0 out=0/0/0/0/0/0
+  untrimmed_log bytes=11728626 sha256=2d67992b3f1843a385c0f471c348a20437d2aaaadc563ce4772879cd42e61677
+  trimmed_log   bytes=6632463 sha256=4c804bae7c1be745c22fc06109b0ee79ea482759d435a134afb3a82f0a5e85b6
+  out           bytes=280278 sha256=a9c798e2dd1112eb6f7b9b106ae9c626788aa90e8e54fc175b00531572e3d75d non_ascii=false
+  map_records inc_trans=0 lines=249 X=false untrimmed=2dd7d38b95e1d3810b4868be5e842ddff836a688166fe92c51f88e0feff398a4 trimmed=2dd7d38b95e1d3810b4868be5e842ddff836a688166fe92c51f88e0feff398a4 EQUAL | mutant(+code-creation drop)=36c978701b4df5e9cc20d0aa0745fb4c6d5b5d19dc2cda7a4afd484c31c3c39e DIFFERS (control has teeth)
+  map_records inc_trans=1 lines=250 X=false untrimmed=95b24fda3043a31bf6a4be672dfab9830e746977f8e70284638db2a2ff6dc109 trimmed=95b24fda3043a31bf6a4be672dfab9830e746977f8e70284638db2a2ff6dc109 EQUAL | mutant(+code-creation drop)=36c978701b4df5e9cc20d0aa0745fb4c6d5b5d19dc2cda7a4afd484c31c3c39e DIFFERS (control has teeth)
+  shape_records sha256=968bf6ff81829cb4e200e29fb3d2d20ef8085dcfaac847bc3b2451847dfb51f6 X=false
+  placed_in_fixture=no (over budget; gz in .handoff/evidence/b103-cap/24/)
+
+[excerpt] cut from unstable-all (rewritten UNTRIMMED log + out), target fns Point,work, by .handoff/b103/task0/cap/excerpt.mjs
+  excerpt/run.log lines=10 sha256=d49462a5109408dedc42416b85607a3d1ef9b451fb1aecdf1c969c7906503b69
+  excerpt/run.out lines=2 sha256=64aec71b7bfa3923bbfe339a361538187934b6c5e070e921c1e8bd380b0dff00
+  excerpt/driver.mjs lines=54 sha256=b154148bc0650efb0a461e475e6800c01d1d432fe34a09e02cadcb39eec7d779 (= research/shape-diff/probes/unstable-all.mjs)
+  events kept: Transition:HOLEY_ELEMENTS->DICTIONARY_ELEMENTS Normalize Deprecate Deprecate
+  proto MAP_AWK records (fns=Point,work inc_trans=0; TAB->| newline->;): K Point;R Point;K work;R work;M work|MAP_ELEM_DICT|unstable-all.mjs:43:31|HOLEY_ELEMENTS -> DICTIONARY_ELEMENTS|1;M work|MAP_NORMALIZE|unstable-all.mjs:44:19|DeletingProperty|1;M Point|MAP_DEPRECATE|unstable-all.mjs:14:30|-|2;
+  proto SHAPE_STDOUT_AWK records (fns=Point,work): E work|ELEM|unstable-all.mjs:42|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS|1;E Point|GEN|unstable-all.mjs:14|x:s{Any;const}->d{Any;const} (+1 maps)|1;
+  proto verdict: frozen proto copy, --node <copy of canned/fake-node.sh replaying excerpt/run.log + run.out>, --runs 2 --fn Point,work, driver.mjs as BEFORE and AFTER (A/A): rc=0
+      Point: SAME -- identical shape-instability multiset (before 2 | after 2 site(s))
+        REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0
+      work: SAME -- identical shape-instability multiset (before 3 | after 3 site(s))
+        REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0
+    VERDICT SAME

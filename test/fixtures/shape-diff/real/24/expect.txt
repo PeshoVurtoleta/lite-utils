@@ -1,0 +1,17 @@
+# real/24/expect.txt -- raw-grep counts on the rewritten UNTRIMMED captures (b105 G-L B0c)
+unstable-all.log lines=18370 v8-version=1 map=4556 Transition=2327 map-details=5071 map-create=4995 code-move=0 unresolved_nonzero_pcs=0
+unstable-all.log code-creation Builtin=1873 BytecodeHandler=511 Eval:~=85 JS:+=1 JS:+'=4 JS:~=509 RegExp=2 Script:~=1
+unstable-all.out generalizing=2238 elements_transition=9
+unstable-all.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+helper-del.log lines=18673 v8-version=1 map=4724 Transition=2316 map-details=5243 map-create=4968 code-move=0 unresolved_nonzero_pcs=0
+helper-del.log code-creation Builtin=1873 BytecodeHandler=511 Eval:~=85 JS:+=1 JS:+'=4 JS:~=504 RegExp=2 Script:~=1
+helper-del.out generalizing=2229 elements_transition=8
+helper-del.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+clean-and-literal.log lines=18295 v8-version=1 map=4531 Transition=2319 map-details=5050 map-create=4974 code-move=0 unresolved_nonzero_pcs=0
+clean-and-literal.log code-creation Builtin=1873 BytecodeHandler=511 Eval:~=85 JS:+=1 JS:+'=4 JS:~=505 RegExp=2 Script:~=1
+clean-and-literal.out generalizing=2231 elements_transition=8
+clean-and-literal.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
+d-a-events.log lines=18424 v8-version=1 map=4558 Transition=2333 map-details=5077 map-create=5001 code-move=0 unresolved_nonzero_pcs=0
+d-a-events.log code-creation Builtin=1873 BytecodeHandler=511 Eval:~=85 JS:*'=3 JS:+=1 JS:+'=9 JS:~=518 RegExp=2 Script:~=1
+d-a-events.out generalizing=2227 elements_transition=8
+d-a-events.log D5 transitions_without_map-details: at_parse_time=0 nowhere_in_log=0
