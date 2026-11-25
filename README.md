@@ -1,7 +1,7 @@
 # @zakkster/lite-utils
 
-> Six standalone CLIs for V8 diagnostics: five bash tools that compare two JS builds through V8's own traces --
-> bytecode length, deopts, inline caches, inlining decisions, young-GC counts -- and one node tool that measures
+> Seven standalone CLIs for V8 diagnostics: six bash tools that compare two JS builds through V8's own traces --
+> bytecode length, deopts, inline caches, inlining decisions, young-GC counts, object shapes -- and one node tool that measures
 > steady-state on-heap bytes per op. Every verdict fails closed.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-utils.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-utils)
@@ -14,10 +14,10 @@
 ## The V8 diff kit the ecosystem was missing
 
 You changed a hot function. Did its bytecode grow? Did it start to deopt? Did an inline cache go megamorphic? Did
-TurboFan stop inlining a callee? Did it start to trigger young-generation GCs? Each of these is a question V8 will
+TurboFan stop inlining a callee? Did it start to trigger young-generation GCs? Did an object's shape or elements kind start to change? Each of these is a question V8 will
 answer in its own trace output, but reading two traces by eye does not scale and a flaky comparison is worse than none.
 
-`lite-utils` is six self-contained command-line tools, one per question: five bash scripts and one node script
+`lite-utils` is seven self-contained command-line tools, one per question: six bash scripts and one node script
 (`alloc-per-op`, described in its own section). Each bash tool runs your driver file on ONE node binary, under V8 trace
 flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a `VERDICT` line and
 an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
@@ -35,8 +35,8 @@ npm i -D git+https://github.com/PeshoVurtoleta/lite-utils.git
 cp node_modules/@zakkster/lite-utils/bytecode-budget.sh tools/ && bash tools/bytecode-budget.sh -h
 ```
 
-After an npm install the six commands are `allocation-diff`, `alloc-per-op`, `bytecode-budget`, `deopt-diff`, `ic-diff`
-and `inlining-budget-diff`, run as `./node_modules/.bin/<name>` or `npx <name>`.
+After an npm install the seven commands are `allocation-diff`, `alloc-per-op`, `bytecode-budget`, `deopt-diff`, `ic-diff`,
+`inlining-budget-diff` and `shape-diff`, run as `./node_modules/.bin/<name>` or `npx <name>`.
 
 Quick-start: report the bytecode length of one function. Save this as `driver.mjs`:
 
@@ -79,6 +79,7 @@ Report mode ends `VERDICT REPORTED` (exit 0) when it could read the length, `VER
 - [ic-diff](#ic-diff)
 - [inlining-budget-diff](#inlining-budget-diff)
 - [allocation-diff](#allocation-diff)
+- [shape-diff](#shape-diff)
 - [alloc-per-op](#alloc-per-op)
 - [CLI reference](#cli-reference)
 - [Composability](#composability)
@@ -115,13 +116,14 @@ awk (alloc-per-op: plain node), with no runtime dependency, so a script can be c
 | `ic-diff` | In which state did their inline-cache sites end? | driver | SAME / DIFF / NO-VERDICT | STATISTICAL on a user driver |
 | `inlining-budget-diff` | Which inlining decisions did TurboFan and Maglev make? | driver (ref / file: lite-signal shaped) | SAME / DIFF / NO-VERDICT | STATISTICAL (budget report: REPORTED) |
 | `allocation-diff` | How many young-generation GCs in a marked window? | diff, `--zero` gate | SAME / DIFF; ZERO / NONZERO; NO-VERDICT | script logic DETERMINISTIC; user verdict STATISTICAL |
+| `shape-diff` | Did the shapes, elements kinds or field representations of these functions' objects change, before vs after? | driver, `--self-test` | SAME / DIFF / NO-VERDICT | `--self-test` DETERMINISTIC; a verdict on a user driver STATISTICAL, REPORTED only |
 | `alloc-per-op` | How many on-heap bytes does one op of this lane allocate, steady state? | table, gate (`--max`), A/B (`--tol`), `--self-test` | PASS / FAIL; SAME / DIFF; NO VERDICT | `--self-test` DETERMINISTIC; a verdict on a user lane STATISTICAL |
 
 The tiers are the suite's verification tiers. DETERMINISTIC: the result does not depend on timing and is gated in
 `npm test`. STATISTICAL: the result follows tier-up and GC timing, so a comparison on your driver is never gated here
 and should be run on a quiet host. REPORTED: a table the tool prints, a measurement and not a law.
 
-Every run of the five bash tools that reaches a verdict ends in a `VERDICT <v>` line on stdout. Exit codes: 0 = SAME /
+Every run of the six bash tools that reaches a verdict ends in a `VERDICT <v>` line on stdout. Exit codes: 0 = SAME /
 WITHIN / REPORTED / ZERO, 1 = DIFF / OVER / NONZERO, 2 = NO-VERDICT or a refused argument. `alloc-per-op` has its own
 verdict words and exit codes (its section below).
 
@@ -250,6 +252,65 @@ allocation-diff.sh --self-test
 
 ---
 
+## shape-diff
+
+The object shapes of named functions, before vs after, on one node binary: per function, the multiset of its
+shape-instability events (map deprecation / reconfiguration, elements-kind transitions, field-representation
+generalization), each attributed to the function that owns it.
+
+```bash
+shape-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER     # driver mode: two drivers, one verdict
+shape-diff.sh --self-test
+```
+
+Installed, the same call is `./node_modules/.bin/shape-diff --fn mk before.mjs after.mjs`; each driver defines and calls
+the function `mk` (name the functions to compare with `--fn`).
+
+- **Driver mode only, no `--stable` mode.** There is no ref or file mode (Q-SD-KEEP (a)); it is a standalone bash
+  tool that diffs two runs of two drivers. `--fn LIST` (comma-separated short names; `--fn=LIST` also works) is
+  required and an empty value is refused. `--runs N` is 2..20 (default 3); run 1 vs runs 2..N of the same side is the
+  null control, as in the other diff tools.
+- **A blind spot: a single cold call to `Array.prototype.push(1.5)` emits no trace line.** V8 prints nothing for it, so a
+  driver whose only difference is one such call reads `SAME` (REPORTED: 0 trace lines on darwin arm64, node v22.23.5 /
+  v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0; `-h` states the same limit). Call the function enough times for V8 to
+  generalize in a place it does print (see the warm-up bullet) before trusting a `SAME`.
+- **Exit.** 0 `SAME`, 1 `DIFF` (the attributed shape-instability multiset differs for at least one `--fn` function),
+  2 `NO-VERDICT` (a refusal, a trace parse error, a null-control failure, missing execution evidence, a target
+  Transition whose map has no map-details line, or unattributed instability that changed while the attributed sites
+  looked SAME). Every run that reaches a verdict ends in a `VERDICT <v>` line, like the other bash tools.
+- **Owner.** Each event is keyed to an owner: `user:<fn>`, `node:<fn>`, `Builtin:*`, `other:<fn>` or `NONE`. A delta
+  that no `--fn` function owns (a node-internal frame, a non-target helper, `Reflect.deleteProperty`, `splice`) never
+  produces a `DIFF`: if the attributed sites look `SAME` it turns the verdict into `NO-VERDICT` naming the owner
+  (Q-SD-OWNER (a), Q-SD-UNATTR (a)).
+- **Transitions.** Normal monomorphic Transition / InitialMap counts are REPORTED by default; `--include-transitions`
+  puts them in the verdict (Q-SD-TRANS (a)).
+- **Guard and warm-up.** A function with no evidence (an optimizing compile of it, or an attributed map / shape event)
+  reads `NO-VERDICT`, not `SAME`: a clean array or arithmetic function run too few times shows nothing. Warm it up,
+  e.g. 20000 calls (nominal; one research run on v26.8.2, not reproduced here).
+- **The traced tier.** The tool runs the driver with `--no-sparkplug --no-node-snapshot` added to its trace flags (not
+  node's default tier config), and `--v8-flags` refuses any `*sparkplug*` flag. A default-tier A/B on node 24.22.3 /
+  26.8.2 (darwin arm64, 2026-11-24, QUIET host) gave the same verdicts (REPORTED); no user function ran in a Sparkplug frame in
+  that default-tier arm, so verdicts with user code in baseline frames are not covered. The call count at which a helper
+  gets inlined can still differ from a default run.
+- **Node.** node >= 22 (`engines.node`): a `--version` that does not parse as `v<major>.<minor>.<patch>`, or a major
+  below 22, exits 2 after the one `--version` spawn, before `--v8-options` and before any write. The record formats
+  were captured on node 22, 24, 26 and 27 (v22.23.5 / v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0) and the self-test
+  replays them without a real node. A hosted probe of the research prototype (run-probes.sh, 27 assertions; not the shipped
+  root) ran 27 / 27 ok on ubuntu node 22 / 24 / 26 x default GNU Awk 5.3.2 / gawk / mawk 1.3.4 and on macOS node 26 x
+  BSD awk / gawk (REPORTED, one dispatch, run 45521613713).
+- **Tier.** On a user driver the verdict is STATISTICAL (shape events follow warm-up and tier-up timing) and REPORTED
+  only, never gated here (S-5); `--self-test` is DETERMINISTIC: 44 rows with a fake node, the last four replaying real
+  captures of node 22, 24, 26 and 27 (the golden MAP and SHAPE records, the excerpt vs the excerpt minus its
+  `map,Normalize` line -> exit 1 DIFF naming the removed MAP_NORMALIZE record, `Point` SAME).
+- **`--out DIR`** keeps `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`. Refused with exit 2: a symlink `--out`
+  DIR, a symlink or hard-linked `DIR/report.txt`, a non-empty `DIR/raw`, a CR or LF in an option name (the label is
+  `option name`; the other bash tools say
+  `unknown option`), and a driver inside `--out D` that is `D/report.txt`.
+- **Not detected.** A single cold `push(1.5)` (above), a shape change with no trace line, and anything that happens
+  only outside the traced tier. See Known limits.
+
+---
+
 ## alloc-per-op
 
 Steady-state ON-HEAP BYTES per op of a synchronous lane, in the main isolate, for one bench file (a table, or a gate)
@@ -313,7 +374,7 @@ alloc-per-op --self-test [--json]                # the engine controls and the s
 
 ## CLI reference
 
-Flags shared by the five bash tools (each tool's section above shows its own usage lines; `bash <tool>.sh -h` prints the
+Flags shared by the six bash tools (each tool's section above shows its own usage lines; `bash <tool>.sh -h` prints the
 full text; `alloc-per-op` has its own flags, in its section above and in `alloc-per-op -h`):
 
 | Flag | Meaning |
@@ -325,7 +386,7 @@ full text; `alloc-per-op` has its own flags, in its section above and in `alloc-
 | `--self-test` | canned checks (a fake node or canned text) |
 | `-h`, `--help` | print the header text and exit 2 |
 
-`-h` exits 2 on all six tools. For `allocation-diff`, `bytecode-budget`, `deopt-diff` and `ic-diff`, `--self-test`
+`-h` exits 2 on all seven tools. For `allocation-diff`, `bytecode-budget`, `deopt-diff`, `ic-diff` and `shape-diff`, `--self-test`
 exits 0 when every check is ok and 1 when a check prints a `FAIL` line; that 1 is a failed check and not a `DIFF`.
 `alloc-per-op --self-test` exits 0 when every row is ok, 1 when a row misses and 2 when its selfCheck misses.
 
@@ -337,6 +398,7 @@ Defaults and limits:
 | `bytecode-budget` | 2 | 2..20 | `--max` value N is 1..9 digits |
 | `deopt-diff` | 3 | 2..20 | |
 | `ic-diff` | 3 | 2..20 | |
+| `shape-diff` | 3 | 2..20 | `--fn LIST` is required; transitions REPORTED only unless `--include-transitions`; `--v8-flags` also refuses any `*sparkplug*` flag |
 | `inlining-budget-diff` | 3 | 2..50 | `--tiers turbo,maglev`; `--fn` `$ME`, else `m0`; `--out` `$OUTDIR`, else `$TMPDIR/inl-diff-<timestamp>` |
 
 `alloc-per-op` has `--windows` (default 5, 3..50), `--n` (default 1000000), `--warm` (default 200000) and `--sub`
@@ -346,7 +408,7 @@ Every bash-tool spawn runs with `NODE_OPTIONS`, `NODE_V8_COVERAGE`, `NODE_COMPIL
 
 Requirements:
 
-- bash >= 3.2 for the five bash tools (CI exercises macOS `/bin/bash`); `alloc-per-op` needs only node.
+- bash >= 3.2 for the six bash tools (CI exercises macOS `/bin/bash`); `alloc-per-op` needs only node.
 - A POSIX awk. CI runs the BSD awk of macOS and the awk of `ubuntu-latest`; no other awk is claimed.
 - node >= 22 (`engines.node`), with the caveats above: `ic-diff` ends `NO-VERDICT` on node 22 and 24, and the
   maglev tier of `inlining-budget-diff` is `NO-VERDICT` on node 22.
@@ -357,9 +419,9 @@ Requirements:
 
 ## Composability
 
-One CI job, all six tools (five bash + one node tool; CI runs `node alloc-per-op.mjs --self-test`, untimed; installed,
+One CI job, all seven tools (six bash + one node tool; CI runs `node alloc-per-op.mjs --self-test`, untimed; installed,
 the `--max` run below (a report here) is `./node_modules/.bin/alloc-per-op --max B bench.mjs`). Only
-`bytecode-budget --max` is a gate here: its exit 1 (OVER) or 2 (NO-VERDICT) fails the job. The other four bash tools are
+`bytecode-budget --max` is a gate here: its exit 1 (OVER) or 2 (NO-VERDICT) fails the job. The five other bash tools are
 statistical, so they report and do not gate: run them with `rc=0; ... || rc=$?`, keep `--out` as a build artifact, and
 fail the job only when the `VERDICT` line is missing.
 
@@ -372,7 +434,7 @@ mkdir -p artifacts
 "$B/bytecode-budget" --max add=6 --node-version v26.8.2 bench/driver.mjs
 
 # the statistical tools: report, keep the evidence, require a VERDICT line
-for tool in deopt-diff ic-diff; do
+for tool in deopt-diff ic-diff shape-diff; do
   rc=0
   "$B/$tool" --fn add --out "artifacts/$tool" bench/before.mjs bench/after.mjs \
     > "artifacts/$tool.txt" 2>&1 || rc=$?
@@ -421,7 +483,7 @@ holds only for the build it was measured on.
   one file is a complete install (ROADMAP S-2).
 - **What each tool measures.** Bytecode length (`--print-bytecode`), deopt records (`--trace-deopt`), IC sites
   (`--log-ic`), inlining decisions (V8's TurboFan trace and `--trace-maglev-inlining`), young-GC events
-  (`--trace-gc` inside a marked window).
+  (`--trace-gc` inside a marked window), object shapes (`--log-maps --trace-elements-transitions --trace-generalization`).
 - **Fail closed.** An EXIT trap maps any unplanned exit to exit 2 `NO-VERDICT`, never 1. Signals (SIGINT, SIGTERM,
   SIGHUP) end exit 2 `NO-VERDICT` after killing the running child.
 - **Refuse before spawn.** An invalid argument exits 2 before any node is spawned or any file is written. Named
@@ -461,7 +523,7 @@ holds only for the build it was measured on.
 macOS arm64, /bin/bash 3.2.57, 1687 s, host QUIET at start (load1 1.38 vs baseline 2.21); the 1.1.2 release gate,
 tree 52f3f2b + the 1.1.2 docs + the version bump; a measurement, not a guarantee).
 
-Scripts: `npm test`, `npm run build` (regenerate the five bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
+Scripts: `npm test`, `npm run build` (regenerate the six bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 
 The CI workflow is configured for a matrix of ubuntu-latest and macos-latest on node 22, 24 and 26, plus node 26.8.2
 on both. LiteUtils is exempt from the suite's `test/torture.mjs` law (ROADMAP S-12; `alloc-per-op.mjs` included); its gates are each
@@ -508,18 +570,25 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
   writing while V8 prints can tear a record, which ends `NO-VERDICT` (LEDGER #72, #92).
 - a hard link to `--before` elsewhere in the repository (outside `--before`'s directory and below), or under a case-only
   sibling name on a case-sensitive file system, can stay undetected (LEDGER #71, #88, #89)
+- `shape-diff` limits (LEDGER #146): a single cold `push(1.5)` emits no trace line and reads `SAME` (REPORTED: darwin arm64, node v22.23.5 /
+  v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0); the owner key is
+  path-stripped, so two `del` helpers in different files share one key and an instability that moves between them reads
+  `SAME` (not probed); a node whose log format renames or drops a trace prefix is not covered until captured; a function
+  with no warm-up evidence ends `NO-VERDICT`; and the traced tier is not node's default (see the section).
+- `shape-diff` LEAD (LEDGER #147, UNVERIFIED): a reconfigure that adds maps but leaves the representations identical is
+  filtered as a no-op; a Deprecate map event probably still catches it. Not probed.
 - These tools are not a security boundary: they run the driver you give them.
 
 ---
 
 ## What this is not
 
-- Not a JavaScript API: the supported surface is the six commands; `alloc-per-op.mjs`'s ES exports serve its own tests
-  and carry no API contract. These are command-line scripts (five bash, one node).
+- Not a JavaScript API: the supported surface is the seven commands; `alloc-per-op.mjs`'s ES exports serve its own tests
+  and carry no API contract. These are command-line scripts (six bash, one node).
 - Not a benchmark or a timing tool: no wall-clock claim, no ops per second.
 - Not a byte counter in `allocation-diff`: it reports young-GC event counts, never allocated bytes. `alloc-per-op` counts
   on-heap bytes of one synchronous lane in the main isolate, and nothing off-heap.
-- Not a Windows tool: five of the six need bash and a POSIX userland (`alloc-per-op` needs node >= 22 only; CI does not run Windows).
+- Not a Windows tool: six of the seven need bash and a POSIX userland (`alloc-per-op` needs node >= 22 only; CI does not run Windows).
 - Not a security boundary: the driver runs with your privileges.
 
 ---

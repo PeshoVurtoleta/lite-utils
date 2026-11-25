@@ -243,6 +243,17 @@ section 11 "Rulings b81b"): Q-AP-BAND (a); rung 2b scope 2b-6 / 2b-6c / OR-5, OR
 `.handoff/research/alloc-probe/` INTAKE.md (b81b addendum), PROGRESS.md (b81b), r5-band.mjs, r5-shape.mjs,
 r5-report.mjs, r5-out/corners and r5-out/shape; `.handoff/PROPOSAL-alloc-probe.md` section 11 (all local, untracked).
 
+**#145 shape-diff (1.2.0): `--stable`, the ic-diff map section and an inspector re-architecture refused; K + @@LITE-MARK deferred (b103 / b104).**
+(a) Refused (SPEC-1.2.0 section 2 rulings): a `--stable` mode (Q-SD-KEEP (a): shape-diff is a standalone bash
+diff-only tool, so the one-call `push(1.5)` blind spot, #146, is documented prominently instead of covered); the
+ic-diff `--log-maps` map section (Q-SD-ICDIFF (a): shape-diff owns `--log-maps`; src/ic-diff.sh has 0 log-maps hits,
+ROADMAP 994431a R3); an inspector-based re-architecture of the trace reader. (b) Deferred, not refused: K +
+@@LITE-MARK, an in-driver marked window. Q-SD-GUARD (b) took the guard as "an optimizing compile or an attributed
+map / shape event", so a clean array / arithmetic function reads NO-VERDICT unless warmed; a later minor may add K +
+@@LITE-MARK. Rule: a diff-only trace tool says what its verdict needs as evidence and answers NO-VERDICT without it,
+not a guess; none of the three is re-opened without a new mechanism. Tier: design (no gate). Evidence (local,
+untracked): `.handoff/b103/SPEC-1.2.0.md` sections 2 / 7 / 9.
+
 ---
 
 ## B. Defects found and fixed
@@ -1003,6 +1014,18 @@ the numbering turns the nightly red, the early warning; parse a tool's JSON by i
 must-fail row. Fixed in the b78 triage commit. Tier DETERMINISTIC. Evidence: `.handoff/evidence/b78-repro/`,
 `.handoff/RULINGS-b78.md` (local, untracked).
 
+**#151 b108 (d): the env-strip sd real nightly went red on the 120 s cap (nightly 45633599155 on 853c134); SD_REAL_CAP 600 s (a #73 sibling).**
+Nightly 45633599155 (853c134, macos-latest node v27.0.0-alpha.0.1.1) killed "E3 sd real node (live root)" at TOOL_CAP
+120000 ms. Slowest observations (REPORTED, one nightly): E3 sd 15.6 / 5.8 / 71.6 / > 120 s and E5sd 14.2 / 3.8 / 83.8 /
+120.1 s on ubuntu node 22 / ubuntu 27a / macOS node 22 / macOS 27a. Local darwin arm64 single runs (PRELIMINARY): not a
+hang; sd real is 8 spawns, 6 of them `--log-maps` runs that each write a 12-16 MB map log the root NUL-checks and parses
+with MAP_AWK (about 60% of wall time, linear in log size). Ruled Q-B108-NIGHTLY (measure first, then a cap of its own,
+as ic real has): SD_REAL_CAP = 600000 for E3 sd and E5sd through a pure capOf(tool, mode) that runTool uses as its one
+cap door (N1, 51add49). N1 r1 REJECTED (LITERAL: the gate row checked capOf, not the call site); r2 APPROVED with a row
+red by name on the old inline call site. Rule (as #73): size a real-node cap from the slowest hosted leg, and gate the
+CALL SITE, not only the helper. Evidence (local, untracked): `.handoff/b108/RULINGS-b108.md`,
+`.handoff/evidence/b107-ci/45633599155-nightly-macos-latest-nodelatest-failure.log`, 51add49.
+
 ---
 
 ## D. Test-gate lessons
@@ -1377,6 +1400,26 @@ patch shows its mutant survives the VOID branch (the criterion (b) used to widen
 DETERMINISTIC (the pins and predicates in npm test). Evidence (local, untracked): `.handoff/b100/PLAN-GB.md`,
 `.handoff/archive/1.1.2/b101/GB-B1-review*/`, HISTORY b101.
 
+**#149 b107 FILLER 74 (b): a one-line mutant that kills under the self-test fake can have no real-node side effect (E5sd, A11).**
+The A11 mutant of shape-diff (one line dropped) is killed by the self-test fake, but on a real node it leaks only on
+`--v8-options`, which writes nothing: the per-spawn PROBE_ENV `-u` list strips the four names from every trace spawn.
+Q-B107-E5SD (a): the env-strip E5sd row drops the Q-ENV `unset NODE_*` line AND the PROBE_ENV `-u` list (two exact-once
+edits) on a private root copy, which then leaks (covN >= 1, a compile cache, a warn file) and makes E3's check throw "a
+node spawn saw one of the 4 names" (f24ece4). Rule: check a mutant's reach under EACH harness that uses it (fake node
+and real node); a mutant that dies in one and is silent in the other proves nothing in the second. Evidence (local,
+untracked): f24ece4, `.handoff/b107/RULINGS-b107.md`.
+
+**#152 b108 (e): a twin that a later re-arm shadows is vacuous, and a mktemp signal hold can have no observable tooth (A1o-sd, MKSIG).**
+(a) The X2 plan's A1o twin for shape-diff dropped the prologue `sig_arm`; shape-diff re-arms after its own mktemp, so
+the twin changed nothing (vacuous); the shipped A1o-sd drops the no-`--out` branch's re-arm instead (the tool then
+prints "interrupted (SIG<X>)" 0 times with the driver alive at exit). (b) The MKSIG rows (a PATH mktemp shim signals
+the tool during its mktemp) cannot show the hold's tooth: bash runs the trap only after `TMP_DIR=$(mktemp ...)` has
+assigned (bash 3.2.57 and 5.3.20), so a hold-drop mutant stays green. Ruled Q-B108-MKSIG-TOOTH (a): the three MKSIG
+rows stay as regression pins and the re-delivery drop (interrupted 0 times, 6 driver runs) is the window witness; SPEC
+CURRENT records the hold as defense-in-depth with no gate of its own (A19). Rule: run a twin on the real root before
+planning on it, and do not claim a tooth for a hold whose only observable effect bash removes. Evidence (local,
+untracked): d0e38d6, `.handoff/b108/RULINGS-b108.md`.
+
 ---
 
 ## E. Process lessons
@@ -1470,6 +1513,23 @@ whole file for the changed fact (here: the release order), not only the lines th
 Evidence (local, untracked): HISTORY b102; NEXT.md b102 FILLERS 51 (the line-list fact; the brief was not saved);
 `.handoff/archive/1.1.2/b102/DOCS-review/` vs `DOCS-review-r2/` (r2's ROADMAP :230 fix lies outside every r1 helper
 hunk).
+
+**#148 b107 FILLER 74 (a): a ruling that listed only some fail-open forms left the crash form open (Q-B107-DIFF2 -> DIFF3).**
+Q-B107-DIFF2 (a) made the codes-only exit 2 of a must-differ shape-diff-live row reject a `shape-diff: ` die line and
+usage text; the G-L B2 r1 review found the per-function reasons still passed (REVIEW-GL-B2-r1, DESIGN): "driver exited
+...", "unreadable shape trace", "elements kind unknown", "null control", "no execution evidence" are all exit-2
+NO-VERDICTs that are not a measurement (shape-diff.sh:805 JWHY is a per-function reason, not a die), and a crashed
+child reads as one. Ruled Q-B107-DIFF3 (a): the exit 2 passes only with >= 1 `<fn>: NO-VERDICT -- ` line and every such
+line the UE-diff reason or the warm-up guard (an allowlist); one throw row per rejected form (C1, eb419a9). Rule: the
+option text of a tier gate lists EVERY non-measurement exit (die, usage, crash, each per-function reason) and accepts by
+allowlist, never by the forms someone thought of. Evidence (local, untracked): `.handoff/b107/RULINGS-b107.md`, eb419a9.
+
+**#150 b107 FILLER 74 (c): PLAN-SD-X planned on a prototype twin that an earlier refusal shadows.** PLAN-SD-X assumed
+the prototype's raw `unknown option` echo at proto:1017 was reachable for a CR / LF option name; an earlier refusal at
+proto:1006 answers first, so a twin keyed on 1017 would never run (G-X B2 brief). The shipped shape-diff labels that
+refusal `option name` (Q-B107-SDULABEL (a)); the other bash tools say `unknown option`. Rule: a plan that names a twin
+or a mutant site censuses the site first (which refusal answers a given input), then plans on it. Evidence (local,
+untracked): `.handoff/b107/BRIEF-GX-B2.md`, `.handoff/b107/RULINGS-b107.md`.
 
 ---
 
@@ -1998,3 +2058,30 @@ this baseline does not support as the sightings' cause (H1 stays an injection-pr
 cancel a lost line, (d)); F-H1's premise goes back to the maintainer before any planner (to be re-ruled). REPORTED
 (hosted CI, one run, 3 runs per leg). Evidence (local, untracked): `.handoff/evidence/b103-ci/` (per-job logs
 `<job>-<leg>.log`, job list `jobs-45430316847.txt`).
+
+**#146 shape-diff known limits (1.2.0, b103 - b109).** Each is stated in the README and llms.txt; the CHANGELOG states (1), (3) and (5) and
+points here.
+(1) Blind spot: a single cold `Array.prototype.push(1.5)` call emits 0 trace lines (darwin arm64, node v22.23.5,
+v24.22.3, v26.8.2, v27.0.0-alpha.0.1.0: "push 0:2 on all four", f9f671a), so two drivers that differ only by that
+call read SAME; the live row S8 pins 1 cold call = 0 lines against 200 calls = 2 lines (REPORTED). Not covered by a
+`--stable` mode (#145). (2) D-E: the owner key is path-stripped, so two `del` helpers in different files share one
+UM key; instability moving between them reads SAME; not probed. (3) Guard / warm-up: a function with no optimizing
+compile and no attributed map / shape event in a run reads NO-VERDICT (compiled-but-uncalled, a clean array
+function); warm up before the traced calls. Warm-up number: e.g. 20000 calls (nominal; one research run on v26.8.2,
+not reproduced; Q-B103-WARMNUM (a)). No live row shows the guard cleared by warm-up: S5 / L3 are the Q-SD-OWNER N1
+rows (at 200 calls the non-target helper del owns the event, NO-VERDICT by the UE-diff reason; at 20000 it inlines
+into mk, DIFF). The call count at which a helper inlines can differ from a default-tier run (D-C). (4) N7: V8 log-format drift (a renamed or suppressed prefix) can blind the tool; RECHECK2 N7, disclosed, not
+probed on a future V8. (5) D-C and the A8 limit: the tool traces with `--no-sparkplug --no-node-snapshot` (not node's
+default tier config); a default-tier A/B on node 24.22.3 / 26.8.2 (TASK 0a, run 20261124T234614Z-full, QUIET host,
+1019 s, darwin arm64) read `TASK0A DECISION: SAME -- node >= 22 stands` (Q-SD-NODE (a), SPEC A8; REPORTED, one run),
+and the recorded limit: the A/B shows default-tier Sparkplug, as it behaves for the run-probes drivers on 24.22.3 /
+26.8.2 darwin-arm64, changes no verdict; no user function ran in a Sparkplug frame in arm B, so verdicts with user
+code in baseline frames are not covered. Rule: a limit is stated where the verdict is read, with its provenance.
+Evidence (local, untracked): `.handoff/research/post-1.0/RECHECK2-shape-diff.md` section 5, `.handoff/b103/SPEC-1.2.0.md`
+A8, `.handoff/evidence/b109-facts/`.
+
+**#147 shape-diff LEAD D-F: an attribute-only reconfigure may be filtered as a no-op (UNVERIFIED, b103).** A `(+N maps)`
+generalization line whose from / to representations are identical is filtered as a no-op by the shape reader; a
+Deprecate map event probably still catches such a change, but no probe was run. LEAD only: no README / llms claim
+beyond "not probed". What would close it: a driver that reconfigures a property's attributes only, A/B-ed on node
+22 / 24 / 26 / 27. Evidence (local, untracked): `.handoff/research/post-1.0/RECHECK2-shape-diff.md` section 5 (D-F).

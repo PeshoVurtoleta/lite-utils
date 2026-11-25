@@ -5,6 +5,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- shape-diff (`shape-diff.sh`, `bin: shape-diff`, the seventh tool and the sixth bash root): did the shape instability
+  of NAMED functions change (object shapes / maps, elements kinds, field generalizations, as multisets)? Driver mode
+  only: `shape-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER` and `shape-diff.sh --self-test`; no `--stable`
+  mode (Q-SD-KEEP (a); LEDGER #145). Flags: `--fn` (required, also `--fn=LIST`), `--include-transitions` (normal
+  monomorphic Transition / InitialMap counts join the verdict; REPORTED only by default, Q-SD-TRANS (a)), `--runs N`
+  (2..20, default 3), `--node`, `--v8-flags` (allowlist; a flag naming `sparkplug`, `concurrent-recompilation` or
+  `stress-concurrent-inlining` is refused), `--out DIR` (keeps `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`).
+  Verdicts: exit 0 SAME, 1 DIFF (the attributed shape-instability multiset differs for >= 1 target function), 2
+  NO-VERDICT (a refusal, a parse error, a failed null control, missing execution evidence, a Transition whose map has no
+  map-details line, or unattributed instability that changed while the attributed sites looked SAME; that delta
+  is never DIFF and the line names its owner `user:<fn>`, `node:<fn>`, `Builtin:*`, `other:<fn>` or `NONE`;
+  Q-SD-OWNER / Q-SD-UNATTR (a)). A function with no optimizing compile and no attributed map / shape event reads
+  NO-VERDICT until warmed (Q-SD-GUARD (b)).
+- shape-diff blind spot: a single cold `Array.prototype.push(1.5)` call emits 0 trace lines (darwin arm64, node
+  v22.23.5 / v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0; REPORTED, f9f671a), so two drivers that differ only by that call
+  read SAME. Documented, not fixed (LEDGER #146). Other limits: LEDGER #146 / #147.
+- shape-diff needs node >= 22: an unparsable `--version` or a major below 22 exits 2 after the one `--version` spawn,
+  before `--v8-options` and before any write (Q-B103-SD-VERGATE (a)). It traces with `--no-sparkplug` and
+  `--no-node-snapshot` (not node's default tier config). Q-SD-NODE (a): TASK 0a read `TASK0A DECISION: SAME -- node >=
+  22 stands` (run 20261124T234614Z-full, QUIET host, 1019 s, darwin arm64, node 24.22.3 / 26.8.2; REPORTED, one run).
+  Recorded limit (A8): the A/B shows default-tier Sparkplug, as it behaves for the run-probes drivers on 24.22.3 /
+  26.8.2 darwin-arm64, changes no verdict; no user function ran in a Sparkplug frame in arm B, so verdicts with user
+  code in baseline frames are not covered.
+- shape-diff `--self-test` is 44 rows (DETERMINISTIC: an embedded fake node, no real node; takes no other argument).
+  Rows 41-44 replay real captures of node 22 (v22.23.5) / 24 (v24.22.3) / 26 (v26.8.2) / 27 (v27.0.0-alpha.0.1.0): the MAP
+  and SHAPE records equal the golden, and the excerpt against the excerpt minus its `map,Normalize` line gives exit 1
+  DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME.
+- shape-diff assigns OUT_NAMES="" at init (as bytecode-budget / deopt-diff / ic-diff do), so an OUT_NAMES inherited
+  from the environment never joins the --out input refusal; a driver inside --out D is refused only when it is
+  D/report.txt (Q-B107-SDOUTNAMES (a), b107 G-E B4).
+- shape-diff refuses a CR or LF in an option name with the label `option name` (the other bash tools say `unknown
+  option`; Q-B107-SDULABEL (a)).
+- Packaging and CI: `package.json` gains `bin: shape-diff` and `shape-diff.sh` in `files[]` (12 packed paths);
+  `ci.yml` and `nightly.yml` run `bash shape-diff.sh --self-test` on every leg (Q-B103-CI22). A dispatch-only research
+  workflow, `.github/workflows/shape-probe.yml` (not part of CI), ran run-probes.sh's 27 assertions against the research prototype on ubuntu node 22 / 24 / 26 x
+  default GNU Awk 5.3.2 / gawk / mawk 1.3.4 and macOS node 26 x BSD awk / gawk: 11 / 11 runs, 27 / 27 ok each (run
+  45521613713 on b07e739; REPORTED, one dispatch).
+
+### Tests
+
+- test/shape-diff.test.mjs (new, 9770f78; 96 tests by 853c134): the C pin (`--self-test` prints 44 ok in label order, 0
+  TMPDIR entries), golden parity of the e2e reports with the frozen prototype, the static TRACE_FLAGS row and the canned
+  argv row (`--no-sparkplug` exactly once), each with an M6 teeth row; an identity row (src and the built root hold
+  exactly 8 SD_CAP heredocs, each byte-equal to its fixture); a 35-mutant table, one revert row each; the OUT_NAMES rows
+  with an old-root twin and mutant (853c134).
+- test/shape-diff-live.test.mjs (new, 734748b; 17 tests: S1-S9, L1-L7, C1): real-node rows on node 22 / 24 / 26 / 27
+  (exact lines and strict codes on the captured versions, the codes-only tier elsewhere). S1-S9 are the run-probes
+  assertions; L1 / L2 pin the 7 TRACE_FLAGS; L3 (N1 at 20000 calls -> DIFF), L4 (an EventEmitter `setMaxListeners`
+  generalization -> NO-VERDICT naming the UNATTR line), L5 (a crafted key -> DIFF), L6 / L7 (the M6 / M7 mutants turn
+  S1 / L1 and the `*sparkplug*` refusal red). C1 is the spawn-free checker row for the codes-only tier: on a version
+  that is not an exact-line capture, a must-differ row accepts exit 1 or 2, and exit 2 passes only with >= 1
+  `<fn>: NO-VERDICT -- ` line whose reason is the UE-diff reason or the warm-up guard; a die, usage text and every
+  other reason are rejected (Q-B107-DIFF2 / DIFF3).
+- test fixtures test/fixtures/shape-diff/ (a5d3aac, f9f671a): canned unit / e2e inputs, a fake node, golden output of the
+  frozen prototype, and trimmed real-node excerpts with PROVENANCE for node 22 / 24 / 26 / 27.
+- cross-tool joins (shape-diff added to the existing matrices): packaging and roster tests (pack, audit-g0 G-T4 six
+  roots, build, tracked, alloc-per-op-qa; 897e3f3); final-trap, env-strip (E4sd, E5sd) and death-signature (f24ece4);
+  audit-x6, nonpath-cr-refuse and out-input-refuse (853c134); audit-sig (A1 / A2 / MKSIG / T / TR, 14 rows; the three
+  MKSIG rows are regression pins and the re-delivery drop is the window witness) and audit-g0 B1 (+2 rows) (d0e38d6).
+- env-strip: the sd real runs (E3 sd, E5sd) have their own cap, SD_REAL_CAP 600 s, after nightly 45633599155 timed out at
+  120 s on macOS node 27 alpha (E3 sd 120 s+, REPORTED); the N1 gate row checks the call site (51add49; LEDGER #151).
+- LEDGER #145-#152 record the shape-diff designs, limits and the test-process lessons of this cycle.
+
 ## [1.1.2] - 2026-11-24
 
 Patch release: one behaviour change, one fix and tests, no new surface. Touches allocation-diff (the `--zero` null

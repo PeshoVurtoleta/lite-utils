@@ -1,11 +1,11 @@
 # @zakkster/lite-utils
 
-Six standalone CLIs: five bash tools that compare two JavaScript builds through V8's own
+Seven standalone CLIs: six bash tools that compare two JavaScript builds through V8's own
 traces -- bytecode length, deopts, inline caches, inlining decisions, young-GC
-event counts -- and end every run with a fail-closed verdict line
+event counts, object shapes / elements kinds / field generalizations -- and end every run with a fail-closed verdict line
 (SAME / DIFF / NO-VERDICT, or WITHIN / OVER, ZERO / NONZERO, REPORTED). Each
 bash tool is one self-contained script that drives `node` and reads its trace
-output. The sixth, `alloc-per-op`, is a node script that measures steady-state
+output. The seventh, `alloc-per-op`, is a node script that measures steady-state
 on-heap bytes per op of a synchronous lane (PASS / FAIL, SAME / DIFF, NO VERDICT).
 This is not a JS library: no JS API is supported (alloc-per-op.mjs's exports serve its tests and carry no contract).
 
@@ -22,18 +22,18 @@ Install (instructions; pick one):
 
 After an npm install the commands are in `./node_modules/.bin/`:
 `allocation-diff`, `alloc-per-op`, `bytecode-budget`, `deopt-diff`, `ic-diff`,
-`inlining-budget-diff`.
+`inlining-budget-diff`, `shape-diff`.
 
 ## Rules for a caller (read first)
 
-- ALWAYS require the `VERDICT <v>` line on stdout, not only the exit code (the five bash tools;
+- ALWAYS require the `VERDICT <v>` line on stdout, not only the exit code (the six bash tools;
   `alloc-per-op` prints no `VERDICT` line: use its exit code, 0 / 1 / 2, or `--json`).
 - Exit 2 = NO-VERDICT: the tool could not decide and failed closed. It is not
   "no difference". Never treat 2 as success.
 - Exit 0 and 1 are verdicts; the verdict word names which (see each tool).
 - `--self-test` exit 1 means a `FAIL <label>` line was printed (alloc-per-op: a row printed `MISS`; its exit 2 = a
   selfCheck miss). It is NOT DIFF.
-- `-h` / `--help` prints the header and exits 2 (all six). Do not use it as a
+- `-h` / `--help` prints the header and exits 2 (all seven). Do not use it as a
   liveness probe that expects 0.
 - An unexpected failure inside a tool exits 2 NO-VERDICT, never 1.
 - A refused argument exits 2 before any node is spawned, with these named
@@ -48,7 +48,7 @@ Shared options (each tool's own `-h` is the authority for its subset):
 path), `--v8-flags STR` (runtime allowlist of V8 flags; log / trace / print /
 prof flags and node options are refused), `--out DIR` (keep the report and raw
 runs), `--runs N` (runs per side; run 1 vs the later runs is the null control; with --zero: young 0 vs young >= 1 per run),
-`--self-test`, `-h`. The five bash tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
+`--self-test`, `-h`. The six bash tools strip NODE_OPTIONS, NODE_V8_COVERAGE,
 NODE_COMPILE_CACHE and NODE_REDIRECT_WARNINGS from every spawn (alloc-per-op's one --expose-gc respawn inherits the
 environment).
 
@@ -161,6 +161,51 @@ change? Counts of GC events, never bytes.
 - Tier: the script logic is DETERMINISTIC (`--self-test`); a verdict on a user
   driver is STATISTICAL and REPORTED only.
 
+### shape-diff (shape-diff.sh)
+
+Question: did the shape instability of NAMED functions change (object shapes / maps, elements kinds, field
+generalizations, as multisets)? Attributed per function; unattributed instability is checked as a whole.
+
+    shape-diff.sh [opts] --fn LIST DRIVER_BEFORE DRIVER_AFTER
+    shape-diff.sh --self-test
+
+- Driver mode ONLY. There is no ref mode, no file mode and no `--stable` mode (LEDGER #145). `--fn` is required (short
+  function names; `--fn=LIST` also works).
+- Options specific to it: `--include-transitions` (put normal monomorphic Transition / InitialMap counts into the
+  verdict; by default they are REPORTED and never move it), `--runs N` (2..20, default 3), `--out DIR` (keeps
+  `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`). `--v8-flags` also refuses any flag whose name contains
+  `sparkplug`, `concurrent-recompilation` or `stress-concurrent-inlining` (the tool pins them; message `shape-diff:
+  --v8-flags must not set <flag>: conflicts with ...`), exit 2.
+- Exit 0 SAME, 1 DIFF, 2 NO-VERDICT. DIFF: the attributed shape-instability multiset differs for >= 1 target
+  function. SAME needs identical attributed multisets AND identical unattributed / non-target multisets.
+  NO-VERDICT: a refusal, a parse error, a failed null control (run 1 vs the later runs), missing execution evidence, a
+  target Transition whose map has no map-details line (elements kind unknown), or unattributed / external
+  instability (`Reflect.deleteProperty`, `splice`, a non-target user helper, a `node:` or other non-file-path frame)
+  that changed while the attributed sites looked SAME. A changed unattributed delta never becomes DIFF; the line names
+  its owner (`user:<fn>`, `node:<fn>`, `Builtin:*`, `other:<fn>`, `NONE`).
+- **Blind spot: a single cold call to `Array.prototype.push(1.5)` emits 0 trace lines, so two drivers that differ only
+  by that call read SAME. Warm the function (e.g. 200 calls) or compare with another tool. Measured on darwin arm64,
+  node v22.23.5 / v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0 (REPORTED; LEDGER #146).**
+- Evidence guard: a function with no optimizing compile and no attributed map / shape event in a run (a clean array or
+  arithmetic function, or compiled but never called) reads NO-VERDICT; warm up so it tiers up, e.g. 20000 calls
+  (nominal; one research run on v26.8.2, not reproduced). The call count at which a helper inlines can differ from a
+  default-tier run (LEDGER #146).
+- Node: needs node >= 22; an unparsable `--version` or a major below 22 exits 2 after the one `--version` spawn,
+  before `--v8-options` and before any write. The tool traces with `--log-maps --trace-elements-transitions
+  --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot`,
+  not node's default tier config.
+- Refusal label: a CR / LF in an option name is refused with the label `option name` (the other bash tools say
+  `unknown option`). A symlink `--out` dir, a symlink or hard-linked `DIR/report.txt`, a
+  non-empty `DIR/raw`, a driver that is `DIR/report.txt`, and an empty `--fn` are refused before any spawn.
+- No `@@LITE-MARK` window is used or needed; the driver runs whole.
+- Tier: `--self-test` is DETERMINISTIC (44 rows, a fake node, no real node; rows 41-44 replay captured excerpts of
+  real node 22 / 24 / 26 / 27 and expect DIFF with the removed map record named, Point SAME). A shape-diff verdict on a
+  real node is REPORTED only (no statistical gate). REPORTED: shape-probe run 45521613713 on b07e739 (run-probes.sh against the research prototype, not the shipped
+  root), 27 / 27 ok on
+  11 / 11 runs (ubuntu node 22 / 24 / 26 x default GNU Awk 5.3.2 / gawk / mawk 1.3.4; macOS node 26 x BSD awk / gawk;
+  one dispatch). The default-tier A/B (node 24.22.3 / 26.8.2, darwin arm64, one run, 2026-11-24) read SAME; the A/B
+  does not cover verdicts with user code in a Sparkplug frame (see Known limits).
+
 ### alloc-per-op (alloc-per-op.mjs)
 
 Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, steady state, in the main isolate?
@@ -217,13 +262,14 @@ Question: how many ON-HEAP BYTES does one op of a synchronous lane allocate, ste
 | ic-diff               | SAME               | DIFF              | NO-VERDICT |
 | inlining-budget-diff  | SAME               | DIFF              | NO-VERDICT |
 | allocation-diff       | SAME / ZERO        | DIFF / NONZERO    | NO-VERDICT |
+| shape-diff            | SAME               | DIFF              | NO-VERDICT |
 | alloc-per-op          | PASS / SAME / table | FAIL / DIFF / ONLY-A / ONLY-B | NO VERDICT / refused |
 
-For the five bash tools: every run that reaches a verdict ends in a `VERDICT <v>` line on stdout; a refusal prints
+For the six bash tools: every run that reaches a verdict ends in a `VERDICT <v>` line on stdout; a refusal prints
 `<tool>: <why>` and `VERDICT NO-VERDICT` on stderr and exits 2; a SIGINT /
 SIGTERM / SIGHUP during a run ends NO-VERDICT, exit 2; `--self-test` exits 0 (all checks ok) or 1 (a FAIL line), and
 that 1 is not DIFF. alloc-per-op: a refusal prints `alloc-per-op: <why>` only; its exits are in its row above and its
-section. `-h` exits 2 (all six).
+section. `-h` exits 2 (all seven).
 
 ## Tiers
 
@@ -234,11 +280,12 @@ section. `-h` exits 2 (all six).
   them on a quiet host. Their verdict on a user driver is a report, not a build gate (alloc-per-op --max and
   allocation-diff --zero still exit 1 on FAIL / NONZERO).
 - REPORTED: printed measurements that gate nothing (inlining budget report,
-  deopt-diff tier section, allocation-diff counts line).
+  deopt-diff tier section, allocation-diff counts line). A shape-diff verdict on a real node is REPORTED
+  (its `--self-test` is DETERMINISTIC).
 
 ## Requirements
 
-- bash >= 3.2 (the five bash tools; alloc-per-op needs only node).
+- bash >= 3.2 (the six bash tools; alloc-per-op needs only node).
 - A POSIX awk (BSD awk and the ubuntu-latest awk are what the CI matrix uses;
   other awks are not claimed).
 - node >= 22, with the ic-diff and inlining-budget-diff caveats above.
@@ -267,6 +314,14 @@ Each bullet names its LEDGER id.
   only lane(0)'s return value is checked (a value or a thenable from a later call is not seen); off-heap ArrayBuffer
   memory and Worker threads are not counted; an allocation that does not recur inside the span ((K-1) x N ops) is seen
   only if an occurrence falls inside it, by every rule.
+- #146: shape-diff cannot see a single cold `Array.prototype.push(1.5)` call (0 trace lines; two drivers that differ
+  only by it read SAME); two `del` helpers in different files share one owner key, so instability moving between them
+  reads SAME (not probed); a function with no optimizing compile and no attributed event reads NO-VERDICT until
+  warmed; a V8 trace-format change (renamed or suppressed prefixes) can blind it; it traces with `--no-sparkplug
+  --no-node-snapshot` (a default-tier A/B on node 24 / 26 darwin arm64 changed no verdict, but no user function ran in a
+  Sparkplug frame there, so verdicts with user code in baseline frames are not covered).
+- #147: shape-diff filters a generalization line with identical representations as a no-op; whether a Deprecate map
+  event still catches such a change is UNVERIFIED (not probed).
 - Driver output is trusted (#72 B1b, #92 b): a driver can write lines that look like trace or marker output.
 - a hard link to `--before` elsewhere in the repository (outside `--before`'s directory and below), or under a case-only
   sibling name on a case-sensitive file system, can stay undetected (LEDGER #71, #88, #89)
@@ -274,9 +329,9 @@ Each bullet names its LEDGER id.
 
 ## Composability
 
-One CI job can run all six (alloc-per-op: `node alloc-per-op.mjs --self-test`, untimed, in CI; installed:
+One CI job can run all seven (alloc-per-op: `node alloc-per-op.mjs --self-test`, untimed, in CI; installed:
 `./node_modules/.bin/alloc-per-op --max B bench.mjs`). Gate only on bytecode-budget `--max` (exit 1 or 2 fails the job).
-Run the other four bash tools so a nonzero exit does not abort the job, keep `--out` as an artifact, and fail the job if
+Run the five other bash tools so a nonzero exit does not abort the job, keep `--out` as an artifact, and fail the job if
 the `VERDICT` line is missing:
 
     rc=0; ./node_modules/.bin/deopt-diff --fn add --out out/dd before.js after.js > dd.txt || rc=$?
