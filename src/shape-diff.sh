@@ -1219,6 +1219,7 @@ V8FLAGS=""
 OUT=""
 POS=()
 REPORT=/dev/null   # say tees here until --out names DIR/report.txt (lib/common.sh say)
+OUT_NAMES=""       # rep_refuse checks report.txt only; an inherited env OUT_NAMES never joins it
 
 # @include lib/args.sh
 

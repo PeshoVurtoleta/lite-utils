@@ -1,17 +1,18 @@
 // test/nonpath-cr-refuse.test.mjs -- b77 F-G (LEDGER #126, ruling Q-B75-NONPATH; Q-B76-FGPATH (a)): a newline or a CR in a RAW
 // non-path value or in an option NAME is refused, exit 2, before any spawn or write and before any refusal prints it. Oracle =
 // .handoff/PLAN-b76-fg.md section 3 ASSERTIONS A1-A6 (the shape of ref-cr-refuse ROW 12), not the code.
-//   A1  93 rows on the live roots (ad = allocation-diff, bb = bytecode-budget, dd = deopt-diff, ic = ic-diff, ibd =
-//       inlining-budget-diff); the label is the option name:
-//       U   `unknown option`, every tool: U1 `--zz<CR>` the first argument, U2 `--zz<CR>=v` after `--runs 3`, U3 `--zz<LF>`;
-//           U4 `-z<CR>` the first argument on ad, bb, dd, ic (ADDENDUM A1: ibd reads a single-dash arg as a DRIVER) (19)
-//       F   `--fn`: F1 `x<CR>`, F2 `add,x<CR>` (ibd `m0,x<CR>`) on bb report, dd driver, ic, ibd; F1 on bb --diff, dd file mode (10)
-//       R   `--runs`: R1 `3<CR>`, R2 `3<LF>` x 5 tools, R1 on ad --zero (11)
+//   A1  109 rows on the live roots (ad = allocation-diff, bb = bytecode-budget, dd = deopt-diff, ic = ic-diff, ibd =
+//       inlining-budget-diff, sd = shape-diff, joined in b107 G-X B2: 16 rows); the label is the option name:
+//       U   `unknown option` (sd: `option name`, its parser refuses a CR / LF in any option NAME before the option switch),
+//           every tool: U1 `--zz<CR>` the first argument, U2 `--zz<CR>=v` after `--runs 3`, U3 `--zz<LF>`;
+//           U4 `-z<CR>` the first argument on ad, bb, dd, ic, sd (ADDENDUM A1: ibd reads a single-dash arg as a DRIVER) (23)
+//       F   `--fn`: F1 `x<CR>`, F2 `add,x<CR>` (ibd `m0,x<CR>`) on bb report, dd driver, ic, ibd, sd; F1 on bb --diff, dd file mode (12)
+//       R   `--runs`: R1 `3<CR>`, R2 `3<LF>` x 6 tools, R1 on ad --zero (13)
 //       V   `--v8-flags`: V1 `<CR>x`, V2 a deny flag + CR (`--stress-concurrent-inlining<CR>`, bb `--eval<CR>`), V3 the
 //           allowlist-only `--foo-bar<CR>`, V4 position 2 `--no-lazy-feedback-allocation <CR>x`, V6 `--stack-size=100<CR>x`
-//           (the P5 shape) x 5 tools; V5 `--max-inlined-bytecode-size=1<CR>` on bb, ibd (27)
-//       N   `--node`: N1 `nosuch<CR>`, N2 `<x>/no<CR>/node` (missing), N3 env NODE=`nosuch<CR>` with no --node x 5 tools;
-//           N4 bb `<x>/a<LF>b/node` (missing) (16). No row demands a PATH-resolved name (Q-B76-FGPATH (a))
+//           (the P5 shape) x 6 tools; V5 `--max-inlined-bytecode-size=1<CR>` on bb, ibd (32)
+//       N   `--node`: N1 `nosuch<CR>`, N2 `<x>/no<CR>/node` (missing), N3 env NODE=`nosuch<CR>` with no --node x 6 tools;
+//           N4 bb `<x>/a<LF>b/node` (missing) (19). No row demands a PATH-resolved name (Q-B76-FGPATH (a))
 //       M   bb gate `--max` (with --node-version v26.8.2): M1 `a<CR>`, M2 `add=1<CR>`, M3 `add=1,b<CR>=1` (3)
 //       W   bb gate `--node-version`: W1 `v26.8.2<CR>`, W2 `v26.8.2<LF>` (2)
 //       X   `--fixtures` with --self-test: X1 bb `<x>/fx<CR>`, X2 bb `<x>/fx<LF>`, X3 dd `<x>/fx<CR>` (3)
@@ -21,21 +22,26 @@
 //       takes it; --self-test takes none), the case tree unchanged
 //   A2  OLD twin per row: `git show 861f3d3:<root>` (the bytes of .handoff/frozen/b76-fg-before) fails the row AND its stderr
 //       carries the raw value with its CR / LF byte (the echo); V3 also >= 2 fake-node spawns before the echo; V6 only fails the
-//       row (P5 decides the wording). SKIP when 861f3d3 is unreachable, FAIL under CI=true
+//       row (P5 decides the wording). SKIP when 861f3d3 is unreachable, FAIL under CI=true. No sd row has an A2 twin (ruling
+//       Q-B103-SDTWIN (a)): 861f3d3 has no shape-diff.sh and the prototype eb7c1b65 meets all 16 sd rows, so the sd twins are the
+//       A5 sd mutants (M1 sd, M2 sd x4; V6 sd: the M2 sd --v8-flags mutant reaches node and creates --out)
 //   A4  (regression / parity pins, green on both roots by design) controls: per site family per tool the same shape without the CR / LF (`--zz`, `--fn 1x`, `--runs x`, `--runs 1`,
 //       `--v8-flags x.js`, the deny flag, `--foo-bar`, `--node nosuch-g`, ...) plus the six G9 newline texts: rc 2, NOT the new
-//       text, and rc + stdout + stderr + spawn count byte-identical to the 861f3d3 root in the same case (A3 parity of G1-G12)
-//       budget: per tool one valid run (a logging shim that execs this node): no new text, the spawn argv log identical on live
+//       text, and rc + stdout + stderr + spawn count byte-identical to the 861f3d3 root in the same case (A3 parity of G1-G12);
+//       sd controls: byte-identical to its prototype `git show 4dc6a53:research/shape-diff/shape-diff.prototype.sh` (eb7c1b65),
+//       SKIP when 4dc6a53 is unreachable, FAIL under CI=true
+//       budget: per tool except sd one valid run (a logging shim that execs this node): no new text, the spawn argv log identical on live
 //       and 861f3d3 (F-G adds 0 spawns), rc 0 / 1 (on node v26.8.2, the version the tools' grammars are recorded on; another
 //       node: rc equal live / old)
 //   A5  mutants of the live roots (count-checked, exactly one match or the test FAILS), each run on a copy under the mkdtemp top:
 //       M1 the arm dropped (x5), M2 each new nl_refuse line dropped (24), M3 the block moved above `NODE_RES=$NODE_BIN` (x5),
 //       M4 the first entry only (11: --fn x4, --v8-flags x5, --max, --tiers), M5 the arm matching the newline only (x5), M6 the arm narrowed
-//       to `--*` (x4: ad, bb, dd, ic; ADDENDUM A1).
+//       to `--*` (x4: ad, bb, dd, ic; ADDENDUM A1). sd (b107): M1 sd the `option name` line dropped, M2 sd each of its 4 value lines
+//       dropped (59 mutants in all).
 //       Killed = the row is red AND the mutated stderr carries the CR / LF (the echo). Revert check per mutant: on the
 //       unmutated live root both halves of that kill assertion fail for every named row
 //   A6  retention: the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged; 0 --out dirs
-//       across the 93 live rows
+//       across the 109 live rows
 //   A3  self-test counts: live AND 861f3d3 --self-test, rc 0 and `self-test: N check(s) ok`, N = ad 85 (861f3d3: 83), bb 69,
 //       dd 107, ic 83, ibd 92 (the PLAN numbers: F-G adds no check; Q-ADZ-NC (a) added ad rows 84 / 85 in 1.1.2); the
 //       861f3d3 half SKIPs / CI=true FAILs as A2
@@ -45,6 +51,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { capSync } from './spawn-cap.mjs';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, realpathSync, readdirSync, lstatSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +116,20 @@ function oldRoot(t) {
     writeFileSync(p, g.stdout); chmodSync(p, 0o755);
     return (OLD[t] = p);
 }
+// shape-diff's A4 parity twin (Q-B103-SDTWIN (a)): its prototype eb7c1b65 at 4dc6a53 (law 9: a reachable history pin)
+const PROTO_SHA = '4dc6a53', PROTO_PATH = 'research/shape-diff/shape-diff.prototype.sh', PROTO_SHA8 = 'eb7c1b65';
+const haveProto = spawn('git', ['cat-file', '-e', `${PROTO_SHA}:${PROTO_PATH}`], { cwd: PKG }, 'git cat-file proto').status === 0 ? true : `${PROTO_SHA}:${PROTO_PATH} not available (shallow clone?)`;
+const PROTOSKIP = skip || (haveProto === true || CI_STRICT ? false : haveProto);
+let PROTO = null;
+function protoRoot() {
+    if (PROTO) return PROTO;
+    const g = spawn('git', ['show', `${PROTO_SHA}:${PROTO_PATH}`], { cwd: PKG, encoding: 'buffer' }, 'git show proto', 30000);
+    assert.equal(g.status, 0, `git show ${PROTO_SHA}:${PROTO_PATH} failed (CI_STRICT: an unreachable pin is a failure)`);
+    assert.equal(createHash('sha256').update(g.stdout).digest('hex').slice(0, 8), PROTO_SHA8, 'the prototype bytes moved');
+    const p = join(mk('proto'), 'shape-diff.sh');
+    writeFileSync(p, g.stdout); chmodSync(p, 0o755);
+    return (PROTO = p);
+}
 
 // ---- fake node, cases ----
 function fakeText(dir) {
@@ -141,9 +162,9 @@ function mkCase() {
 // every entry under the case dir (recursive, sorted, with the file size): a refusal before any write leaves it as it was
 const tree = (c) => readdirSync(c.dir, { recursive: true }).map(String).sort().map((p) => { const s = lstatSync(join(c.dir, p)); return `${p} ${s.isDirectory() ? 'd' : s.size}`; });
 
-const AD = 'allocation-diff', BB = 'bytecode-budget', DD = 'deopt-diff', IC = 'ic-diff', IBD = 'inlining-budget-diff';
-const TOOLS = [['ad', AD], ['bb', BB], ['dd', DD], ['ic', IC], ['ibd', IBD]];
-const TOOL = { ad: AD, 'ad-zero': AD, bb: BB, 'bb-diff': BB, 'bb-gate': BB, dd: DD, 'dd-file': DD, ic: IC, ibd: IBD, 'bb-st': BB, 'dd-st': DD };
+const AD = 'allocation-diff', BB = 'bytecode-budget', DD = 'deopt-diff', IC = 'ic-diff', IBD = 'inlining-budget-diff', SD = 'shape-diff';
+const TOOLS = [['ad', AD], ['bb', BB], ['dd', DD], ['ic', IC], ['ibd', IBD], ['sd', SD]];
+const TOOL = { ad: AD, 'ad-zero': AD, bb: BB, 'bb-diff': BB, 'bb-gate': BB, dd: DD, 'dd-file': DD, ic: IC, ibd: IBD, 'bb-st': BB, 'dd-st': DD, sd: SD };
 // the valid context of each mode: [[opt, value]...], flags, positionals. A row overrides one option (null drops it)
 const BASE = {
     ad: (c) => [[], [], [c.drv, c.drv2]],
@@ -155,6 +176,7 @@ const BASE = {
     'dd-file': (c) => [[['--fn', 'add'], ['--driver', c.drv], ['--before', c.fb], ['--after', c.fa]], [], []],
     ic: (c) => [[['--fn', 'add']], [], [c.drv, c.drv2]],
     ibd: (c) => [[['--fn', 'm0'], ['--tiers', 'turbo'], ['--runs', '2']], ['--no-bytecode'], [c.drv, c.drv2]],
+    sd: (c) => [[['--fn', 'add']], [], [c.drv, c.drv2]],
 };
 // a row / control spec: { mode, over: { opt: value | null }, lead: [...], env: {...}, noNode, st: (c) => argv (--self-test) }
 function argvOf(S, c) {
@@ -173,15 +195,17 @@ function run(root, c, S, what) {
 // ---- A1 rows ----
 const ROWS = {};
 const row = (id, label, echo, S) => { ROWS[id] = { id, label, echo, tool: TOOL[S.mode], ...S }; };
-const MODE = { ad: 'ad', bb: 'bb', dd: 'dd', ic: 'ic', ibd: 'ibd' };
+const MODE = { ad: 'ad', bb: 'bb', dd: 'dd', ic: 'ic', ibd: 'ibd', sd: 'sd' };
+// sd refuses a CR / LF in any option NAME (`nl_refuse "option name"`, before its option switch; prototype and port alike)
+const ULABEL = (k) => (k === 'sd' ? 'option name' : 'unknown option');
 for (const [k] of TOOLS) {
-    row(`U1 ${k}`, 'unknown option', `--zz${CR}`, { mode: MODE[k], lead: [`--zz${CR}`] });
-    row(`U2 ${k}`, 'unknown option', `--zz${CR}`, { mode: MODE[k], lead: ['--runs', '3', `--zz${CR}=v`], over: () => ({ '--runs': null }) });
-    row(`U3 ${k}`, 'unknown option', `--zz${NL}`, { mode: MODE[k], lead: [`--zz${NL}`] });
+    row(`U1 ${k}`, ULABEL(k), `--zz${CR}`, { mode: MODE[k], lead: [`--zz${CR}`] });
+    row(`U2 ${k}`, ULABEL(k), `--zz${CR}`, { mode: MODE[k], lead: ['--runs', '3', `--zz${CR}=v`], over: () => ({ '--runs': null }) });
+    row(`U3 ${k}`, ULABEL(k), `--zz${NL}`, { mode: MODE[k], lead: [`--zz${NL}`] });
     // U4 (ADDENDUM A1): a single-dash option name; ibd reads a single-dash arg as a DRIVER (the F-F rows cover it)
-    if (k !== 'ibd') row(`U4 ${k}`, 'unknown option', `-z${CR}`, { mode: MODE[k], lead: [`-z${CR}`] });
+    if (k !== 'ibd') row(`U4 ${k}`, ULABEL(k), `-z${CR}`, { mode: MODE[k], lead: [`-z${CR}`] });
 }
-for (const m of ['bb', 'dd', 'ic', 'ibd']) {
+for (const m of ['bb', 'dd', 'ic', 'ibd', 'sd']) {
     row(`F1 ${m}`, '--fn', `x${CR}`, { mode: m, over: () => ({ '--fn': `x${CR}` }) });
     const f2 = m === 'ibd' ? `m0,x${CR}` : `add,x${CR}`;
     row(`F2 ${m}`, '--fn', `x${CR}`, { mode: m, over: () => ({ '--fn': f2 }) });
@@ -193,7 +217,7 @@ for (const [k] of TOOLS) {
     row(`R2 ${k}`, '--runs', `3${NL}`, { mode: k, over: () => ({ '--runs': `3${NL}` }) });
 }
 row('R1 ad-zero', '--runs', `3${CR}`, { mode: 'ad-zero', over: () => ({ '--runs': `3${CR}` }) });
-const DENY = { ad: '--stress-concurrent-inlining', bb: '--eval', dd: '--stress-concurrent-inlining', ic: '--stress-concurrent-inlining', ibd: '--stress-concurrent-inlining' };
+const DENY = { ad: '--stress-concurrent-inlining', bb: '--eval', dd: '--stress-concurrent-inlining', ic: '--stress-concurrent-inlining', ibd: '--stress-concurrent-inlining', sd: '--stress-concurrent-inlining' };
 for (const [k] of TOOLS) {
     const v8 = (id, val, echo, extra = {}) => row(`${id} ${k}`, '--v8-flags', echo, { mode: k, over: () => ({ '--v8-flags': val }), ...extra });
     v8('V1', `${CR}x`, `${CR}x`);
@@ -219,7 +243,7 @@ row('X2 bb', '--fixtures', `fx${NL}`, { mode: 'bb-st', st: (c) => ['--self-test'
 row('X3 dd', '--fixtures', `fx${CR}`, { mode: 'dd-st', st: (c) => ['--self-test', '--fixtures', `${c.x}/fx${CR}`] });
 row('T1 ibd', '--tiers', `turbo${CR}`, { mode: 'ibd', over: () => ({ '--tiers': `turbo${CR}` }) });
 row('T2 ibd', '--tiers', `${CR}maglev`, { mode: 'ibd', over: () => ({ '--tiers': `turbo,${CR}maglev` }) });
-const FAM = { U: 19, F: 10, R: 11, V: 27, N: 16, M: 3, W: 2, X: 3, T: 2 };
+const FAM = { U: 23, F: 12, R: 13, V: 32, N: 19, M: 3, W: 2, X: 3, T: 2 };
 
 const want = (tool, label) => `${tool}: ${label}: a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`;
 // the ONE oracle: the list of failed expectations (empty = the fixed behaviour)
@@ -248,17 +272,19 @@ function liveRow(id) {
     return LIVE_RES[id];
 }
 
-test('A1 census: 93 rows, per family U 19 / F 10 / R 11 / V 27 / N 16 / M 3 / W 2 / X 3 / T 2', () => {
+test('A1 census: 109 rows, per family U 23 / F 12 / R 13 / V 32 / N 19 / M 3 / W 2 / X 3 / T 2', () => {
     const got = {};
     for (const id of Object.keys(ROWS)) got[id[0]] = (got[id[0]] || 0) + 1;
     assert.deepEqual(got, FAM);
-    assert.equal(Object.keys(ROWS).length, 93);
+    assert.equal(Object.keys(ROWS).length, 109);
+    assert.equal(Object.values(ROWS).filter((R) => R.tool === SD).length, 16);
 });
 for (const [id, R] of Object.entries(ROWS)) {
     test(`A1 ${id} (${R.tool}, label ${R.label}): rc 2, 0 spawns, the exact G-X6 refusal, no CR on stderr, no --out, the case tree unchanged`, { skip }, () => {
         const x = liveRow(id);
         assert.deepEqual(x.bad, [], msg(x.r));
     });
+    if (R.tool === SD) continue;   // no A2 twin: the A5 sd mutants are (Q-B103-SDTWIN (a))
     test(`A2 OLD twin ${id}: the ${OLD_SHA} root fails the row${R.v6 ? '' : ' and echoes the raw value'}${R.v3 ? ' after >= 2 spawns' : ''}`, { skip: OLDSKIP }, () => {
         const x = runRow(oldRoot(R.tool), R, `${id} (old)`);
         assert.ok(x.bad.length > 0, `old root already meets the row (the row has no teeth)\n${msg(x.r)}`);
@@ -303,10 +329,11 @@ for (const k of ['ic', 'dd', 'bb', 'ibd']) ctl(`G9 --fn a<LF>b ${k}`, { mode: k,
 ctl('G9 --v8-flags a<LF>b ad', { mode: 'ad', over: () => ({ '--v8-flags': `a${NL}b` }), g9: true });
 ctl('G9 --self-test --fixtures a<LF>b dd', { mode: 'dd-st', st: () => ['--self-test', '--fixtures', `a${NL}b`], g9: true });
 for (const [id, S] of Object.entries(CTL)) {
-    test(`A4 control ${id}: rc 2, not the new text, rc / stdout / stderr / spawns identical to the ${OLD_SHA} root`, { skip: OLDSKIP }, () => {
+    const sd = S.tool === SD;   // sd: parity against its prototype (Q-B103-SDTWIN (a)), 861f3d3 has no shape-diff.sh
+    test(`A4 control ${id}: rc 2, not the new text, rc / stdout / stderr / spawns identical to the ${sd ? `${PROTO_SHA} prototype` : OLD_SHA} root`, { skip: sd ? PROTOSKIP : OLDSKIP }, () => {
         const c = mkCase();
         const r = run(LIVE(S.tool), c, S, `${id} (control live)`); const n = c.spawns();
-        const o = run(oldRoot(S.tool), c, S, `${id} (control old)`); const n2 = c.spawns() - n;
+        const o = run(sd ? protoRoot() : oldRoot(S.tool), c, S, `${id} (control old)`); const n2 = c.spawns() - n;
         assert.equal(r.status, 2, msg(r));
         assert.ok(r.stderr !== '' && (S.g9 || !r.stderr.includes(NEWTEXT)), msg(r));
         assert.deepEqual([r.status, r.stdout, r.stderr, n], [o.status, o.stdout, o.stderr, n2], `live vs old\n${msg(r)}\n--- old\n${msg(o)}`);
@@ -329,7 +356,7 @@ function budgetRun(root, tool, what) {
     const log = existsSync(c.log) ? rd(c.log).split(c.dir).join('<C>').replace(/\.[A-Za-z0-9]{6}(?=[/\s]|$)/gm, '.XXXXXX').split('\n').filter((l) => l !== '') : [];
     return { r, log };
 }
-for (const [k, tool] of TOOLS) {
+for (const [k, tool] of TOOLS.filter(([, t]) => t !== SD)) {   // sd: no budget row (not in the b107 G-X B2 scope)
     test(`A4 budget ${k}: a valid run, no new text, the spawn argv log identical on live and ${OLD_SHA} (F-G adds 0 spawns)`, { skip: OLDSKIP }, () => {
         const L = budgetRun(LIVE(tool), tool, `${k} budget live`);
         const O = budgetRun(oldRoot(tool), tool, `${k} budget old`);
@@ -363,7 +390,7 @@ const BLOCK = (k) => BLOCK_C[k] + LINES[k].map(([o, v]) => `${NLR(o, v)}\n`).joi
 const NODE_RES = 'NODE_RES=$NODE_BIN\n';
 const rowsOf = (k, pred) => Object.values(ROWS).filter((R) => R.tool === TOOL[k] && pred(R)).map((R) => R.id);
 const MUTANTS = [];
-for (const [k, tool] of TOOLS) {
+for (const [k, tool] of TOOLS.filter(([, t]) => t !== SD)) {
     MUTANTS.push({ id: `M1 ${k} arm dropped`, tool, edits: [[ARM(k), '']], rows: rowsOf(k, (R) => R.id[0] === 'U') });
     MUTANTS.push({ id: `M5 ${k} arm matches the newline only`, tool, edits: [[ARM(k), ARM(k).replace(ARM_PAT(k), () => ARM_LF(k))]], rows: [`U1 ${k}`, `U2 ${k}`] });
     if (k !== 'ibd') MUTANTS.push({ id: `M6 ${k} arm narrowed to --*`, tool, edits: [[ARM(k), ARM(k).replace(ARM_PAT(k), () => ARM_PAT('ibd'))]], rows: [`U4 ${k}`] });
@@ -384,6 +411,12 @@ for (const [k, tool] of TOOLS) {
 }
 MUTANTS.push({ id: 'M4 bb --max first entry only', tool: BB, edits: [[NLR('--max', 'MAXLIST'), 'nl_refuse "--max" "${MAXLIST%%,*}"']], rows: ['M3 bb-gate'] });
 MUTANTS.push({ id: 'M4 ibd --tiers first entry only', tool: IBD, edits: [[NLR('--tiers', 'TIERS'), 'nl_refuse "--tiers" "${TIERS%%[, ]*}"']], rows: ['T2 ibd'] });
+// sd (b107 G-X B2, Q-B103-SDTWIN (a)): its twins. M1 sd: the option-name line dropped, the `unknown option: $a` arm echoes the name;
+// M2 sd: each raw value line dropped, a later check echoes the value (V6 sd: its own test below)
+MUTANTS.push({ id: 'M1 sd option-name line dropped', tool: SD, edits: [['  nl_refuse "option name" "$a"\n', '']], rows: rowsOf('sd', (R) => R.id[0] === 'U') });
+for (const [o, v] of [['--fn', 'FNLIST'], ['--runs', 'RUNS'], ['--v8-flags', 'V8FLAGS'], ['--node', 'NODE_BIN']]) {
+    MUTANTS.push({ id: `M2 sd ${o} line dropped`, tool: SD, edits: [[NLR(o, v), ':']], rows: rowsOf('sd', (R) => R.label === o && !R.v6) });
+}
 const MUT = {};
 function mutRoot(m) {
     if (MUT[m.id]) return MUT[m.id];
@@ -395,10 +428,14 @@ function mutRoot(m) {
     writeFileSync(p, src); chmodSync(p, 0o755);
     return (MUT[m.id] = p);
 }
-test('A5 census: 54 mutants (M1 5, M2 24, M3 5, M4 11, M5 5, M6 4), each naming >= 1 row', () => {
+test('A5 census: 59 mutants (M1 6, M2 28, M3 5, M4 11, M5 5, M6 4), each naming >= 1 row', () => {
     const got = {};
     for (const m of MUTANTS) { got[m.id.slice(0, 2)] = (got[m.id.slice(0, 2)] || 0) + 1; assert.ok(m.rows.length > 0, `${m.id} names no row`); }
-    assert.deepEqual(got, { M1: 5, M2: 24, M3: 5, M4: 11, M5: 5, M6: 4 });
+    assert.deepEqual(got, { M1: 6, M2: 28, M3: 5, M4: 11, M5: 5, M6: 4 });
+    assert.equal(MUTANTS.length, 59);
+    // every sd row has its twin: a kill-set row of an sd mutant, or V6 sd (its own test below)
+    const sdKill = new Set(MUTANTS.filter((m) => m.tool === SD).flatMap((m) => m.rows).concat(['V6 sd']));
+    assert.deepEqual(Object.values(ROWS).filter((R) => R.tool === SD && !sdKill.has(R.id)).map((R) => R.id), []);
 });
 for (const m of MUTANTS) {
     test(`A5 mutant ${m.id}: rows ${m.rows.join(', ')} go red with the raw value on stderr`, { skip }, () => {
@@ -418,9 +455,18 @@ for (const m of MUTANTS) {
     });
 }
 
-test('A6: 0 --out dirs created across the 93 live rows', { skip }, () => {
+// V6 sd (no echo: the P5 shape forges the report head): the M2 sd --v8-flags mutant runs node and creates --out, which the row forbids
+test('A5 mutant M2 sd --v8-flags line dropped: V6 sd goes red with >= 1 fake-node spawn and the --out dir created', { skip }, () => {
+    const p = mutRoot(MUTANTS.find((m) => m.id === 'M2 sd --v8-flags line dropped'));
+    const x = runRow(p, ROWS['V6 sd'], 'V6 sd (M2 sd --v8-flags)');
+    assert.ok(x.bad.some((b) => /^[1-9][0-9]* fake-node spawns != 0$/.test(b)), `no spawn: ${JSON.stringify(x.bad)}\n${msg(x.r)}`);
+    assert.ok(x.bad.includes('--out dir created'), `no --out dir: ${JSON.stringify(x.bad)}\n${msg(x.r)}`);
+    assert.deepEqual(liveRow('V6 sd').bad, [], 'revert: V6 sd is red on the live root');
+});
+
+test('A6: 0 --out dirs created across the 109 live rows', { skip }, () => {
     for (const id of Object.keys(ROWS)) liveRow(id);
-    assert.equal(Object.keys(LIVE_RES).length, 93);
+    assert.equal(Object.keys(LIVE_RES).length, 109);
     assert.equal(OUT_MADE, 0);
 });
 

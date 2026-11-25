@@ -1479,6 +1479,7 @@ V8FLAGS=""
 OUT=""
 POS=()
 REPORT=/dev/null   # say tees here until --out names DIR/report.txt (lib/common.sh say)
+OUT_NAMES=""       # rep_refuse checks report.txt only; an inherited env OUT_NAMES never joins it
 
 need() { # value from --opt=value (returns 0) or from the next argument (returns 1: caller shifts)
   if [[ -n "$v" ]]; then return 0; fi

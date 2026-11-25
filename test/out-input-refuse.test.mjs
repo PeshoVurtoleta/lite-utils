@@ -1,6 +1,7 @@
 // test/out-input-refuse.test.mjs -- b74 F-C (findings dd-fable-1 / DD-opus-a-1 + ibd-cross-opus-1): a file the run writes in
-// place in --out is one of its own inputs, or (inlining-budget-diff) a symlink / extra hard link at such a name. Four roots:
-// bytecode-budget, deopt-diff, ic-diff, inlining-budget-diff (allocation-diff keeps its own pinned refusal, not tested here).
+// place in --out is one of its own inputs, or (inlining-budget-diff) a symlink / extra hard link at such a name. Five roots:
+// bytecode-budget, deopt-diff, ic-diff, inlining-budget-diff, shape-diff (allocation-diff keeps its own pinned refusal, not tested
+// here; shape-diff joined in b107 G-X B2 with ROW 1 before, ROW 2 and ROW 6; ROW 8 in b107 G-E B4 (Q-B107-SDOUTNAMES (a))).
 // Fix: lib/common.sh rep_refuse (report.txt + OUT_NAMES, -ef) called before the first spawn or write; ibd fills OUT_NAMES =
 // budget.<tier>.tsv all.<tier>.diff.txt <fn>.<tier>.diff.txt per tier and refuses a symlink / hard link at each of them.
 //   ROW 1  driver mode, a DRIVER that IS D/report.txt (before; after too for the two-driver tools), --out D: rc 2, 0 fake-node
@@ -17,9 +18,14 @@
 //          as the after DRIVER, D/budget.turbo.tsv as the before DRIVER, D/read.set.turbo.diff.txt as the before DRIVER (--only-fn)
 //          -> `is an input file of this run`, the driver unchanged
 //   ROW 5  OLD twin per row: the c1618a5 root (b74 before) FAILS the same oracle (one oracle function, empty live, non-empty old)
-//          AND changes the input's sha256 (the destroyed driver / symlink target / hard-link twin; ibd rows: after VERDICT SAME)
+//          AND changes the input's sha256 (the destroyed driver / symlink target / hard-link twin; ibd rows: after VERDICT SAME).
+//          shape-diff (ruling Q-B103-SDTWIN (a)): c1618a5 has no shape-diff.sh and its prototype eb7c1b65 meets both rows, so its
+//          twin is an exact-once, count-checked mutant of a private copy of the live root with the rep_refuse call dropped: it must
+//          reach the fake node (>= 1 spawn) AND change the input's sha256
 //   ROW 6  must-fail controls: a DRIVER named report.txt OUTSIDE --out is not refused by the new text and spawns node (>= 1)
-//   ROW 8  env OUT_NAMES ('*' with cwd = D, 'drv.js') never joins the bb / dd / ic refusal list (r1 B1)
+//   ROW 8  env OUT_NAMES ('*' with cwd = D, 'drv.js') never joins the bb / dd / ic / shape-diff refusal list (r1 B1; shape-diff:
+//          ruling Q-B107-SDOUTNAMES (a), b107 G-E B4 assigns OUT_NAMES="" at init). 8 rows (4 tools x 2 values); shape-diff's 2
+//          rows have an old twin: the 9770f78 built root (sha256/8 edecd742, before the fix) must give the named refusal
 //   ROW 7  retention: the mkdtemp top is removed in after(); the live `git status --porcelain` `??` set is unchanged
 // Own fake node (bash): logs one SPAWN line per call, answers --version / --v8-options (tracked fixture), else exits 0.
 // No timing assertions. Private dirs (and a private TMPDIR per case) under one mkdtemp top.
@@ -123,17 +129,18 @@ function run(root, c, argv, what, extra = {}, cwd = c.cwd) {
 // every entry under --out (recursive, sorted): a refusal before any write leaves this list as it was
 const tree = (c) => readdirSync(c.o, { recursive: true }).map(String).sort();
 // driver mode argv for a before / after pair (bytecode-budget takes ONE driver: the before)
+const SD = 'shape-diff';
 const DRIVERS = (tool, b, a) => (tool === 'bytecode-budget' ? ['--fn', 'add', b] : tool === 'inlining-budget-diff' ? [...IBDA, b, a] : ['--fn', 'add', b, a]);
 
 // ROWS: name -> { tools, setup(c) -> { argv, victim, want } }. victim = the file whose sha256 must not move; want = a stderr fragment.
 const ROWS = {};
 const inputMsg = (c, n) => `--out: ${c.o}/${n} is an input file of this run`;
-for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff']) {
+for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff', SD]) {
     ROWS[`R1-before ${tool}`] = { row: 1, tool, setup: (c) => {
         const v = join(c.o, 'report.txt'); writeFileSync(v, DRV); writeFileSync(join(c.x, 'after.js'), DRV);
         return { argv: DRIVERS(tool, v, join(c.x, 'after.js')), victim: v, want: inputMsg(c, 'report.txt') };
     } };
-    if (tool !== 'bytecode-budget') {
+    if (tool !== 'bytecode-budget' && tool !== SD) {   // sd: ROW 1 before only (b107 G-X B2 scope)
         ROWS[`R1-after ${tool}`] = { row: 1, tool, setup: (c) => {
             const v = join(c.o, 'report.txt'); writeFileSync(v, DRV); writeFileSync(join(c.x, 'before.js'), DRV);
             return { argv: DRIVERS(tool, join(c.x, 'before.js'), v), victim: v, want: inputMsg(c, 'report.txt') };
@@ -197,6 +204,18 @@ ROWS['R4-fn-diff-before-driver ibd'] = { row: 4, tool: IBD, setup: (c) => {
     return { argv: ['--only-fn', ...IBDA, v, join(c.x, 'a.js')], victim: v, want: inputMsg(c, 'read.set.turbo.diff.txt') };
 } };
 
+// the shape-diff twin: an exact-once, count-checked edit of a private copy of the live root (the rep_refuse call dropped)
+let SDREP = null;
+function sdRepMut() {
+    if (SDREP) return SDREP;
+    const live = rd(LIVE(SD)), from = '  rep_refuse "${POS[@]}"\n';
+    const n = live.split(from).length - 1;
+    assert.equal(n, 1, `sd mutant: the anchor ${JSON.stringify(from)} matched ${n} times (want 1)`);
+    const p = join(mk('mut'), `${SD}.sh`);
+    writeFileSync(p, live.split(from).join('')); chmodSync(p, 0o755);
+    return (SDREP = p);
+}
+
 // the ONE oracle: the list of failed expectations (empty = the fixed behaviour)
 function problems(r, c, s, sha0, tree0) {
     const bad = [];
@@ -217,6 +236,16 @@ for (const [name, R] of Object.entries(ROWS)) {
         const r = run(LIVE(R.tool), c, s.argv, name);
         assert.deepEqual(problems(r, c, s, sha0, tree0), [], msg(r));
     });
+    if (R.tool === SD) {
+        test(`ROW 5 mutant twin ${name} (rep_refuse dropped): >= 1 spawn and the input's sha256 changed`, { skip }, () => {
+            const c = mkCase(); const s = R.setup(c); const sha0 = sha(s.victim); const tree0 = tree(c);
+            const r = run(sdRepMut(), c, s.argv, `${name} (mutant)`);
+            const bad = problems(r, c, s, sha0, tree0);
+            assert.ok(bad.some((b) => /^[1-9][0-9]* fake-node spawns != 0$/.test(b)), `the mutant never reached node: ${JSON.stringify(bad)}\n${msg(r)}`);
+            assert.ok(bad.some((b) => b.startsWith('input sha256 changed: ')), `the mutant left the input unchanged: ${JSON.stringify(bad)}\n${msg(r)}`);
+        });
+        continue;
+    }
     test(`ROW 5 OLD twin ${name}: the ${OLD_SHA} root fails the row and changes the input`, { skip: OLDSKIP }, () => {
         const c = mkCase(); const s = R.setup(c); const sha0 = sha(s.victim); const tree0 = tree(c);
         const r = run(oldRoot(R.tool), c, s.argv, `${name} (old)`);
@@ -227,7 +256,7 @@ for (const [name, R] of Object.entries(ROWS)) {
 }
 
 // ROW 6 must-fail controls: a driver named report.txt OUTSIDE --out (and an --out with no report.txt) is not refused by the new text
-for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff']) {
+for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff', SD]) {
     test(`ROW 6 control ${tool}: a DRIVER named report.txt outside --out is not refused by the new text, >= 1 spawn`, { skip }, () => {
         const c = mkCase();
         const v = join(c.x, 'report.txt'); writeFileSync(v, DRV); writeFileSync(join(c.x, 'after.js'), DRV);
@@ -238,17 +267,41 @@ for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget
     });
 }
 
-// ROW 8 (b74 F-C r1 B1): bytecode-budget / deopt-diff / ic-diff assign OUT_NAMES="" themselves, so an inherited OUT_NAMES never joins
-// the refusal list: a DRIVER D/drv.js inside --out D, env OUT_NAMES = '*' (cwd = D, so the glob names drv.js) or 'drv.js', is not
-// refused by the new text and spawns node. Red on a build that reads the inherited value (b74 F-C before r1).
-for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff']) {
+// ROW 8 (b74 F-C r1 B1): bytecode-budget / deopt-diff / ic-diff / shape-diff assign OUT_NAMES="" themselves (shape-diff since
+// b107 G-E B4, ruling Q-B107-SDOUTNAMES (a)), so an inherited OUT_NAMES never joins the refusal list: a DRIVER D/drv.js inside
+// --out D, env OUT_NAMES = '*' (cwd = D, so the glob names drv.js) or 'drv.js', is not refused by the new text and spawns node.
+// Red on a build that reads the inherited value (b74 F-C before r1; for shape-diff the 9770f78 root, the old twin below).
+const SD_OLD_SHA = '9770f78', SD_OLD_SHA8 = 'edecd742';
+const haveSdOld = spawn('git', ['cat-file', '-e', `${SD_OLD_SHA}^{commit}`], { cwd: PKG }, 'git cat-file sd').status === 0 ? true : `commit ${SD_OLD_SHA} not available (shallow clone?)`;
+const SDOLDSKIP = skip || (haveSdOld === true || CI_STRICT ? false : haveSdOld);
+let SDOLD = null;
+function sdOldRoot() {
+    if (SDOLD) return SDOLD;
+    const g = spawn('git', ['show', `${SD_OLD_SHA}:${SD}.sh`], { cwd: PKG, encoding: 'buffer' }, `git show ${SD}.sh`, 30000);
+    assert.equal(g.status, 0, `git show ${SD_OLD_SHA}:${SD}.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    assert.equal(createHash('sha256').update(g.stdout).digest('hex').slice(0, 8), SD_OLD_SHA8, `the ${SD} old twin is not ${SD_OLD_SHA8}`);
+    const p = join(mk('sdold'), `${SD}.sh`);
+    writeFileSync(p, g.stdout); chmodSync(p, 0o755);
+    return (SDOLD = p);
+}
+function row8(root, tool, val, what) {
+    const c = mkCase();
+    const v = join(c.o, 'drv.js'); writeFileSync(v, DRV); writeFileSync(join(c.x, 'after.js'), DRV);
+    return { c, v, r: run(root, c, DRIVERS(tool, v, join(c.x, 'after.js')), what, { OUT_NAMES: val }, c.o) };
+}
+for (const tool of ['bytecode-budget', 'deopt-diff', 'ic-diff', SD]) {
     for (const val of ['*', 'drv.js']) {
         test(`ROW 8 ${tool}: env OUT_NAMES=${JSON.stringify(val)}, a DRIVER D/drv.js inside --out D is not refused, >= 1 spawn`, { skip }, () => {
-            const c = mkCase();
-            const v = join(c.o, 'drv.js'); writeFileSync(v, DRV); writeFileSync(join(c.x, 'after.js'), DRV);
-            const r = run(LIVE(tool), c, DRIVERS(tool, v, join(c.x, 'after.js')), `${tool} OUT_NAMES`, { OUT_NAMES: val }, c.o);
+            const { c, r } = row8(LIVE(tool), tool, val, `${tool} OUT_NAMES`);
             assert.ok(!/is an input file of this run/.test(r.stderr), msg(r));
             assert.ok(c.spawns() >= 1, `0 spawns: refused before node\n${msg(r)}`);
+        });
+        if (tool !== SD) continue;
+        test(`ROW 8 OLD twin ${tool} ${SD_OLD_SHA} (${SD_OLD_SHA8}): env OUT_NAMES=${JSON.stringify(val)} -> the named refusal, rc 2, 0 spawns`, { skip: SDOLDSKIP }, () => {
+            const { c, v, r } = row8(sdOldRoot(), tool, val, `${tool} OUT_NAMES (old)`);
+            assert.equal(r.status, 2, msg(r));
+            assert.equal(c.spawns(), 0, `the refusal must precede every spawn\n${msg(r)}`);
+            assert.ok(r.stderr.split('\n').includes(`shape-diff: ${inputMsg(c, 'drv.js')} (${v}): the run would overwrite it`), `the named refusal is missing\n${msg(r)}`);
         });
     }
 }

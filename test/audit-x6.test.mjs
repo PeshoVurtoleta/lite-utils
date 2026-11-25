@@ -1,25 +1,27 @@
-// test/audit-x6.test.mjs -- b67 group G-X6, helper batch H1: black-box rows for the newline / CR refusal of all five roots
-// (bytecode-budget, deopt-diff, ic-diff, allocation-diff, inlining-budget-diff), from .handoff/PLAN-b67-gx6.md ASSERTIONS 1-3, 5
+// test/audit-x6.test.mjs -- b67 group G-X6, helper batch H1: black-box rows for the newline / CR refusal of all six roots
+// (bytecode-budget, deopt-diff, ic-diff, allocation-diff, inlining-budget-diff, shape-diff), from .handoff/PLAN-b67-gx6.md ASSERTIONS 1-3, 5
 // and ADDENDUM A1 (ruling Q-B66-X6), never from what a root printed. Written BEFORE the fix; the G-X6 coder batch B1 made
 // the live rows pass (addendum A3: no row is marked expected-to-fail). OLD twin = `git show dc4a10c:<root>`
-// per tool, SKIP when the commit is unreachable, FAIL under CI_STRICT.
+// per tool, SKIP when the commit is unreachable, FAIL under CI_STRICT. shape-diff (b107 G-X B2, ruling Q-B103-SDTWIN (a)) has no
+// dc4a10c root and its prototype eb7c1b65 meets every row below, so its twin per row is an exact-once, count-checked mutant
+// of a private copy of the live root (SD_MUT: the row's refusal call dropped), named by the problem it must raise.
 //   ROW 1  T1 (cwd = dir `q<NL>VERDICT SAME<NL>z`, --out .), T1-CR (same with CR), T5b (clean cwd, --out slsub/../p, slsub ->
 //          <dir>/sub), T5b-CR: rc 2, 0 fake-node spawns, 0 stdout bytes, stderr EXACTLY
 //          `<tool>: <label>: a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`, label `the cwd`
 //          (T1) / `--out (resolved)` (T5b); no line equal `VERDICT SAME` in stdout / stderr / any report.txt; no `p` created.
 //   ROW 2  OLD twin per row: the dc4a10c root FAILS the same oracle (the oracle is one function, asserted empty live, non-empty old)
 //   ROW 3  must-fail controls T6 (cwd = symlink to the dir, logical PWD, --out .) and T5a (--out sl/o, sl -> dir): 0 hits of the
-//          new text and >= 1 spawn, all 5 tools (a nl_dir that always used pwd -P would fail T6)
+//          new text and >= 1 spawn, all 6 tools (a nl_dir that always used pwd -P would fail T6)
 //   ROW 4  addendum A1: --out new/../slsub/../p (new absent, slsub -> dir/sub): rc 2, 0 spawns, label `--out (resolved)`, no p created; old twin;
 //          control A1c `--out new/../sl/x` (sl -> dir) is in ROW 3: clean
-//   ROW 5  addendum A2 / A4 (d): the fake node at `<case>/n<CR>x/node`, `--node <that absolute path>`, clean private cwd, --out . : all 5 tools,
+//   ROW 5  addendum A2 / A4 (d): the fake node at `<case>/n<CR>x/node`, `--node <that absolute path>`, clean private cwd, --out . : all 6 tools,
 //          rc 2, 0 spawns, 0 stdout bytes, stderr EXACTLY `<tool>: --node: a newline or a CR is not allowed (it would forge report
 //          lines)\nVERDICT NO-VERDICT\n` (label `--node` since F-G, b77, ruling Q-B75-NONPATH: the raw --node value is refused
 //          before it resolves), nothing forged; OLD twin per tool (the dc4a10c root fails the same oracle)
 //   ROW 5p F-G (b77): the ROW 5 fake found by a PATH lookup (no --node, PATH = its dir first): the same oracle with the label
 //          `--node (resolved)` (the resolved-path refusal a raw --node value can no longer reach); OLD twin per tool
 //   ROW 6  retention: the mkdtemp top is removed in after() (asserted there); the live `git status --porcelain` `??` set is unchanged
-//   ROW 7  T7 (census: HEAD dc4a10c forges on all 5 tools): the DRIVER arg(s) `slsub/../q/<f>.js` (slsub -> <NL dir>/sub, q only under the
+//   ROW 7  T7 (census: HEAD dc4a10c forges on each of its 5 tools; shape-diff joined in b107): the DRIVER arg(s) `slsub/../q/<f>.js` (slsub -> <NL dir>/sub, q only under the
 //          NL dir, so the physical path runs through the dir `q<NL>VERDICT SAME<NL>z`), x LF / CR: rc 2, 0 spawns, 0 stdout bytes, stderr
 //          EXACTLY `<tool>: DRIVER (resolved): a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`, nothing forged
 //   ROW 8  T8 (census: HEAD forges on bytecode-budget and deopt-diff only): file mode `--diff ... --before slsub/../q/mod.js`, x LF / CR; same
@@ -60,7 +62,7 @@ const CI_STRICT = process.env.CI === 'true';
 function cleanEnv(extra = {}) {
     const e = { ...process.env };
     for (const k of Object.keys(e)) if (k.startsWith('GIT_')) delete e[k];
-    for (const k of ['NODE', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE_TEST_CONTEXT', 'TMPDIR', 'OUTDIR', 'ME', 'POSIXLY_CORRECT', 'SHELLOPTS', 'BASH_ENV', 'ENV', 'CDPATH']) delete e[k];
+    for (const k of ['NODE', 'NODE_OPTIONS', 'EDITOR', 'VISUAL', 'NODE_COMPILE_CACHE', 'NODE_REDIRECT_WARNINGS', 'NODE_TEST_CONTEXT', 'TMPDIR', 'OUTDIR', 'ME', 'OUT_NAMES', 'POSIXLY_CORRECT', 'SHELLOPTS', 'BASH_ENV', 'ENV', 'CDPATH']) delete e[k];
     e.GIT_CONFIG_GLOBAL = '/dev/null';
     e.GIT_CONFIG_NOSYSTEM = '1';
     e.NODE_V8_COVERAGE = undefined;
@@ -93,8 +95,11 @@ const TOOLS = {
     'ic-diff': (d) => ['--fn', 'get', d.a, d.b],
     'allocation-diff': (d) => ['--zero', d.a],
     'inlining-budget-diff': (d) => [d.a, d.b],
+    'shape-diff': (d) => ['--fn', 'f', d.a, d.b],   // driver mode (b107 G-X B2)
 };
 const NAMES = Object.keys(TOOLS);
+const SD = 'shape-diff';
+const OLD_NAMES = NAMES.filter((t) => t !== SD);   // the roots dc4a10c has
 const LIVE = (t) => join(PKG, `${t}.sh`);
 
 // ---- the old twins ----
@@ -109,7 +114,41 @@ function oldRoot(t) {
     writeFileSync(p, g.stdout); chmodSync(p, 0o755);
     return (OLD[t] = p);
 }
-test(`the old twins are git show ${OLD_SHA}:<root> (5 roots)`, { skip: OLDSKIP }, () => { for (const t of NAMES) assert.ok(existsSync(oldRoot(t)), t); });
+test(`the old twins are git show ${OLD_SHA}:<root> (the ${OLD_NAMES.length} roots it has; shape-diff's twins are mutants)`, { skip: OLDSKIP }, () => {
+    assert.equal(OLD_NAMES.length, 5);
+    for (const t of OLD_NAMES) assert.ok(existsSync(oldRoot(t)), t);
+});
+
+// ---- the shape-diff twins (Q-B103-SDTWIN (a)): kind -> [the dropped line, the problem the mutant must raise] ----
+// the cwd / --node lines dropped: the later refusal fires instead, stderr EXACTLY its die line (3rd element: `--out (resolved)`,
+// nl_dir after the --out checks / `--node (resolved)` after the PATH resolve); the others: the run gets past the refusal to the
+// fake node (>= 1 spawn)
+const SD_DROP = {
+    cwd: ['nl_refuse "the cwd" "$PWD"\n', /^stderr is not exactly the die line/, '--out (resolved)'],
+    outres: ['  nl_dir "--out (resolved)" "$OUT"\n', /^[1-9][0-9]* fake-node spawns != 0$/],
+    node: ['nl_refuse "--node" "$NODE_BIN"\n', /^stderr is not exactly the die line/, '--node (resolved)'],
+    noderes: ['nl_refuse "--node (resolved)" "$NODE_RES"\n', /^[1-9][0-9]* fake-node spawns != 0$/],
+    drvres: ['nl_refuse "DRIVER (resolved)" "$DRV_B_DIR/$DRV_B_BASE" "$DRV_A_DIR/$DRV_A_BASE"\n', /^[1-9][0-9]* fake-node spawns != 0$/],
+};
+const SD_MUT = { T1: 'cwd', 'T1-CR': 'cwd', T5b: 'outres', 'T5b-CR': 'outres', A1: 'outres', N5: 'node', N5p: 'noderes', T7: 'drvres', 'T7-CR': 'drvres' };
+const SDM = {};
+function sdMut(kind) {   // an exact-once, count-checked edit of a private copy of the live root
+    const id = SD_MUT[kind], from = SD_DROP[id][0];
+    if (SDM[id]) return SDM[id];
+    const live = rd(LIVE(SD));
+    const n = live.split(from).length - 1;
+    assert.equal(n, 1, `sd mutant ${id}: the anchor ${JSON.stringify(from)} matched ${n} times (want 1)`);
+    const p = join(mk('mut'), `${SD}.sh`);
+    writeFileSync(p, live.split(from).join('')); chmodSync(p, 0o755);
+    return (SDM[id] = p);
+}
+// the sd twin: the mutant fails the row WITH the named problem (a crashed child or another failure is not a kill)
+function sdKilled(bad, kind, r) {
+    const re = SD_DROP[SD_MUT[kind]][1];
+    assert.ok(bad.some((b) => re.test(b)), `mutant ${SD_MUT[kind]} (${kind}) did not raise ${re}: ${JSON.stringify(bad)}\n${msg(r)}`);
+    const alt = SD_DROP[SD_MUT[kind]][2];
+    if (alt) assert.equal(r.stderr, `${SD}: ${alt}: a newline or a CR is not allowed (it would forge report lines)\nVERDICT NO-VERDICT\n`, `mutant ${SD_MUT[kind]} (${kind}): not the later ${alt} refusal (a crash is not a kill)\n${msg(r)}`);
+}
 
 // ---- fake node ----
 function fakeText(dir) {
@@ -214,6 +253,14 @@ for (const kind of Object.keys(KINDS)) {
             const bad = problems(r, c, tool, kind);
             assert.deepEqual(bad, [], msg(r));
         });
+        if (tool === SD) {
+            test(`ROW 2 mutant twin ${name} (${SD_MUT[kind]} dropped): fails the row with ${SD_DROP[SD_MUT[kind]][1]}`, { skip }, () => {
+                const c = mkCase(KINDS[kind].sep);
+                const r = run(sdMut(kind), tool, c, KINDS[kind].cwd(c), KINDS[kind].out);
+                sdKilled(problems(r, c, tool, kind), kind, r);
+            });
+            continue;
+        }
         test(`ROW 2 OLD twin ${name}: the ${OLD_SHA} root fails the row`, { skip: OLDSKIP }, () => {
             const c = mkCase(KINDS[kind].sep);
             const r = run(oldRoot(tool), tool, c, KINDS[kind].cwd(c), KINDS[kind].out);
@@ -249,6 +296,14 @@ for (const [kind, tools] of [['T7', NAMES], ['T7-CR', NAMES], ['T8', ['bytecode-
             const r = run2(LIVE(tool), tool, c, kind);
             assert.deepEqual(problems(r, c, tool, kind), [], msg(r));
         });
+        if (tool === SD) {
+            test(`ROW ${row} mutant twin ${name} (${SD_MUT[kind]} dropped): fails the row with ${SD_DROP[SD_MUT[kind]][1]}`, { skip }, () => {
+                const c = mkCase2(KINDS2[kind].sep);
+                const r = run2(sdMut(kind), tool, c, kind);
+                sdKilled(problems(r, c, tool, kind), kind, r);
+            });
+            continue;
+        }
         test(`ROW ${row} OLD twin ${name}: the ${OLD_SHA} root fails the row`, { skip: OLDSKIP }, () => {
             const c = mkCase2(KINDS2[kind].sep);
             const r = run2(oldRoot(tool), tool, c, kind);
@@ -278,7 +333,7 @@ test('ROW 9 control inlining-budget-diff: clean --before / --after dirs of the s
     assert.ok(c.spawns() >= 1, `0 fake-node spawns: the run never got past its checks\n${msg(r)}`);
 });
 
-// ROW 5 (A4 (d)): a CR in the --node path, 5 tools, live + OLD twins. Label `--node` since F-G (b77, ruling Q-B75-NONPATH):
+// ROW 5 (A4 (d)): a CR in the --node path, 6 tools, live + OLD twins. Label `--node` since F-G (b77, ruling Q-B75-NONPATH):
 // the raw --node value is refused before it resolves (ROW 5p keeps the `--node (resolved)` refusal live)
 KINDS2.N5 = { sep: CR, label: '--node', cwd: (c) => c.cwd, made: () => [], reports: (c) => [join(c.cwd, 'report.txt')] };
 function mkCase5() {
@@ -295,6 +350,14 @@ for (const tool of NAMES) {
         const r = run(LIVE(tool), tool, c, c.cwd, '.');
         assert.deepEqual(problems(r, c, tool, 'N5'), [], msg(r));
     });
+    if (tool === SD) {
+        test(`ROW 5 mutant twin N5 ${tool} (${SD_MUT.N5} dropped): fails the row with ${SD_DROP[SD_MUT.N5][1]}`, { skip }, () => {
+            const c = mkCase5();
+            const r = run(sdMut('N5'), tool, c, c.cwd, '.');
+            sdKilled(problems(r, c, tool, 'N5'), 'N5', r);
+        });
+        continue;
+    }
     test(`ROW 5 OLD twin N5 ${tool}: the ${OLD_SHA} root fails the row`, { skip: OLDSKIP }, () => {
         const c = mkCase5();
         const r = run(oldRoot(tool), tool, c, c.cwd, '.');
@@ -312,6 +375,14 @@ for (const tool of NAMES) {
         const r = run5p(LIVE(tool), tool, c);
         assert.deepEqual(problems(r, c, tool, 'N5p'), [], msg(r));
     });
+    if (tool === SD) {
+        test(`ROW 5p mutant twin N5p ${tool} (${SD_MUT.N5p} dropped): fails the row with ${SD_DROP[SD_MUT.N5p][1]}`, { skip }, () => {
+            const c = mkCase5();
+            const r = run5p(sdMut('N5p'), tool, c);
+            sdKilled(problems(r, c, tool, 'N5p'), 'N5p', r);
+        });
+        continue;
+    }
     test(`ROW 5p OLD twin N5p ${tool}: the ${OLD_SHA} root fails the row`, { skip: OLDSKIP }, () => {
         const c = mkCase5();
         const r = run5p(oldRoot(tool), tool, c);

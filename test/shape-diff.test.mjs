@@ -1,6 +1,7 @@
 // test/shape-diff.test.mjs -- ../shape-diff.sh: the --self-test count pin, golden parity against the frozen prototype,
 // the TRACE_FLAGS / argv rows, the mutant table, the self-test signal row (1.2.0 G-E B3 = PLAN-SD-E TASK 7) and the
-// real-capture identity row (1.2.0 G-E2 B2 = PLAN-SD-E2 TASKS 4-6).
+// real-capture identity row (1.2.0 G-E2 B2 = PLAN-SD-E2 TASKS 4-6), the A8 OUT_NAMES row family + its two twins (b107 G-E B4,
+// ruling Q-B107-SDOUTNAMES (a); oracle: the ruling text and the CODER-GX-B2 probe, rc / refusal line from lib/common.sh rep_refuse).
 // ORACLE: .handoff/b103/PLAN-SD-E.md ASSERTIONS A1 / A2 / A5 / A7 as amended by SPEC-1.2.0 A11 (M-ENV) and A12 (ii)
 // (VER_RE) / (iii) (M10 + the signal row); .handoff/b103/PLAN-SD-E2.md ASSERTIONS A1 / A3 / A4 (SPEC A13);
 // test/fixtures/shape-diff/canned/golden-proto (cut from the frozen prototype eb7c1b65 only);
@@ -8,9 +9,10 @@
 // row-to-mutant facts of the b105 G-E / b106 G-E2 hand-backs and reviews -- never what the script printed (the ROW labels
 // 41-44 alone are copied by script from the built root's self-test output, as the G-E2 B2 brief orders).
 // TIER: DETERMINISTIC. No real node: the self-test feeds canned text and its own fake node; the e2e rows run
-// test/fixtures/shape-diff/canned/fake-node.sh copied into a private temp dir.
+// test/fixtures/shape-diff/canned/fake-node.sh copied into a private temp dir. git: the A8 old twin only (`git show 9770f78:`,
+// a history pin: skipped when the commit is absent, a failure under CI=true).
 //
-// Mutant table (35): each is ONE exact-once edit (an anchor matching 0 or > 1 times fails the row) on a private copy
+// Mutant table (35; the A8 M-OUTNAMES twin is outside it): each is ONE exact-once edit (an anchor matching 0 or > 1 times fails the row) on a private copy
 // of the built root under os.tmpdir(); it must exit 1 with `self-test: <n> check(s) FAILED` and FAIL every named row
 // (found by its exact label). Each revert row runs the kill assertion on the clean copy's output and requires it to
 // throw. M10 is the exception: the self-test passes on it, and its killer is the SIGNAL row (A12 (iii)), not a
@@ -377,6 +379,93 @@ test('A2 parity da: the proto (golden) gives 0|VERDICT SAME; the port gives 2|VE
     assert.equal(e.spawns, 8); assert.equal(e.mktemp, 1); assert.equal(e.left, 0);
     assert.ok(e.stdoutEqReport, 'stdout == report.txt');
 });
+
+// --- OUT_NAMES row (b107 G-E B4, ruling Q-B107-SDOUTNAMES (a)): the tool assigns OUT_NAMES="" at init, so an inherited env
+// OUT_NAMES never joins the rep_refuse list. Fake node, mono vs mono: the before DRIVER is D/drv.js inside --out D (D also
+// holds the fake node's map.log / out.txt), cwd = D, env OUT_NAMES = '*' (the glob names drv.js in D) or 'drv.js'.
+// Want rc 0, 8 fake-node spawns, no `is an input file` line, stdout ending VERDICT SAME. Two twins must give the NAMED
+// refusal (rc 2, 0 spawns, `shape-diff: --out: <D>/drv.js is an input file of this run (<D>/drv.js): the run would
+// overwrite it`): the built root of 9770f78 (sha256/8 edecd742, the b107 frozen-pre copy; a reachable history pin, skipped
+// off CI when the commit is absent, a failure under CI=true) and a private copy of the live root with the one
+// OUT_NAMES="" line dropped (exact-once, count-checked).
+const OUTNAMES_LINE = 'OUT_NAMES=""       # rep_refuse checks report.txt only; an inherited env OUT_NAMES never joins it\n';
+const ON_VALS = ['*', 'drv.js'];
+const OLD_SD_SHA = '9770f78'; const OLD_SD_SHA8 = 'edecd742';
+const CI_STRICT = process.env.CI === 'true';
+const GIT_ENV = Object.fromEntries(Object.entries(ENV).filter(([k]) => !k.startsWith('GIT_')));
+GIT_ENV.GIT_CONFIG_GLOBAL = '/dev/null'; GIT_ENV.GIT_CONFIG_NOSYSTEM = '1';
+const haveOldSd = skip ? false : (capSync('git', ['cat-file', '-e', `${OLD_SD_SHA}^{commit}`], { cwd: PKG, encoding: 'utf8', env: GIT_ENV },
+    30000, 'git cat-file').status === 0 ? true : `commit ${OLD_SD_SHA} not available (shallow clone?)`);
+const OLDSDSKIP = skip || (haveOldSd === true || CI_STRICT ? false : haveOldSd);
+function outNamesRun(path, val, what) {
+    const t = mkT('sdt-on-');
+    try {
+        const d = join(t, 'out');
+        for (const x of ['fk', 'tmp', 'out', 'x']) mkdirSync(join(t, x));
+        writeFileSync(join(t, 'fk', 'node'), readFileSync(join(CANNED, 'fake-node.sh')));
+        chmodSync(join(t, 'fk', 'node'), 0o755);
+        writeFileSync(join(t, 'fk.log'), '');
+        cpSync(join(CANNED, 'e2e', 'mono'), join(t, 'x', 'a'), { recursive: true });
+        for (const f of ['map.log', 'out.txt']) cpSync(join(CANNED, 'e2e', 'mono', f), join(d, f));
+        cpSync(join(CANNED, 'e2e', 'mono', 'driver.mjs'), join(d, 'drv.js'));
+        const r = capSync(BASH, [path, '--node', join(t, 'fk', 'node'), '--fn', 'mk', '--out', d, join(d, 'drv.js'),
+            join(t, 'x', 'a', 'driver.mjs')], { cwd: d, encoding: 'utf8', group: true,
+            env: { ...ENV, PATH: BASE_PATH, TMPDIR: join(t, 'tmp'), FAKE_LOG: join(t, 'fk.log'), OUT_NAMES: val } }, E2E_CAP, what);
+        const argv = readFileSync(join(t, 'fk.log'), 'utf8');
+        return { status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, d,
+            spawns: argv.split('\n').filter((l) => l !== '').length };
+    } finally { rmSync(t, { recursive: true, force: true }); }
+}
+// the ONE oracle: the failed expectations (empty = the fixed behaviour)
+function outNamesProblems(e) {
+    const bad = [];
+    if (e.status !== 0) bad.push(`rc ${e.status} != 0`);
+    if (e.spawns !== 8) bad.push(`${e.spawns} fake-node spawns != 8`);
+    if (/is an input file of this run/.test(e.stderr)) bad.push('stderr has an `is an input file of this run` line');
+    if (e.stdout.replace(/\n+$/, '').split('\n').pop() !== 'VERDICT SAME') bad.push('stdout does not end with VERDICT SAME');
+    return bad;
+}
+const onMsg = (e) => `rc=${e.status} signal=${e.signal} spawns=${e.spawns}\n--- stdout\n${e.stdout}--- stderr\n${e.stderr}`;
+// a twin is killed by the NAMED refusal only: rc 2, 0 spawns, the exact refusal line once (a crashed child is not a kill)
+function assertOnRefused(name, e) {
+    const want = `shape-diff: --out: ${e.d}/drv.js is an input file of this run (${e.d}/drv.js): the run would overwrite it`;
+    assert.ok(outNamesProblems(e).includes('stderr has an `is an input file of this run` line'), `${name}: the oracle saw no refusal\n${onMsg(e)}`);
+    assert.equal(e.status, 2, `${name}: rc\n${onMsg(e)}`);
+    assert.equal(e.spawns, 0, `${name}: the refusal must precede every spawn\n${onMsg(e)}`);
+    assert.equal(e.stderr.split('\n').filter((l) => l === want).length, 1, `${name}: the named refusal line once\n${onMsg(e)}`);
+}
+let OLDSD = null;
+function oldSdRoot(dir) {
+    if (OLDSD === null) {
+        const g = capSync('git', ['show', `${OLD_SD_SHA}:shape-diff.sh`], { cwd: PKG, encoding: 'buffer', env: GIT_ENV }, 30000, 'git show shape-diff.sh');
+        assert.equal(g.status, 0, `git show ${OLD_SD_SHA}:shape-diff.sh failed (CI=true: an unreachable pin is a failure)`);
+        assert.equal(createHash('sha256').update(g.stdout).digest('hex').slice(0, 8), OLD_SD_SHA8, 'the old twin is not edecd742');
+        OLDSD = g.stdout;
+    }
+    const p = join(dir, 'shape-diff.old.sh');
+    writeFileSync(p, OLDSD); chmodSync(p, 0o755);
+    return p;
+}
+const ONLIVE = new Map();
+const onLive = (val) => { if (!ONLIVE.has(val)) ONLIVE.set(val, outNamesRun(SCRIPT, val, `shape-diff OUT_NAMES=${val}`)); return ONLIVE.get(val); };
+for (const val of ON_VALS) {
+    test(`A8 OUT_NAMES row: env OUT_NAMES=${JSON.stringify(val)}, cwd = D, the DRIVER D/drv.js inside --out D -> not refused, rc 0, 8 spawns, VERDICT SAME`, { skip }, () => {
+        const e = onLive(val);
+        assert.deepEqual(outNamesProblems(e), [], onMsg(e));
+    });
+    test(`A8 OUT_NAMES revert: the twin kill assertion throws on the live run (env OUT_NAMES=${JSON.stringify(val)})`, { skip }, () => {
+        assert.throws(() => assertOnRefused("live", onLive(val)));
+    });
+    test(`A8 OUT_NAMES old twin ${OLD_SD_SHA} (${OLD_SD_SHA8}): env OUT_NAMES=${JSON.stringify(val)} -> the named refusal, rc 2, 0 spawns`, { skip: OLDSDSKIP }, () => {
+        const d = mkT('sdt-old-');
+        try { assertOnRefused(`old ${OLD_SD_SHA}`, outNamesRun(oldSdRoot(d), val, `shape-diff OUT_NAMES=${val} (old)`)); }
+        finally { rmSync(d, { recursive: true, force: true }); }
+    });
+    test(`A8 OUT_NAMES mutant twin (the OUT_NAMES="" line dropped): env OUT_NAMES=${JSON.stringify(val)} -> the named refusal, rc 2, 0 spawns`, { skip }, () => {
+        const e = withVariant('M-OUTNAMES', [[OUTNAMES_LINE, '']], (p) => outNamesRun(p, val, `shape-diff OUT_NAMES=${val} (mutant)`));
+        assertOnRefused('M-OUTNAMES', e);
+    });
+}
 
 test('A5 static TRACE_FLAGS row: the built root holds the 7-flag literal, one flag per line', { skip }, () => {
     assertTraceBlock(readFileSync(SCRIPT, 'utf8'));
