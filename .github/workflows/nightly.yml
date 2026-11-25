@@ -1,5 +1,5 @@
 # nightly.yml -- lite-utils daily run on the newest node and the engines floor (.handoff/PLAN-ci.md, burst 35;
-# ruling Q-CI-2). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync; five bash + one node tool
+# ruling Q-CI-2). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync; six bash + one node tool
 # self-test), on node 'latest' and node 22 (check-latest: the newest 22.x every night) x ubuntu-latest /
 # macos-latest. 'latest' is the first entry of nodejs.org/dist/index.json, an alpha / prerelease when one is
 # newest, kept on purpose (Q-B78-LATEST: the nightly is an early-warning signal). A failure turns the nightly
@@ -82,6 +82,8 @@ jobs:
         run: bash ic-diff.sh --self-test
       - name: inlining-budget-diff --self-test
         run: bash inlining-budget-diff.sh --self-test
+      - name: shape-diff --self-test
+        run: bash shape-diff.sh --self-test
       - name: alloc-per-op --self-test
         run: node alloc-per-op.mjs --self-test
       - name: bytecode-budget --self-test --fixtures (node 26.8.2 captures)

@@ -22,17 +22,17 @@ beforeEach(() => new Promise((r) => setImmediate(r)));
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 
-test('QA1 G3 A1: under umask 022 every build.sh output (5 .sh + alloc-per-op.mjs) is mode 0755, exactly 6 entries, 0 temps (kills: .sh step chmod 0775)', { skip }, () => {
+test('QA1 G3 A1: under umask 022 every build.sh output (6 .sh + alloc-per-op.mjs) is mode 0755, exactly 7 entries, 0 temps (kills: .sh step chmod 0775)', { skip }, () => {
     assert.ok(existsSync(join(ROOT, 'build.sh')), 'build.sh is missing: the row FAILS, never skips');
     const gen = readdirSync(join(ROOT, 'src')).filter((f) => f.endsWith('.sh')).sort();
-    assert.equal(gen.length, 5, 'the src .sh roster: ' + JSON.stringify(gen));
+    assert.equal(gen.length, 6, 'the src .sh roster: ' + JSON.stringify(gen));
     const out = mkdtempSync(join(tmpdir(), 'apo-qa-'));
     try {
         const r = capSync('bash', ['-c', 'umask 022 && exec bash build.sh "$1"', 'qa', out], { cwd: ROOT, encoding: 'utf8' }, 60000,
             'bash build.sh (umask 022)');
         assert.equal(r.status, 0, 'build.sh exit ' + r.status + ' signal ' + r.signal + '\n' + r.stdout + r.stderr);
         const got = readdirSync(out).sort();
-        assert.deepEqual(got, [...gen, 'alloc-per-op.mjs'].sort(), 'OUTDIR = the 5 .sh + 1 .mjs, no temp left');
+        assert.deepEqual(got, [...gen, 'alloc-per-op.mjs'].sort(), 'OUTDIR = the 6 .sh + 1 .mjs, no temp left');
         const bad = got.map((f) => [f, statSync(join(out, f)).mode & 0o777]).filter(([, m]) => m !== 0o755)
             .map(([f, m]) => f + ' 0' + m.toString(8));
         assert.deepEqual(bad, [], 'outputs not 0755');

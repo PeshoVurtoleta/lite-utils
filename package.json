@@ -10,7 +10,8 @@
     "bytecode-budget": "bytecode-budget.sh",
     "deopt-diff": "deopt-diff.sh",
     "ic-diff": "ic-diff.sh",
-    "inlining-budget-diff": "inlining-budget-diff.sh"
+    "inlining-budget-diff": "inlining-budget-diff.sh",
+    "shape-diff": "shape-diff.sh"
   },
   "files": [
     "alloc-per-op.mjs",
@@ -19,6 +20,7 @@
     "deopt-diff.sh",
     "ic-diff.sh",
     "inlining-budget-diff.sh",
+    "shape-diff.sh",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",

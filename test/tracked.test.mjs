@@ -1,7 +1,8 @@
 // test/tracked.test.mjs -- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md ASSERTIONS A1, A3 mutants, A5);
-// b50 G-SHL3 N1 (.handoff/PLAN-b50-shl3.md ASSERTION 3) adds ibd as the fifth root.
+// b50 G-SHL3 N1 (.handoff/PLAN-b50-shl3.md ASSERTION 3) adds ibd as the fifth root; 1.2.0 (b105 G-X B1 TASK 6) adds shape-diff as the
+// sixth (SIX; its rows have no 57b93d1 twin: G0_FIVE is that commit's root set).
 // Oracle: the PLAN assertions, not the implementation. The LAST `is_tracked()` defined in each of the bb / dd / ic /
-// alloc / ibd roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die`
+// alloc / ibd / sd roots (bash keeps the last definition, so that is the one refuse_live calls) is run under a `die`
 // stub
 // with what=--before. Expected values come from the spec: its 5 git error states plus gitdir (GIT_DIR to a missing
 // dir, b48) -> exit 2 + a line starting "--before: git failed while checking whether"; the controls (tracked 0,
@@ -28,7 +29,9 @@ const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : fa
 // a nested run is marked by TRACKED_NESTED equal to its own TMPDIR (an inherited bare '1' marks nothing)
 const NESTED = process.env.TRACKED_NESTED !== undefined && process.env.TRACKED_NESTED === process.env.TMPDIR;
 const BASH = existsSync('/bin/bash') ? '/bin/bash' : '/usr/bin/bash';
-const FIVE = ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh', 'inlining-budget-diff.sh'];
+const SIX = ['bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'allocation-diff.sh', 'inlining-budget-diff.sh', 'shape-diff.sh'];
+const G0_FIVE = SIX.filter((f) => f !== 'shape-diff.sh');   // the 57b93d1 roots (shape-diff is new in 1.2.0)
+const g0Twin = (file) => G0_FIVE.includes(file);
 const PREFIX = 'trk-gt-';
 
 // child env: no inherited git steering, no global / system config, no editor, no V8 coverage dir (node re-adds a deleted one)
@@ -202,8 +205,8 @@ function verdict(c, r) {
     return null;
 }
 
-// ---- A1: the effective definition in each of the five roots ----
-for (const file of FIVE) {
+// ---- A1: the effective definition in each of the six roots ----
+for (const file of SIX) {
     test(`A1 ${file}: exactly 2 is_tracked() definitions (common.sh's, then the fragment's)`, { skip }, () => {
         assert.equal(defCount(readFileSync(join(ROOT, file), 'utf8')), 2);
     });
@@ -221,7 +224,7 @@ for (const file of FIVE) {
     }
 }
 
-for (const file of FIVE) {
+for (const file of SIX) {
     test(`A1 literal-pathspecs ${file}: tracked ":x.js" -> 0, untracked "*" beside a tracked file -> 1, untracked "[ab].js" (hard link of tracked c.js) -> 0`, { skip }, () => {
         assert.equal(litVerdict(ROOT, file), null);
     });
@@ -268,7 +271,7 @@ function shimCalls(file, c) {
     const n = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter((l) => l !== '').length : 0;
     return { n, left: readdirSync(tmpd) };
 }
-for (const file of FIVE) {
+for (const file of SIX) {
     test(`A5 ${file}: git spawns per call (3 for a name with no literal match, 2 when it matched, 1 outside a work tree) and 0 temp files per call`, { skip }, () => {
         const cs = cases();
         for (const [name, want] of [['tracked', 2], ['untracked', 3], ['outside', 1]]) {
@@ -291,7 +294,7 @@ test('A5: after 5 runs of this file, 0 entries are left under its mkdtemp root',
 
 // ---- A3: mutants M1-M6 of lib/tracked.sh; each is built (build.sh) into a private out dir and must fail >= 1 named row ----
 
-// build the 5 roots from a private copy of build.sh + src/ + lib/ whose lib/tracked.sh is mutated once
+// build the 6 roots from a private copy of build.sh + src/ + lib/ whose lib/tracked.sh is mutated once
 function mutantRoots(m) {
     const d = mk(`mut-${m.id}`);
     cpSync(join(ROOT, 'build.sh'), join(d, 'build.sh'));
@@ -327,17 +330,17 @@ const MUTANTS = [
     { id: 'M6', from: '  local d b out rc=0 l\n', to: '  local d b out rc=0 l\n  die "${what:-is_tracked}: git failed while checking whether $1 is tracked (m6): always"\n', exact: ['tracked', 'untracked', 'outside', 'dotgit', 'nogit', 'lit'], kills: ['untracked', 'outside', 'dotgit', 'nogit'] },
 ];
 for (const m of MUTANTS) {
-    test(`A3 mutant ${m.id}: kills ${m.kills.join(' + ')} on every one of the 5 roots; the unmutated build ` +
+    test(`A3 mutant ${m.id}: kills ${m.kills.join(' + ')} on every one of the 6 roots; the unmutated build ` +
         `kills none`, { skip: skip || (NESTED ? 'nested retention run: mutants skipped (time)' : false) }, (t) => {
         const cs = cases();
         const names = [...ERR_CASES, ...CTL_CASES].filter((n) => !(n === 'dubious' && DUBIOUS_SKIP));
         const out = mutantRoots(m);
         const killed = new Map();       // "file:case" -> message
-        for (const file of FIVE) for (const n of names) {
+        for (const file of SIX) for (const n of names) {
             const msg = verdict(cs[n], run(out, file, cs[n]));
             if (msg !== null) killed.set(`${file}:${n}`, msg);
         }
-        for (const file of FIVE) { const msg = litVerdict(out, file); if (msg !== null) killed.set(`${file}:lit`,
+        for (const file of SIX) { const msg = litVerdict(out, file); if (msg !== null) killed.set(`${file}:lit`,
             msg); }
         t.diagnostic(`${m.id} killed rows: ${[...killed.keys()].join(', ') || 'none'}`);
         const measured = new Map();
@@ -348,16 +351,16 @@ for (const m of MUTANTS) {
             assert.ok(exact.includes('gitdir'), `${m.id}: teeth floor: the gitdir case must be a target on this host, measured ${JSON.stringify(measured.get('gitdir'))}`);
         }
         // the unmutated live roots pass every one of these rows (so each kill below is the mutation's, not the fixtures')
-        for (const file of FIVE) for (const n of names) assert.equal(verdict(cs[n], run(ROOT, file, cs[n])), null,
+        for (const file of SIX) for (const n of names) assert.equal(verdict(cs[n], run(ROOT, file, cs[n])), null,
             `${file}:${n} on the unmutated root`);
         const want = [];
-        for (const file of FIVE) for (const n of exact) if (!(n === 'dubious'
+        for (const file of SIX) for (const n of exact) if (!(n === 'dubious'
             && DUBIOUS_SKIP)) want.push(`${file}:${n}`);
         assert.deepEqual([...killed.keys()].sort(), want.sort(), `${m.id}: killed rows must be exactly the mutant's targets`);
     });
 }
 
-// ---- b58 G0 / G-T1 (.handoff/PLAN-b58-g0.md ASSERTIONS): the case-folding, :(literal) is_tracked of lib/tracked.sh on all FIVE roots ----
+// ---- b58 G0 / G-T1 (.handoff/PLAN-b58-g0.md ASSERTIONS): the case-folding, :(literal) is_tracked of lib/tracked.sh on all SIX roots ----
 // Old code = the 57b93d1 roots (git history; a missing commit skips locally, FAILS under CI=true). Every expected rc is the
 // spec's (tracked 0, untracked / nosuch 1, a git error dies), not what a root printed. Results: bash 3.2 macOS host only.
 const G0_SHA = '57b93d1';
@@ -368,7 +371,7 @@ function g0Old() {
     if (g0Have !== true) assert.fail(`${g0Have} (CI=true: a history row fails, never skips)`);
     if (G0_OLD !== null) return G0_OLD;
     const dir = mk('g0-old');
-    for (const f of FIVE) {
+    for (const f of G0_FIVE) {
         const g = capSync('git', ['show', `${G0_SHA}:${f}`], { cwd: ROOT, encoding: 'utf8', env: ENV, maxBuffer: 1 << 26 }, 30000, `git show ${f}`);
         assert.equal(g.status, 0, g.stderr);
         writeFileSync(join(dir, f), g.stdout);
@@ -394,14 +397,14 @@ function g0Fold() {
     return FOLD;
 }
 const g0rc = (r) => (r.status === 0 ? r.stdout : `exit ${r.status} ${r.stdout} ${r.stderr}`);
-for (const file of FIVE) {
+for (const file of SIX) {
     test(`G-T1a ${file}: tracked Thing.js, is_tracked <dir>/thing.js -> rc 0 (case-folding hosts only; macOS leg)`, { skip }, (t) => {
         if (!g0Fold()) return t.skip('G-T1a: case-sensitive host (runs on case-folding hosts only: macOS APFS default)');
         const d = g0Repo(`g1a-${file}`, ['Thing.js']);
         const c = { kind: 'rc', rc: 0, path: join(d, 'thing.js'), env: {} };
         assert.equal(g0rc(run(ROOT, file, c)), 'rc=0\n');
     });
-    test(`G-T1a twin ${file}: the ${G0_SHA} root returns 1 on tracked Thing.js via thing.js (red on old; case-folding hosts only)`, { skip: skip || histSkip(g0Have) }, (t) => {
+    if (g0Twin(file)) test(`G-T1a twin ${file}: the ${G0_SHA} root returns 1 on tracked Thing.js via thing.js (red on old; case-folding hosts only)`, { skip: skip || histSkip(g0Have) }, (t) => {
         if (!g0Fold()) return t.skip('G-T1a twin: case-sensitive host (runs on case-folding hosts only: macOS APFS default)');
         const d = g0Repo(`g1at-${file}`, ['Thing.js']);
         const c = { kind: 'rc', rc: 0, path: join(d, 'thing.js'), env: {} };
@@ -427,17 +430,17 @@ function g1cCases() {
         ['nosuch.js (absent)', 1, join(q, 'nosuch.js')],
     ];
 }
-for (const file of FIVE) {
-    test(`G-T1c ${file}: live and ${G0_SHA} agree with the spec rc (untracked 1, :x.js 0, * 1, q"b.js 0, nosuch 1) and a truncated index dies on both`,
-        { skip: skip || histSkip(g0Have) }, () => {
+for (const file of SIX) {
+    test(`G-T1c ${file}: ${g0Twin(file) ? `live and ${G0_SHA} agree` : 'live agrees (shape-diff: no 57b93d1 root)'} with the spec rc (untracked 1, :x.js 0, * 1, q"b.js 0, nosuch 1) and a truncated index dies on ${g0Twin(file) ? 'both' : 'live'}`,
+        { skip: skip || (g0Twin(file) ? histSkip(g0Have) : false) }, () => {
             for (const [name, rc, path] of g1cCases()) {
                 const c = { kind: 'rc', rc, path, env: {} };
                 assert.equal(g0rc(run(ROOT, file, c)), `rc=${rc}\n`, `live: ${name}`);
-                assert.equal(g0rc(run(g0Old(), file, c)), `rc=${rc}\n`, `old: ${name}`);
+                if (g0Twin(file)) assert.equal(g0rc(run(g0Old(), file, c)), `rc=${rc}\n`, `old: ${name}`);
             }
             const ci = cases().index;
             assert.equal(verdict(ci, run(ROOT, file, ci)), null, 'live: truncated index');
-            assert.equal(verdict(ci, run(g0Old(), file, ci)), null, 'old: truncated index');
+            if (g0Twin(file)) assert.equal(verdict(ci, run(g0Old(), file, ci)), null, 'old: truncated index');
         });
     test(`G-T1d ${file}: an inherited GIT_LITERAL_PATHSPECS=1 on a tracked file dies (exit 2 + the die line), never rc 1`, { skip }, () => {
         const c = { kind: 'err', path: join(fx().R, 't.txt'), env: {} };
@@ -456,30 +459,30 @@ const FOLD_SKIP = 'case-folding / Unicode-normalizing host only (macOS APFS leg;
 const lc = { LC_ALL: 'C' };
 function g1cRc(root, file, path, extra = {}) { return g0rc(run(root, file, { kind: 'rc', path, env: {} }, { ...lc, ...extra })); }
 function opens(a, b) { return existsSync(a) && existsSync(b); }
-for (const file of FIVE) {
-    test(`G-T1e ${file}: a core.fsmonitor hook printing to stderr on a successful ls-files -> rc 0 on live AND on ${G0_SHA} (parity); the r1 merged-stderr form is the mutant in audit-g0`, { skip: skip || histSkip(g0Have) }, () => {
+for (const file of SIX) {
+    test(`G-T1e ${file}: a core.fsmonitor hook printing to stderr on a successful ls-files -> rc 0 on live${g0Twin(file) ? ` AND on ${G0_SHA} (parity)` : ' (shape-diff: no 57b93d1 root)'}; the r1 merged-stderr form is the mutant in audit-g0`, { skip: skip || (g0Twin(file) ? histSkip(g0Have) : false) }, () => {
         const d = g0Repo(`g1e-${file}`, ['a.js']);
         const hook = join(mk(`g1e-hook-${file}`), 'hook.sh');
         writeFileSync(hook, '#!/bin/sh\necho NOISE-FROM-HOOK >&2\nexit 0\n'); chmodSync(hook, 0o755);
         git(d, ['config', 'core.fsmonitor', hook]);
         assert.equal(g1cRc(ROOT, file, join(d, 'a.js')), 'rc=0\n', 'live');
-        assert.equal(g1cRc(g0Old(), file, join(d, 'a.js')), 'rc=0\n', 'old');
+        if (g0Twin(file)) assert.equal(g1cRc(g0Old(), file, join(d, 'a.js')), 'rc=0\n', 'old');
     });
     test(`G-T1f ${file}: tracked "E-acute a.js (U+00C9)" asked as "e-acute a.js (U+00E9)" -> rc 0 (Unicode case; ${FOLD_SKIP})`, { skip }, (t) => {
         const d = g0Repo(`g1f1-${file}`, [NAME_E_UP]);
         if (!opens(join(d, NAME_E_UP), join(d, NAME_E_LO))) return t.skip(`G-T1f: ${FOLD_SKIP}`);
         assert.equal(g1cRc(ROOT, file, join(d, NAME_E_LO)), 'rc=0\n');
     });
-    test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked "E-acute a.js (U+00C9)" asked as "e-acute a.js (U+00E9)" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+    if (g0Twin(file)) test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked "E-acute a.js (U+00C9)" asked as "e-acute a.js (U+00E9)" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
         const d = g0Repo(`g1f1t-${file}`, [NAME_E_UP]);
         if (!opens(join(d, NAME_E_UP), join(d, NAME_E_LO))) return t.skip(`G-T1f twin: ${FOLD_SKIP}`);
         assert.equal(g1cRc(g0Old(), file, join(d, NAME_E_LO)), 'rc=1\n');
     });
-    test(`G-T1f parity ${file}: tracked NFC "e-acute.js" asked in NFD -> rc 0 on live AND on ${G0_SHA} (parity row: old already reads 0 here; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+    test(`G-T1f parity ${file}: tracked NFC "e-acute.js" asked in NFD -> rc 0 on live${g0Twin(file) ? ` AND on ${G0_SHA} (parity row: old already reads 0 here; ${FOLD_SKIP})` : ` (shape-diff: no 57b93d1 root; ${FOLD_SKIP})`}`, { skip: skip || (g0Twin(file) ? histSkip(g0Have) : false) }, (t) => {
         const d = g0Repo(`g1f2-${file}`, [NFC_E]);
         if (!opens(join(d, NFC_E), join(d, NFD_E))) return t.skip(`G-T1f parity: ${FOLD_SKIP}`);
         assert.equal(g1cRc(ROOT, file, join(d, NFD_E)), 'rc=0\n', 'live');
-        assert.equal(g1cRc(g0Old(), file, join(d, NFD_E)), 'rc=0\n', 'old');
+        if (g0Twin(file)) assert.equal(g1cRc(g0Old(), file, join(d, NFD_E)), 'rc=0\n', 'old');
     });
     // B3 (R3): Unicode case folds the sweep reaches by inode (no ASCII icase): Kelvin sign U+212A vs k, sharp s U+00DF vs ss. Host-gated by opens().
     const NAME_KELVIN = U('\xe2\x84\xaak.js'), NAME_KK = 'kk.js', NAME_SHARP = U('stra\xc3\x9fe.js'), NAME_STRASSE = 'strasse.js';
@@ -489,7 +492,7 @@ for (const file of FIVE) {
             if (!opens(join(d, tr), join(d, ask))) return t.skip(`G-T1f ${ask}: ${FOLD_SKIP}`);
             assert.equal(g1cRc(ROOT, file, join(d, ask)), 'rc=0\n');
         });
-        test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked ${lab} asked as "${ask}" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+        if (g0Twin(file)) test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on tracked ${lab} asked as "${ask}" (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
             const d = g0Repo(`g1fut-${file}-${ask}`, [tr]);
             if (!opens(join(d, tr), join(d, ask))) return t.skip(`G-T1f twin ${ask}: ${FOLD_SKIP}`);
             assert.equal(g1cRc(g0Old(), file, join(d, ask)), 'rc=1\n');
@@ -507,7 +510,7 @@ for (const file of FIVE) {
         if (!opens(join(d, NFD_E), join(d, NFC_E))) return t.skip(`G-T1f NFD: ${FOLD_SKIP}`);
         assert.equal(g1cRc(ROOT, file, join(d, NFC_E)), 'rc=0\n');
     });
-    test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on a tracked NFD name asked in NFC (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
+    if (g0Twin(file)) test(`G-T1f twin ${file}: the ${G0_SHA} root returns rc 1 on a tracked NFD name asked in NFC (red on old; ${FOLD_SKIP})`, { skip: skip || histSkip(g0Have) }, (t) => {
         const d = nfdRepo(`g1f3t-${file}`);
         if (!opens(join(d, NFD_E), join(d, NFC_E))) return t.skip(`G-T1f NFD twin: ${FOLD_SKIP}`);
         assert.equal(g1cRc(g0Old(), file, join(d, NFC_E)), 'rc=1\n');

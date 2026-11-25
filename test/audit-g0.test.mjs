@@ -7,9 +7,10 @@
 //   G-T2b ibd wrong driver count: the report stays 0 bytes (parity old / live)
 //   G-T2c die fragment: subshell guard, REPORT=/dev/null, REPORT unset, an unwritable report
 //   G-T3a allocation-diff, a backslash in the driver dir: head sha256/8 == node's slice (twin only where the host tool escapes)
-//   G-T4  five tools x {POSIXLY_CORRECT=1, POSIXLY_CORRECT=, SHELLOPTS=posix}: -h; one real allocation-diff --zero row
+//   G-T4  six tools x {POSIXLY_CORRECT=1, POSIXLY_CORRECT=, SHELLOPTS=posix}: -h; one real allocation-diff --zero row
 //         (ZERO, or the ruled guard NO-VERDICT "trace lost 1 GC line" with young 0,0: Q-B97-L2ROW (a), canned pin + HEAD parity)
-//         (the twin and the `set +o posix` mutant exist on bash major < 4 only)
+//         (the twin and the `set +o posix` mutant exist on bash major < 4 only; the twin covers the five 57b93d1 roots,
+//         shape-diff's twin is the 4dc6a53 prototype, whose -h usage goes to stderr: red on every bash, b105 G-X B1 TASK 4)
 //   G-T5  bytecode-budget / deopt-diff --driver import check: comments refused, real imports accepted, known limits pinned
 // Results: bash 3.2 macOS host only (CI legs bash 5 / uutils / other nodes are not claimed here).
 import { test, before, after, beforeEach } from 'node:test';
@@ -32,6 +33,7 @@ const OLD_SHA = '57b93d1';
 const CI_STRICT = process.env.CI === 'true';
 const histSkip = (have) => (have === true || CI_STRICT ? false : have);
 const IBD = 'inlining-budget-diff.sh', ALLOC = 'allocation-diff.sh', BB = 'bytecode-budget.sh', DD = 'deopt-diff.sh', IC = 'ic-diff.sh';
+const SD = 'shape-diff.sh';   // 1.2.0 (b105 G-X B1): in G-T4 only; FIVE stays the 57b93d1 root set
 const FIVE = [BB, DD, IC, ALLOC, IBD];
 
 // child env: no inherited steering of git / node / bash / editors; no global git config; V8 coverage undefined (a delete is not a strip)
@@ -253,8 +255,8 @@ test(`G-T3a twin: the ${OLD_SHA} root's head differs from node's slice (red on o
 
 // ================================================================= G-T4: inherited posix mode
 const TOOLS = readdirSync(join(ROOT, 'src')).filter((f) => f.endsWith('.sh')).sort();
-test('G-T4 the tools of src/*.sh are exactly the five roots', { skip }, () => {
-    assert.deepEqual(TOOLS, [ALLOC, BB, DD, IC, IBD].sort());
+test('G-T4 the tools of src/*.sh are exactly the six roots', { skip }, () => {
+    assert.deepEqual(TOOLS, [ALLOC, BB, DD, IC, IBD, SD].sort());
 });
 const T4ENV = [['POSIXLY_CORRECT=1', { POSIXLY_CORRECT: '1' }], ['POSIXLY_CORRECT= (empty)', { POSIXLY_CORRECT: '' }], ['SHELLOPTS=posix', { SHELLOPTS: 'posix' }]];
 function t4h(root, tool, env) {
@@ -275,11 +277,27 @@ for (const tool of TOOLS) for (const [name, env] of T4ENV) {
     });
 }
 test(`G-T4 twin: the ${OLD_SHA} roots exit 2 with "syntax error" on every -h under each posix env (red on old; bash < 4 only)`, { skip: skip || posixSkip || OLDSKIP }, () => {
-    for (const tool of TOOLS) for (const [name, env] of T4ENV) {
+    for (const tool of FIVE) for (const [name, env] of T4ENV) {
         const r = t4h(oldRoots(), tool, env);
         assert.equal(r.status, 2, `${tool} ${name}`);
         assert.match(r.stderr, /syntax error/, `${tool} ${name}: ${r.stderr.slice(0, 200)}`);
         assert.notEqual(t4hCheck(oldRoots(), tool, env), null, `${tool} ${name}: the G-T4 check must be red on old`);
+    }
+});
+// shape-diff's twin (Q-B103-SDTWIN (a)): the frozen prototype eb7c1b65 at 4dc6a53 prints its -h usage to stderr, stdout 0 bytes
+const SD_PROTO_SHA = '4dc6a53', SD_PROTO = 'research/shape-diff/shape-diff.prototype.sh';
+const haveProto = skip ? skip : (spawn('git', ['cat-file', '-e', `${SD_PROTO_SHA}^{commit}`], { cwd: ROOT }, 'git cat-file proto', 30000).status === 0
+    ? true : `commit ${SD_PROTO_SHA} not available (shallow clone?)`);
+test(`G-T4 twin: the ${SD_PROTO_SHA} shape-diff prototype -h fails the G-T4 check under each posix env (its usage goes to stderr; red on old)`, { skip: skip || histSkip(haveProto) }, () => {
+    if (haveProto !== true) assert.fail(`${haveProto} (CI=true: a history row fails, never skips)`);
+    const g = spawn('git', ['show', `${SD_PROTO_SHA}:${SD_PROTO}`], { cwd: ROOT, maxBuffer: 1 << 26 }, 'git show proto', 30000);
+    assert.equal(g.status, 0, `git show ${SD_PROTO_SHA}:${SD_PROTO} failed (CI_STRICT: an unreachable pin is a failure): ${g.stderr}`);
+    const d = mk('sdproto');
+    writeFileSync(join(d, SD), g.stdout);
+    for (const [name, env] of T4ENV) {
+        const why = t4hCheck(d, SD, env);
+        assert.notEqual(why, null, `prototype ${name}: the G-T4 check must be red on the prototype`);
+        assert.match(why, /^stdout starts "", want "shape-diff\.sh -- "$/, `prototype ${name}`);
     }
 });
 // the real row: allocation-diff --runs 2 --zero under POSIXLY_CORRECT=1 -> VERDICT ZERO, and the driver saw no POSIXLY_CORRECT

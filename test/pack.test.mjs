@@ -1,11 +1,11 @@
 // test/pack.test.mjs -- the publish shape of @zakkster/lite-utils (b76 Phase 6, PLAN-b76-p6.md ASSERTIONS A1-A6; rulings
 // Q-P6-BIN, Q-P6-REPO, Q-P6-PRIVATE, Q-P6-KEYWORDS (a)). Oracle: the plan's lists, not the package.json under test.
-//   A1 `npm pack --dry-run --json` in a private decoy copy lists exactly the 11 shipped paths (SPEC-alloc-per-op G3
+//   A1 `npm pack --dry-run --json` in a private decoy copy lists exactly the 12 shipped paths (SPEC-alloc-per-op G3
 //      TASK 6: the root alloc-per-op.mjs ships, src/ never does).
 //      Its json: npm <= 11 an array of one, npm 12 an object keyed by the package name (npm/cli PR 9247; Q-B78-PACK).
 //   A2 package.json fields (no "private", bin, repository / homepage / bugs, engines, license, author, keywords) and
 //      `npm pkg fix` leaves it byte-identical.
-//   A3 an offline tarball install gives six node_modules/.bin commands; each `-h` exits 2 and its stdout line 1 starts
+//   A3 an offline tarball install gives seven node_modules/.bin commands; each `-h` exits 2 and its stdout line 1 starts
 //      with its bin target and ` -- ` (e.g. `alloc-per-op.mjs -- `).
 //   A4 README.md, llms.txt, CHANGELOG.md: ASCII except U+00D7 / U+00B5, no tool-call tag substring.
 //   A5 README.md and llms.txt each hold the LEDGER #124 sentence verbatim, exactly once.
@@ -18,7 +18,8 @@
 // (history rows: SKIP locally when the commit is unreachable, FAIL under CI=true, law 9). A2 also plants a "./" bin path
 // that npm pkg fix rewrites. A4 / A5 / A6 run their checker on planted copies (U+2014, a tag, a doubled or missing
 // sentence, an include line, a source line) that must be flagged. A6b plants 8 defects (1 finding each) plus 2 clean
-// controls; A7 reads the 694800e ci.yml (no alloc-per-op step; a history row as above) and plants a `bash` interpreter
+// controls; A7 reads the 694800e ci.yml (no alloc-per-op and no shape-diff step) and the 37efd97 ci.yml (the 1.1.2
+// release: no shape-diff step; b105 G-X B1 TASK 2) as history rows like the above, and plants a `bash` interpreter
 // for the .mjs, a duplicated step, a renamed step, a removed step, a run line with no name line, a key after run:
 // and a job-level if:.
 // npm runs as `process.execPath <npm-cli.js>`, never through PATH; no npm-cli.js = SKIP locally, FAIL under CI=true.
@@ -27,7 +28,7 @@
 // editor steering keys, and points npm at a private cache, an empty userconfig and a dead registry (offline only); it sets
 // NODE_DISABLE_COMPILE_CACHE=1 and a private TMPDIR, so npm 11+ (lib/cli.js calls module.enableCompileCache()) leaves no
 // node-compile-cache dir in the shared os.tmpdir() (G-C TASK 7c; row "A1 compile cache").
-// pkgProblems pins files[] to the 10-entry FILES_FIELD (the 11 packed paths minus package.json, which npm always packs).
+// pkgProblems pins files[] to the 11-entry FILES_FIELD (the 12 packed paths minus package.json, which npm always packs).
 // Every temp dir is `pack-*` under os.tmpdir(), removed in after(). Every spawn goes through capSync (S5 census).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,23 +50,25 @@ const histSkip = (have) => (have === true || CI_STRICT ? false : have);
 const NPM_CAP = 90000;   // TASK 0e: pack 0.16-0.31 s, install 0.16 s wall (evidence/b76-p6); cap <= 120 s
 const H_CAP = 30000;     // TASK 0e: each -h 0.18-0.29 s wall
 
-const ROOTS = ['allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh'];
+const ROOTS = ['allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh', 'shape-diff.sh'];
 const MJS_ROOTS = ['alloc-per-op.mjs'];   // G3 TASK 6: the node roots build.sh copies verbatim from src/ (build.test MJS)
 const DOCS = ['README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
 const WANT_FILES = ['CHANGELOG.md', 'LICENSE', 'README.md', 'alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh',
-    'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh', 'llms.txt', 'package.json'];
+    'deopt-diff.sh', 'ic-diff.sh', 'inlining-budget-diff.sh', 'llms.txt', 'package.json', 'shape-diff.sh'];
 // package.json files[] exactly (G-C TASK 7a): WANT_FILES minus package.json, in the package.json order. A1 alone cannot
 // see an entry dropped from files[] when npm packs that file anyway: npm auto-includes every bin target (ic-diff.sh, ...)
 // and README.md (plus package.json and LICENSE), so A1 stays green on such a package.json; this pin is the gate for them.
 const FILES_FIELD = ['alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh',
-    'inlining-budget-diff.sh', 'README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
+    'inlining-budget-diff.sh', 'shape-diff.sh', 'README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
 const DECOYS = ['stray.sh', '.handoff/x', 'audit/x', 'src/x.sh', 'lib/x.sh', 'test/x.mjs', 'build.sh', 'LEDGER.md', 'ROADMAP.md',
     'src/alloc-per-op.mjs', 'stray.mjs', 'research/alloc-probe/x.mjs'];
 const WANT_BIN = {
     'alloc-per-op': 'alloc-per-op.mjs', 'allocation-diff': 'allocation-diff.sh', 'bytecode-budget': 'bytecode-budget.sh',
     'deopt-diff': 'deopt-diff.sh', 'ic-diff': 'ic-diff.sh', 'inlining-budget-diff': 'inlining-budget-diff.sh',
+    'shape-diff': 'shape-diff.sh',
 };
 const A7_SHA = '694800e';   // the last commit whose ci.yml has no alloc-per-op step (A7 history must-fail)
+const A7_SD_SHA = '37efd97';   // 1.1.2, the last release before shape-diff: its ci.yml has no shape-diff step (b105 G-X B1)
 const REPO = 'git+https://github.com/PeshoVurtoleta/lite-utils.git';
 const HOME = 'https://github.com/PeshoVurtoleta/lite-utils#readme';
 const BUGS = 'https://github.com/PeshoVurtoleta/lite-utils/issues';
@@ -336,7 +339,7 @@ for (const [label, json, re] of [
         assert.throws(() => packEntry(json(), PN, 'canned'), re);
     });
 }
-test('A1 npm pack --dry-run --json lists exactly the 11 shipped paths; no decoy, src/, lib/, test/, research/, build.sh, LEDGER, ROADMAP, audit/, .handoff/', { skip: NPMSKIP }, () => {
+test('A1 npm pack --dry-run --json lists exactly the 12 shipped paths; no decoy, src/, lib/, test/, research/, build.sh, LEDGER, ROADMAP, audit/, .handoff/', { skip: NPMSKIP }, () => {
     const files = dryRun(decoyCopy(LIVE_PKG()), 'A1 pack --dry-run');
     assert.deepEqual(files, WANT_FILES);
     for (const f of DECOYS) assert.ok(!files.includes(f), `decoy ${f} packed`);
@@ -394,7 +397,7 @@ test(`A2 RED (history): the ${OLD_SHA} package.json is flagged (private true, no
 });
 
 // ---- A3 ----
-test('A3 offline tarball install: node_modules/.bin/<name> -h exits 2 for all 6, stdout line 1 starts "<bin target> -- "', { skip: NPMSKIP }, () => {
+test('A3 offline tarball install: node_modules/.bin/<name> -h exits 2 for all 7, stdout line 1 starts "<bin target> -- "', { skip: NPMSKIP }, () => {
     const bin = installTgz(decoyCopy(LIVE_PKG()), 'A3');
     assert.deepEqual(readdirSync(bin).sort(), Object.keys(WANT_BIN).sort());
     const env = gitEnv();
@@ -499,7 +502,7 @@ test('A6b controls: 8 plants give exactly 1 finding each; import \'node:fs\' and
 
 // ---- A7 ----
 const WF = ['.github/workflows/ci.yml', '.github/workflows/nightly.yml'];
-test('A7 ci.yml and nightly.yml: exactly one self-test step per WANT_BIN target (6), named "<bin> --self-test", interpreter by extension', () => {
+test('A7 ci.yml and nightly.yml: exactly one self-test step per WANT_BIN target (7), named "<bin> --self-test", interpreter by extension', () => {
     for (const f of WF) {
         const y = readFileSync(join(ROOT, f), 'utf8');
         assert.deepEqual(selfTestProblems(f, y), []);
@@ -515,7 +518,7 @@ test('A7 controls: a planted `bash alloc-per-op.mjs`, a duplicated step, a renam
         ['duplicated step', y.replace(STEP, STEP + STEP), /alloc-per-op\.mjs: 2 self-test steps, want 1/],
         ['renamed step', y.replace(STEP, STEP.replace('name: alloc-per-op ', 'name: alloc ')), /step name "alloc --self-test", want "alloc-per-op --self-test"/],
         ['removed step', y.replace(STEP, ''), /alloc-per-op\.mjs: 0 self-test steps, want 1/],
-        ['no name line', y.replace(STEP, STEP + '        run: node alloc-per-op.mjs --self-test\n'), /7 self-test run lines, 6 with a "- name:" line right above/],
+        ['no name line', y.replace(STEP, STEP + '        run: node alloc-per-op.mjs --self-test\n'), /8 self-test run lines, 7 with a "- name:" line right above/],
         ['if: false after run', y.replace(STEP, STEP + '        if: false\n'), /:\d+ a self-test step has a key after run:/],
         ['job-level if', y.replace('    runs-on: ${{ matrix.os }}\n', '    runs-on: ${{ matrix.os }}\n    if: false\n'), /:\d+ a job-level if:/],
         ['comment then if: false after run', y.replace(STEP, STEP + '        # off for now\n        if: false\n'), /:\d+ a self-test step has a key after run:/],
@@ -528,8 +531,17 @@ test('A7 controls: a planted `bash alloc-per-op.mjs`, a duplicated step, a renam
 });
 const haveA7 = capSync('git', ['cat-file', '-e', `${A7_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git cat-file A7').status === 0
     ? true : `commit ${A7_SHA} not available (shallow clone?)`;
-test(`A7 RED (history): the ${A7_SHA} ci.yml has no alloc-per-op step and is flagged exactly once`, { skip: histSkip(haveA7) }, () => {
+test(`A7 RED (history): the ${A7_SHA} ci.yml has no alloc-per-op and no shape-diff step and is flagged for exactly those two`, { skip: histSkip(haveA7) }, () => {
     const g = capSync('git', ['show', `${A7_SHA}:${WF[0]}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git show A7');
     assert.equal(g.status, 0, `git show ${A7_SHA}:${WF[0]} failed (CI_STRICT: an unreachable pin is a failure): ${g.stderr}`);
-    assert.deepEqual(selfTestProblems(WF[0], g.stdout), [`${WF[0]}: alloc-per-op.mjs: 0 self-test steps, want 1`]);
+    assert.deepEqual(selfTestProblems(WF[0], g.stdout), [`${WF[0]}: alloc-per-op.mjs: 0 self-test steps, want 1`, `${WF[0]}: shape-diff.sh: 0 self-test steps, want 1`]);
+});
+const haveA7SD = capSync('git', ['cat-file', '-e', `${A7_SD_SHA}^{commit}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git cat-file A7 SD').status === 0
+    ? true : `commit ${A7_SD_SHA} not available (shallow clone?)`;
+test(`A7 RED (history): the ${A7_SD_SHA} ci.yml (1.1.2) has no shape-diff step and is flagged exactly once`, { skip: histSkip(haveA7SD) }, () => {
+    const g = capSync('git', ['show', `${A7_SD_SHA}:${WF[0]}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }, 30000, 'git show A7 SD');
+    assert.equal(g.status, 0, `git show ${A7_SD_SHA}:${WF[0]} failed (CI_STRICT: an unreachable pin is a failure): ${g.stderr}`);
+    const p = selfTestProblems(WF[0], g.stdout);
+    assert.equal(p.length, 1, p.join('\n'));
+    assert.match(p[0], /shape-diff\.sh: 0 self-test steps, want 1/);
 });

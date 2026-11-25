@@ -184,7 +184,7 @@ test('A5: 5 builds into one OUTDIR are byte-identical; aborts leave exactly 1 fi
             const cur = readFileSync(join(out, NAME));
             if (first === null) first = cur; else assert.ok(cur.equals(first), `build ${i} differs`);
         }
-        assert.deepEqual(readdirSync(out).sort(), [...GEN, ...MJS].sort());   // G3 A1: 5 .sh + 1 .mjs, 0 temps
+        assert.deepEqual(readdirSync(out).sort(), [...GEN, ...MJS].sort());   // G3 A1: 6 .sh + 1 .mjs, 0 temps
         for (const [label, mutate] of CASES) {
             const copy = repoCopy();
             mutate(copy);
@@ -466,12 +466,12 @@ test('N4: a failing chmod aborts with status 2 and "unexpected error"', { skip }
 
 // ---- MD-46 G1 TASK 7 / G4 TASK 7: the roster of src files that include lib/v8flags.sh ----
 // ORACLE: .handoff/PLAN-md46.md G1 TASK 7 (subset) as tightened by G4 TASK 7 (equality, after G5 B1 landed): the set
-// must EQUAL {deopt-diff, bytecode-budget, ic-diff, allocation-diff, inlining-budget-diff} (ibd joined under MD-54, U1
-// b55). Marker grammar: build.sh header (the WHOLE line). The controls prove the predicate has teeth both ways: a
-// fictitious x.sh holding the marker (an extra member) and an ic src copy with the marker removed (a missing member)
-// each fail it.
+// must EQUAL {deopt-diff, bytecode-budget, ic-diff, allocation-diff, inlining-budget-diff, shape-diff} (ibd joined under
+// MD-54, U1 b55; shape-diff under 1.2.0, b105 G-X B1 TASK 5). Marker grammar: build.sh header (the WHOLE line). The controls prove the predicate has teeth both ways: a
+// fictitious x.sh holding the marker (an extra member), and an ic or a shape-diff src copy with the marker removed (a
+// missing member) each fail it.
 const V8FL_MARKER = '# @include lib/v8flags.sh';
-const V8FL_ALLOWED = new Set(['deopt-diff', 'bytecode-budget', 'ic-diff', 'allocation-diff', 'inlining-budget-diff']);
+const V8FL_ALLOWED = new Set(['deopt-diff', 'bytecode-budget', 'ic-diff', 'allocation-diff', 'inlining-budget-diff', 'shape-diff']);
 function includesV8fl(text) { return text.split('\n').includes(V8FL_MARKER); }
 function v8flRoster(srcTexts) { // Map<file, text> -> sorted names (no .sh) of the files that include the fragment
     return [...srcTexts].filter(([, t]) => includesV8fl(t)).map(([f]) => f.replace(/\.sh$/, '')).sort();
@@ -486,14 +486,14 @@ function assertV8flRoster(m) {
     assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
     const set = v8flRoster(m);
     for (const n of set) assert.ok(V8FL_ALLOWED.has(n), `${n} may not include lib/v8flags.sh`);
-    assert.deepEqual(set, [...V8FL_ALLOWED].sort(), 'the lib/v8flags.sh roster must equal {dd, bb, ic, alloc, ibd}');
+    assert.deepEqual(set, [...V8FL_ALLOWED].sort(), 'the lib/v8flags.sh roster must equal {dd, bb, ic, alloc, ibd, sd}');
     assert.equal(v8flRosterOk(m), true);
 }
-test('G4 T7 roster: src files including lib/v8flags.sh are exactly {dd, bb, ic, alloc, ibd} (MD-54)', { skip }, () => {
+test('G4 T7 roster: src files including lib/v8flags.sh are exactly {dd, bb, ic, alloc, ibd, sd} (MD-54, 1.2.0)', { skip }, () => {
     assertV8flRoster(liveSrc());
 });
 
-test('G1 / G4 T7 controls: a fictitious x.sh with the marker, an ic src copy with it removed, each fail the roster row (must-fail controls)', { skip }, () => {
+test('G1 / G4 T7 controls: a fictitious x.sh with the marker, an ic and a shape-diff src copy with it removed, each fail the roster row (must-fail controls)', { skip }, () => {
     const m = liveSrc();
     m.set('x.sh', V8FL_MARKER + '\n');
     assert.equal(v8flRoster(m).includes('x'), true);
@@ -511,6 +511,15 @@ test('G1 / G4 T7 controls: a fictitious x.sh with the marker, an ic src copy wit
         assert.equal(v8flRoster(m4).includes('ic-diff'), false);
         assert.equal(v8flRosterOk(m4), false);
         assert.throws(() => assertV8flRoster(m4), assert.AssertionError);
+        // b105 G-X B1 TASK 5: the same for a shape-diff src copy (the 6th member; A4 must-fail)
+        const sd = m.get('shape-diff.sh');
+        assert.equal(sd.split('\n').filter((l) => l === V8FL_MARKER).length, 1, 'shape-diff src holds the marker line exactly once');
+        writeFileSync(join(d, 'shape-diff.sh'), sd.split('\n').filter((l) => l !== V8FL_MARKER).join('\n'));
+        const m5 = liveSrc();
+        m5.set('shape-diff.sh', readFileSync(join(d, 'shape-diff.sh'), 'utf8'));
+        assert.equal(v8flRoster(m5).includes('shape-diff'), false);
+        assert.equal(v8flRosterOk(m5), false);
+        assert.throws(() => assertV8flRoster(m5), assert.AssertionError);
     } finally { cleanup(); }
     // and an allowed tool does not fail it (the predicate is not a blanket refusal)
     const m2 = liveSrc();
@@ -528,14 +537,15 @@ test('G1 / G4 T7 controls: a fictitious x.sh with the marker, an ic src copy wit
 // ---- G-TRACKED (b45, plan .handoff/PLAN-b42-gtracked.md A4): the roster of src files that include lib/tracked.sh ----
 // ORACLE: A4, as amended by b50 G-SHL3 N1 (.handoff/PLAN-b50-shl3.md ASSERTION 3). The srcs that include
 // lib/tracked.sh
-// are exactly {dd, bb, ic, alloc, ibd}. Each of those five roots holds 2 `is_tracked()` definition lines
+// are exactly {dd, bb, ic, alloc, ibd, sd} (sd: 1.2.0, b105 G-X B1 TASK 5). Each of those six roots holds 2
+// `is_tracked()` definition lines
 // (common.sh's,
 // then the fragment's). The tracked.sh marker line comes AFTER the common.sh marker line (bash keeps the last
 // definition). Must-fail controls: ibd with the marker removed, ic with it removed, bb with it moved above
-// common.sh.
+// common.sh, and (b105) shape-diff with it removed.
 const TRK_MARKER = '# @include lib/tracked.sh';
 const COM_MARKER = '# @include lib/common.sh';
-const TRK_ALLOWED = ['allocation-diff', 'bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff'];
+const TRK_ALLOWED = ['allocation-diff', 'bytecode-budget', 'deopt-diff', 'ic-diff', 'inlining-budget-diff', 'shape-diff'];
 const TRK_FILES = TRK_ALLOWED.map((n) => n + '.sh');
 const trkLines = (t) => t.split('\n');
 function trkRoster(m) { return [...m].filter(([, t]) => trkLines(t).includes(TRK_MARKER)).map(([f]) => f.replace(/\.sh$/, '')).sort(); }
@@ -551,16 +561,16 @@ function trkOrderProblems(m) { // names whose tracked.sh marker is not strictly 
 }
 function assertTrkRoster(m) {
     assert.ok(m.has(NAME), 'ibd src must be in the roster read from src/');
-    assert.deepEqual(trkRoster(m), TRK_ALLOWED, 'the lib/tracked.sh roster must equal {dd, bb, ic, alloc, ibd}');
+    assert.deepEqual(trkRoster(m), TRK_ALLOWED, 'the lib/tracked.sh roster must equal {dd, bb, ic, alloc, ibd, sd}');
     assert.deepEqual(trkOrderProblems(m), [], 'the lib/tracked.sh marker must come after the lib/common.sh marker');
 }
 const defLines = (t) => t.split('\n').filter((l) => /^is_tracked\(\)/.test(l)).length;
 
-test('G-TRACKED A4 roster: src files including lib/tracked.sh are exactly {dd, bb, ic, alloc, ibd}', { skip },
+test('G-TRACKED A4 roster: src files including lib/tracked.sh are exactly {dd, bb, ic, alloc, ibd, sd}', { skip },
     () => {
     assertTrkRoster(liveSrc());
 });
-test('G-TRACKED A4 order: in each of the five srcs the lib/tracked.sh marker is after the lib/common.sh marker',
+test('G-TRACKED A4 order: in each of the six srcs the lib/tracked.sh marker is after the lib/common.sh marker',
     { skip }, () => {
     const m = liveSrc();
     for (const f of TRK_FILES) {
@@ -568,11 +578,11 @@ test('G-TRACKED A4 order: in each of the five srcs the lib/tracked.sh marker is 
         assert.ok(L.indexOf(COM_MARKER) >= 0 && L.indexOf(TRK_MARKER) > L.indexOf(COM_MARKER), `${f}: tracked.sh marker (${L.indexOf(TRK_MARKER)}) must follow common.sh (${L.indexOf(COM_MARKER)})`);
     }
 });
-test('G-TRACKED A4 roots: each of the five built roots has 2 is_tracked() lines', { skip }, () => {
+test('G-TRACKED A4 roots: each of the six built roots has 2 is_tracked() lines', { skip }, () => {
     for (const f of TRK_FILES) assert.equal(defLines(readFileSync(join(ROOT, f), 'utf8')), 2, f);
 });
 test('G-TRACKED A4 controls: ibd with the marker removed, ic with it removed, bb with it moved above ' +
-    'common.sh each fail (must-fail controls)', { skip }, () => {
+    'common.sh, sd with it removed each fail (must-fail controls)', { skip }, () => {
     const m = liveSrc();
     assert.equal(trkLines(m.get(NAME)).filter((l) => l === TRK_MARKER).length, 1,
         'ibd src holds the marker exactly once');
@@ -590,5 +600,10 @@ test('G-TRACKED A4 controls: ibd with the marker removed, ic with it removed, bb
     m3.set('bytecode-budget.sh', L.join('\n'));
     assert.deepEqual(trkOrderProblems(m3), ['bytecode-budget.sh']);
     assert.throws(() => assertTrkRoster(m3), assert.AssertionError);
+    const m4 = liveSrc();
+    assert.equal(trkLines(m4.get('shape-diff.sh')).filter((l) => l === TRK_MARKER).length, 1, 'shape-diff src holds the marker exactly once');
+    m4.set('shape-diff.sh', trkLines(m4.get('shape-diff.sh')).filter((l) => l !== TRK_MARKER).join('\n'));
+    assert.equal(trkRoster(m4).includes('shape-diff'), false);
+    assert.throws(() => assertTrkRoster(m4), assert.AssertionError);
     assertTrkRoster(liveSrc());                                      // the live tree is not a blanket failure
 });
