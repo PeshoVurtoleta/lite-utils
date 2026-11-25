@@ -1,0 +1,8 @@
+--version
+--v8-options
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/before/run.log ./driver.mjs
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/after/run.log ./driver.mjs
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/before/run.log ./driver.mjs
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/after/run.log ./driver.mjs
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/before/run.log ./driver.mjs
+--log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=@T@/out/tr1-tr2-inc/raw/after/run.log ./driver.mjs

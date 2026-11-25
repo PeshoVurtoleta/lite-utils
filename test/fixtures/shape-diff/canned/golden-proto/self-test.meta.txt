@@ -1,0 +1,1 @@
+rc=0 ok=15 fail=0 node_spawns=0 mktemp=1 tmpdir_left=0

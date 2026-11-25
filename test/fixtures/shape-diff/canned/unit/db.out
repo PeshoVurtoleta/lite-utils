@@ -1,0 +1,4 @@
+[generalizing]k:v{None;const}->:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+5 at file:///w/s.mjs:3]
+[generalizing]plain:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+5 at file:///w/s.mjs:3]
+[generalizing]w:v{None;const}->s{Any;const} (uninitialized field) [~mk+5 at file:///w/s.mjs:3]
+[generalizing]weird payload [~mk+5 at file:///w/s.mjs:3]

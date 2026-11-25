@@ -1,0 +1,10 @@
+frozen proto.sh  sha256 eb7c1b65ff99eef69e45d167a25e9d84157ef4ba2fc154515cb32f1f75e67e1b  (git show 37efd97:research/shape-diff/shape-diff.prototype.sh)
+RANGE MAP_AWK program 220-415 (delimiters 219 / 416)  sha256/8 a4105180
+RANGE SHAPE_STDOUT_AWK program 425-584 (delimiters 424 / 585)  sha256/8 5d498e45
+RANGE H heredoc body 817-825 (delimiters 816 / 826) -> unit/H.log
+RANGE OUT1 heredoc body 865-873 (delimiters 864 / 874) -> unit/OUT1.out
+RANGE L1 literal 830-830 -> unit/L1.log
+RANGE L2 literal 835-839 -> unit/L2.log
+RANGE L3 literal 845-848 -> unit/L3.log
+RANGE L4 literal 849-852 -> unit/L4.log
+RANGE OUT2 literal 881-881 -> unit/OUT2.out

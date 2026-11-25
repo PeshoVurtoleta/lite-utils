@@ -1,0 +1,3 @@
+[generalizing]_maxListeners:h{Any;const}->t{Any;mutable} (field type generalization) [~setMaxListeners+20 at node:events:330]
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~helper+9 at node:internal/util:50 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>
+[generalizing]p:s{Any;const}->d{Any;const} (field type generalization) [~vmFn+3 at evalmachine.<anonymous>:2]

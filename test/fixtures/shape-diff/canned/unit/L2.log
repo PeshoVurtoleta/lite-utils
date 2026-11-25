@@ -1,0 +1,14 @@
+v8-version,14,6,202,34,-node.28,0
+v8-platform,macos,macos
+code-creation,Builtin,3,100,0x100000000,512,ReflectDeleteProperty
+code-creation,JS,10,200,0x200000000,64,clean file:///w/d.mjs:1:1,0x300000001,~
+code-creation,JS,10,210,0x200000500,64,uncalled file:///w/d.mjs:5:1,0x300000005,~
+code-creation,JS,11,215,0x200000600,88,uncalled file:///w/d.mjs:5:1,0x300000005,^
+code-creation,JS,13,300,0x200001000,256,optDel file:///w/d.mjs:10:1,0x300000002,*
+code-creation,JS,10,400,0x200002000,64,dictArr file:///w/d.mjs:20:1,0x300000003,~
+code-creation,JS,10,450,0x200003000,64,helperDel file:///w/d.mjs:30:1,0x300000004,~
+map,Normalize,310,0x201,0x202,0x200001040,12,3,DeletingProperty,
+map,NormalizeCached,320,0x201,0x202,0x200001040,12,3,DeletingProperty,
+map,NormalizeCached,330,0x201,0x202,0x100000040,0,-1,DeletingProperty,
+map,Normalize,340,0x201,0x202,0x000000000000,-1,-1,DeletingProperty,
+map,Normalize,350,0x201,0x202,0x200003010,30,10,DeletingProperty,

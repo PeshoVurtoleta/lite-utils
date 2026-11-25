@@ -1,0 +1,7 @@
+v8-version,14,6,202,34,-node.28,0
+v8-platform,macos,macos
+code-creation,JS,10,200,0x200000100,64,mk file:///w/da/driver.mjs:2:1,0x300000001,~
+code-creation,JS,13,300,0x200001000,256,mk file:///w/da/driver.mjs:2:1,0x300000001,*
+map-details,305,0x101,type: JS_OBJECT_TYPE\n - elements kind: HOLEY_ELEMENTS\n
+map-details,306,0x102,type: JS_OBJECT_TYPE\n - elements kind: HOLEY_ELEMENTS\n
+map,Transition,310,0x101,0x102,0x200001010,2,20,,x

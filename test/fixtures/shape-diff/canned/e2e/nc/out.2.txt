@@ -1,0 +1,4 @@
+[generalizing]x:d{Any;const}->d{Any;mutable} (uninitialized field) [~mk+7 at file:///w/nc/driver.mjs:2]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+7 at file:///w/nc/driver.mjs:2]
+[generalizing]y:s{Any;const}->d{Any;const} (field type generalization) [~mk+12 at file:///w/nc/driver.mjs:2]
+done

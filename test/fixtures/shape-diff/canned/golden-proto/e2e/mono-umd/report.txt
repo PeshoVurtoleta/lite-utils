@@ -1,0 +1,13 @@
+shape-diff (prototype)  node v26.8.2  @T@/fk/node  (NODE_OPTIONS, NODE_V8_COVERAGE, NODE_COMPILE_CACHE, NODE_REDIRECT_WARNINGS stripped)
+mode    diff  runs 3  v8 flags --log-maps --trace-elements-transitions --trace-generalization --no-sparkplug --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot
+out     @T@/out/mono-umd
+before  @T@/e2e/mono/driver.mjs
+after   @T@/e2e/umd/driver.mjs
+
+  mk: NO-VERDICT -- attributed sites identical (before 1 | after 1), but unattributed/external shape instability differs:
+      before=0 after=1  UNATTR  MAP_NORMALIZE  Builtin:ReflectDeleteProperty  DeletingProperty
+    REPORTED normal-transitions: before=1 after=1  boilerplate-noop-inits: before=0 after=0
+
+NOTE: a single cold call to Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27 (200 calls emit unattributed push+0); see RESEARCH.md.
+
+VERDICT NO-VERDICT

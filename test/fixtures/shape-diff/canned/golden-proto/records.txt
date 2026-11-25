@@ -1,0 +1,13 @@
+unit/H.log MAP fns=clean,uncalled,optDel,dictArr,helperDel inc=0 rc=0 | K clean;K uncalled;K optDel;R optDel;K dictArr;K helperDel;
+unit/L1.log MAP fns=clean,uncalled inc=0 rc=0 | K clean;R clean;T clean|1;K uncalled;
+unit/L1.log MAP fns=clean,uncalled inc=1 rc=0 | K clean;R clean;T clean|1;K uncalled;M clean|MAP_TRANSITION|d.mjs:2:5|x|1;
+unit/L2.log MAP fns=optDel inc=0 rc=0 | K optDel;R optDel;M optDel|MAP_NORMALIZE|d.mjs:12:3|DeletingProperty|2;UM MAP_NORMALIZE|Builtin:ReflectDeleteProperty|DeletingProperty;UM MAP_NORMALIZE|NONE|DeletingProperty;UM MAP_NORMALIZE|user:helperDel|DeletingProperty;
+unit/L3.log MAP fns=dictArr inc=0 rc=0 | K dictArr;R dictArr;M dictArr|MAP_ELEM_DICT|d.mjs:22:7|HOLEY_ELEMENTS -> DICTIONARY_ELEMENTS|1;
+unit/L4.log MAP fns=dictArr inc=0 rc=0 | K dictArr;R dictArr;T dictArr|1;
+unit/d5.log MAP fns=dictArr,helperDel inc=0 rc=0 | K dictArr;R dictArr;T dictArr|2;K helperDel;R helperDel;T helperDel|1;
+unit/pc47.log MAP fns=a47,b47 inc=0 rc=0 | K a47;R a47;K b47;R b47;M a47|MAP_DEPRECATE|p.mjs:2:3|x|1;M b47|MAP_DEPRECATE|p.mjs:6:3|y|1;
+unit/OUT1.out SHAPE fns=makeLit,fieldGen,Holder inc=- rc=0 | I makeLit|2;E fieldGen|GEN|s.mjs:9|x:d{Any;const}->d{Any;mutable}|2;E Holder|GEN|s.mjs:18|child:h{Class(0xADDR);const}->h{Any;const}|1;E fieldGen|GEN|s.mjs:10|{symbol 0xADDR}:h{Any;const}->h{Any;mutable}|1;UE ELEM|splice|PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS;UE ELEM|user:otherElem|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS;
+unit/OUT2.out SHAPE fns=Point inc=- rc=0 | X malformed generalizing line (no trailing ]) at out line 1;
+unit/da.out SHAPE fns=mk,setMaxListeners inc=- rc=0 | 
+unit/db.out SHAPE fns=mk inc=- rc=0 | I mk|2;E mk|GEN|s.mjs:3|plain:d{Any;const}->d{Any;mutable}|1;E mk|GEN|s.mjs:3|weird payload|1;
+unit/m3b.out SHAPE fns=mk inc=- rc=0 | UE GEN|user:helperGen|y:s{Any;const}->d{Any;const};

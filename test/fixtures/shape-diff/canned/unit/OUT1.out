@@ -1,0 +1,9 @@
+[generalizing]a:v{None;const}->s{Any;const} (uninitialized field) [~makeLit+18 at file:///w/s.mjs:4]
+[generalizing]a:v{None;const}->s{Any;const} (field type generalization) [~makeLit+18 at file:///w/s.mjs:4]
+[generalizing]a:s{Any;const}->s{Any;const} (uninitialized field) [~makeLit+11 at file:///w/s.mjs:4]
+[generalizing]x:d{Any;const}->d{Any;mutable} (uninitialized field) [~fieldGen+7 at file:///w/s.mjs:9]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~fieldGen+7 at file:///w/s.mjs:9]
+[generalizing]child:h{Class(0x20f29521bc09);const}->h{Any;const} (field type generalization) [new ~Holder+2 at file:///w/s.mjs:18]
+[generalizing]{symbol 0x3c473b527679}:h{Any;const}->h{Any;mutable} (field type generalization) [~fieldGen+15 at file:///w/s.mjs:10]
+elements transition [PACKED_DOUBLE_ELEMENTS -> PACKED_ELEMENTS] in splice+1700 at <unknown>:<unknown> for 0x1111 <JSArray[4]> from 0x2222 <FixedDoubleArray[22]> to 0x3333 <FixedArray[22]>
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~otherElem+9 at file:///w/s.mjs:50 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>

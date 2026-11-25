@@ -1,0 +1,1 @@
+pair tr1/tr2 opts=[] rc=0 node_spawns=8 mktemp=1 tmpdir_left=0 stdout_eq_report=yes

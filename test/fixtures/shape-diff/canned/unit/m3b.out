@@ -1,0 +1,2 @@
+[generalizing]y:s{Any;const}->d{Any;const} (field type generalization) [~helperGen+4 at file:///w/s.mjs:40]
+[generalizing]z:s{Any;const}->s{Any;const} (uninitialized field) [~helperGen+4 at file:///w/s.mjs:41]

@@ -1,0 +1,6 @@
+v8-version,14,6,202,34,-node.28,0
+v8-platform,linux,linux
+code-creation,JS,13,100,0x7ff000000000,16,a47 file:///w/p.mjs:1:1,0x7ff100000001,*
+code-creation,JS,13,110,0x7ff000000010,16,b47 file:///w/p.mjs:5:1,0x7ff100000002,*
+map,Deprecate,200,0x801,0x802,0x7ff000000008,2,3,,x
+map,Deprecate,210,0x803,0x804,0x7ff000000018,6,3,,y

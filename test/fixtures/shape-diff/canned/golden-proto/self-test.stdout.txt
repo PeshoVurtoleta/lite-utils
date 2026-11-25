@@ -1,0 +1,17 @@
+ok MAP_AWK: clean mono fn -> K+R+T; compiled-but-uncalled (~ and ^) -> K only (no R)
+ok MAP_AWK (N1 + N5 NONE-owner): Builtin:ReflectDeleteProperty + NONE + user:helperDel all -> UM
+ok MAP_AWK: HOLEY->DICTIONARY_ELEMENTS -> MAP_ELEM_DICT; benign Symbol() -> normal T
+ok SHAPE_STDOUT_AWK (N4+D6+N1): v{None} & Node22/24 s->s -> I; dual pair folded (hits=2); splice+1700 & user:otherElem -> UE
+ok SHAPE_STDOUT_AWK: malformed generalizing line -> X
+ok guard: clean fn with R in runs 1..2 -> OK
+ok D12 guard: run 1 R, run 2 K-only -> NO-VERDICT
+ok N5 diff_fn: clean vs clean (empty UNATTR_DIFF) -> SAME
+ok N5 headline fix: attributed SAME + UM Builtin:ReflectDeleteProperty delta -> NO-VERDICT
+ok N5 UE nullctl: run 1 != run 2 UE -> flagged
+ok D8 v8fl_ok allowlist: valid flags accepted; node opts, unknown, string, log refused
+ok N6: --fn 'mk,' trailing comma refused exit 2
+ok D11: --fn= empty refused exit 2
+ok D11: --fn=mk and --runs=99 parsed cleanly via need()
+ok D9: newline in DRIVER path refused exit 2 with 0 forged lines
+
+self-test: 15 check(s) ok
