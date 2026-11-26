@@ -567,6 +567,14 @@ o_ms() { # combined_recs fn (the SET of fn / kind / detail keys with optimized-f
   ' | multiset
 }
 
+i_ms() { # combined_recs fn (the SET of fn / kind / detail keys with >= 1 interpreted hit: an E site whose loc is not the
+  # "<file>:opt" fold site of an optimized-only key -- a real loc is loc_base "<base>:<digits>", never ":opt")
+  printf '%s\n' "$1" | awk -v fn="$2" '
+    BEGIN { FS = "\t"; pe = "E " fn "\t" }
+    substr($0, 1, length(pe)) == pe && $3 !~ /:opt$/ && !seen[$2, $4]++ { printf "*\t%s  %s  %s  interpreted\n", fn, $2, $4 }
+  ' | multiset
+}
+
 v_ms() { # combined_recs fn (cross-side diff: strips loc, 0 raw TABs in display key)
   printf '%s\n' "$1" | awk -v fn="$2" '
     BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t" }
@@ -699,7 +707,7 @@ compute_unattr_diff() { # msdir (reads REB[], REA[]; sets UNATTR_DIFF)
 # diff_fn FN MSDIR: judges both sides, compares V multisets, enforces unattributed-delta guard
 # on SAME (sets FV and folds into VERDICT). Extracted so --self-test tests it directly (N5 fix!).
 diff_fn() {
-  local fn="$1" msdir="$2" VB VA WB WA NB NA MSB MSA MB MA l OSB="" OSA=""
+  local fn="$1" msdir="$2" VB VA WB WA NB NA MSB MSA MB MA l OSB="" OSA="" ISB="" ISA=""
   JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge_side "$fn" "$msdir" before; VB=$JV; WB=$JWHY
   JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge_side "$fn" "$msdir" after;  VA=$JV; WA=$JWHY
   if [[ "$VB" == NO-VERDICT || "$VA" == NO-VERDICT ]]; then
@@ -711,10 +719,15 @@ diff_fn() {
     MSB=$(v_ms "${REB[0]}" "$fn"); MSA=$(v_ms "${REA[0]}" "$fn")
     # C-23 tier-up guard, ONLY on a would-be SAME (interpreted multisets equal), before the unattributed guard
     [[ "$MSB" != "$MSA" ]] || { OSB=$(o_ms "${REB[0]}" "$fn"); OSA=$(o_ms "${REA[0]}" "$fn"); }
+    [[ "$MSB" != "$MSA" ]] || { ISB=$(i_ms "${REB[0]}" "$fn"); ISA=$(i_ms "${REA[0]}" "$fn"); }   # Q-B111-FOLDSAME
     if [[ "$MSB" == "$MSA" && "$OSB" != "$OSA" ]]; then
       FV=NO-VERDICT
       say "  $fn: NO-VERDICT -- tier-up differs (optimized-frame key set):"
       while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$OSB") <(printf '%s\n' "$OSA") | sort -k3)
+    elif [[ "$MSB" == "$MSA" && "$ISB" != "$ISA" ]]; then
+      FV=NO-VERDICT
+      say "  $fn: NO-VERDICT -- tier-up differs (interpreted key set):"
+      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$ISB") <(printf '%s\n' "$ISA") | sort -k3)
     elif [[ "$MSB" == "$MSA" ]]; then
       if [[ -n "$UNATTR_DIFF" ]]; then
         FV=NO-VERDICT
@@ -1283,6 +1296,132 @@ SD_CAP27_OUT
   # Test 44
   check "real capture node 27 (v27.0.0-alpha.0.1.0): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME" \
     "$(st_cap 27 v27.0.0-alpha.0.1.0)" "$CAPM#$CAPS#1|6|1|1|1|1|1"
+
+  # --- Tests 45-54: the 1.2.0 audit engine fixes (SPEC-1.2.0 C-21..C-27, PLAN-FIX-E task 4; row 54 = Q-B111-FOLDSAME).
+  # Canned records only (0 spawns of node). st_sr: raw SHAPE records (TABs kept) of a stdout trace, target mk; st_df: one
+  # diff_fn mk on BEFORE / AFTER records (2 equal runs a side, rc 0, no log error) -> "VERDICT#its report lines;" ---
+  local R45 G46A G46B G46C RC47 L48 REC48 F49 REC49 G51 g51="" E51 L52 OB OA OI OO EB EA S54 P54 j48a j48b j49 tb=$'\t'
+  st_sr() { printf '%s\n' "$1" | awk -v fns=mk "$SHAPE_STDOUT_AWK"; }
+  st_df() { # BEFORE_RECS AFTER_RECS
+    RCB=(0 0); RCA=(0 0); LGB=("" ""); LGA=("" ""); REB=("$1" "$1"); REA=("$2" "$2")
+    compute_unattr_diff "$msdir"
+    VERDICT=SAME; diff_fn mk "$msdir" >"$ST_D/df.out"
+    printf '%s#%s' "$VERDICT" "$(tr '\n' ';' <"$ST_D/df.out")"
+  }
+
+  # Test 45: M1 (C-21): a ReplaceDescriptors map line owned by no target is UM MAP_REPLACE for every reason (MapCreate,
+  # another reason, none), never dropped
+  R45="$H"$'\n''map,ReplaceDescriptors,500,0x601,0x602,0x000000000000,-1,-1,MapCreate,'
+  R45="$R45"$'\n''map,ReplaceDescriptors,510,0x603,0x604,0x200003010,30,10,CopyAsPrototype,'
+  R45="$R45"$'\n''map,ReplaceDescriptors,520,0x605,0x606,0x100000040,0,-1,,'
+  check "M1 (C-21) MAP_AWK: a non-target MAP_REPLACE line (MapCreate, another reason, none) -> UM MAP_REPLACE, never dropped" \
+    "$(mrec optDel "$R45")" \
+    "K optDel;R optDel;UM MAP_REPLACE|NONE|MapCreate;UM MAP_REPLACE|user:helperDel|CopyAsPrototype;UM MAP_REPLACE|Builtin:ReflectDeleteProperty|-;"
+
+  # Test 46: M2a (C-22): ` (+N maps)` makes a FROM == TO generalization a real change (target E, non-target UE GEN); the
+  # v{None;...} rule is decided first, so a v{None} init with ` (+N maps)` stays a no-op (I)
+  G46A='[generalizing]x:s{Any;const}->s{Any;const} (+1 maps) [~mk+5 at file:///w/s.mjs:3]'
+  G46B='[generalizing]y:d{Any;const}->d{Any;const} (+2 maps) [~helperGen+4 at file:///w/s.mjs:40]'
+  G46C='[generalizing]w:v{None;const}->s{Any;const} (+3 maps) [~mk+5 at file:///w/s.mjs:3]'
+  check "M2a (C-22) SHAPE_STDOUT_AWK: a FROM == TO generalization with (+N maps) is not a no-op (target -> E, non-target -> UE GEN); v{None;...} with (+N maps) stays a no-op (I)" \
+    "$(srec mk "$G46A")#$(srec mk "$G46B")#$(srec mk "$G46C")" \
+    "E mk|GEN|s.mjs:3|x:s{Any;const}->s{Any;const} (+1 maps)|1;#UE GEN|user:helperGen|y:d{Any;const}->d{Any;const} (+2 maps);#I mk|1;"
+
+  # Test 47: M2b (C-22): [reconfiguring] lines: a target frame is an E RECONF verdict record (its optimized hit folds in);
+  # non-target user / node: / runtime (empty bracket) / <unknown> -> UE RECONF; no trailing ], no frame bracket, a bad
+  # payload -> X
+  IFS= read -r -d '' RC47 <<'EOF' || true
+[reconfiguring]x: kData, attrs: [WEC] [~mk+5 at file:///w/s.mjs:3]
+[reconfiguring]x: kData, attrs: [WEC] [*mk+0 at file:///w/s.mjs:1]
+[reconfiguring]y: ACCESSORS, attrs: [] [~helper+2 at file:///w/s.mjs:9]
+[reconfiguring]v: kData, attrs: [WEC] [~setup+3 at node:internal/x:12]
+[reconfiguring]z: kData, attrs: [W_C] []
+[reconfiguring]u: kData, attrs: [WEC] [~mk+5 at <unknown>:<unknown>]
+EOF
+  RC47=${RC47%$'\n'}
+  check "M2b (C-22) SHAPE_STDOUT_AWK: a target [reconfiguring] frame -> E RECONF (its optimized hit folds; {symbol 0x<hex>} -> {symbol 0xADDR}); non-target / node: / runtime / <unknown> -> UE RECONF; no trailing ], no frame bracket, a bad payload, a loc with no :N, a TAB -> X" \
+    "$(srec mk "$RC47")#$(srec mk '[reconfiguring]x: kData, attrs: [WEC] [~mk+5 at file:///w/s.mjs:3')#$(srec mk '[reconfiguring]x: kData, attrs: [WEC]')#$(srec mk '[reconfiguring]x: kFoo, attrs: [WEC] [~mk+5 at file:///w/s.mjs:3]')#$(srec mk '[reconfiguring]{symbol 0x1a2b}: kData, attrs: [WEC] [~mk+5 at file:///w/s.mjs:3]')#$(srec mk '[reconfiguring]x: kData, attrs: [WEC] [~mk+5 at file:///w/s.mjs]')#$(srec mk $'[reconfiguring]x\t: kData, attrs: [WEC] [~mk+5 at file:///w/s.mjs:3]')" \
+    "E mk|RECONF|s.mjs:3|x: kData, attrs: [WEC]|2;O mk|RECONF|x: kData, attrs: [WEC];UE RECONF|user:helper|y: ACCESSORS, attrs: [];UE RECONF|node:setup|v: kData, attrs: [WEC];UE RECONF|<runtime>|z: kData, attrs: [W_C];UE RECONF|mk|u: kData, attrs: [WEC];#X malformed reconfiguring line (no trailing ]) at out line 1;#X malformed reconfiguring line (missing frame bracket) at out line 1;#X malformed reconfiguring line (payload) at out line 1;#E mk|RECONF|s.mjs:3|{symbol 0xADDR}: kData, attrs: [WEC]|1;#X malformed reconfiguring loc at out line 1;#X reconfiguring line contains TAB at out line 1;"
+
+  # Test 48: M3 (C-27): target mk compiled at two locations (d.mjs:5:1, e.mjs:9:1) -> A mk; the judge refuses it, and reads
+  # A before N in the same run (the Transition has no map-details line); without the A record the N refusal shows
+  L48='v8-version,14,6,202,34,-node.28,0'$'\n''code-creation,JS,10,200,0x200000000,64,mk file:///w/d.mjs:5:1,0x300000001,~'
+  L48="$L48"$'\n''code-creation,JS,13,300,0x200001000,256,mk file:///w/e.mjs:9:1,0x300000002,*'
+  L48="$L48"$'\n''map,Transition,310,0x701,0x702,0x200000010,5,3,,x'
+  REC48=$(printf '%s\n' "$L48" | awk -v fns=mk -v inc_trans=0 "$MAP_AWK")
+  JRC=(0 0); JLOG=("" ""); JREC=("$REC48" "$REC48")
+  judge_side mk "$msdir" g_m3; j48a="$JV:$JWHY"
+  JREC=("${REC48//${nl}A mk/}" "${REC48//${nl}A mk/}")
+  judge_side mk "$msdir" g_m3n; j48b="$JV:$JWHY"
+  check "M3 (C-27) MAP_AWK + judge_side: a target fn defined at >1 location -> A; NO-VERDICT 'ambiguous target function', A judged before N" \
+    "$(mrec mk "$L48")#$j48a#$j48b" \
+    "K mk;R mk;T mk|1;N mk;A mk;#NO-VERDICT:ambiguous target function 'mk' defined at >1 location in run 1#NO-VERDICT:elements kind unknown for a Transition in 'mk' (no map-details line) in run 1"
+
+  # Test 49: M4 fold + O (C-23): optimized-frame hits (markers + / *, with o / ' / new) fold into the FIRST interpreted
+  # site of the same fn / kind / detail (s.mjs:9, not s.mjs:11); a key with none is ONE <file>:opt site; one O line per
+  # key. s_ms carries the O lines: a run whose O set differs trips the null control
+  IFS= read -r -d '' F49 <<'EOF' || true
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [*mk+0 at file:///w/s.mjs:1]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+7 at file:///w/s.mjs:9]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [o*'mk+0 at file:///w/s.mjs:1]
+[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+9 at file:///w/s.mjs:11]
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in +mk+0 at file:///w/s.mjs:1 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>
+elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in o+'mk+0 at file:///w/s.mjs:1 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>
+[generalizing]y:s{Any;const}->d{Any;const} (field type generalization) [new *mk+0 at file:///w/s.mjs:1]
+EOF
+  F49=${F49%$'\n'}
+  REC49=$(st_sr "$F49")
+  JRC=(0 0); JLOG=("" ""); JREC=("$REC49" "${REC49//${nl}O mk${tb}ELEM${tb}PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS/}")
+  judge_side mk "$msdir" g_m4; j49="$JV:$JWHY"
+  check "M4 fold + O (C-23) SHAPE_STDOUT_AWK: optimized-frame hits (+ / * with o / ') fold into the first interpreted site, else one <file>:opt site; one O per key; s_ms carries O (a per-run O-set change trips the null control)" \
+    "$(srec mk "$F49")#$j49" \
+    "E mk|GEN|s.mjs:9|x:d{Any;const}->d{Any;mutable}|3;E mk|GEN|s.mjs:11|x:d{Any;const}->d{Any;mutable}|1;E mk|ELEM|s.mjs:opt|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS|2;E mk|GEN|s.mjs:opt|y:s{Any;const}->d{Any;const}|1;O mk|GEN|x:d{Any;const}->d{Any;mutable};O mk|ELEM|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS;O mk|GEN|y:s{Any;const}->d{Any;const};#NO-VERDICT:null control: run 2 differs from run 1 (1 record(s) differ, first: run 1 x1 | run 2 x0  ELEM  optimized-frame  PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS)"
+
+  # Test 50: M4 tier-up (C-23): BEFORE 2 interpreted hits at s.mjs:9, AFTER 1 interpreted + 1 optimized (folded, + O):
+  # equal interpreted multisets, different optimized-frame key sets -> NO-VERDICT; adding a real y site to AFTER -> DIFF
+  OI='[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+7 at file:///w/s.mjs:9]'
+  OO='[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [*mk+0 at file:///w/s.mjs:1]'
+  OB=$(st_sr "$OI$nl$OI"); OA=$(st_sr "$OI$nl$OO")
+  EA=$(st_sr "$OI$nl$OO$nl"'[generalizing]y:s{Any;const}->d{Any;const} (field type generalization) [~mk+12 at file:///w/s.mjs:12]')
+  check "M4 tier-up (C-23) diff_fn: equal interpreted multisets, different optimized-frame key sets -> NO-VERDICT 'tier-up differs (optimized-frame key set)'; a real DIFF stays DIFF" \
+    "$(st_df "$OB" "$OA")@$(st_df "$OB" "$EA")" \
+    "NO-VERDICT#  mk: NO-VERDICT -- tier-up differs (optimized-frame key set):;  before=0 after=1  mk  GEN  x:d{Any;const}->d{Any;mutable}  optimized-frame;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;@DIFF#  mk: DIFF -- shape-instability multiset differs (before 1 | after 2 site(s));  before=0 after=1  mk  GEN  y:s{Any;const}->d{Any;const};    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;"
+
+  # Test 51: M7 matrix (C-24): the X1-B path cells -- a [generalizing] frame bracket is the rightmost ") [" whose bracket is
+  # empty or whose text before the first " at " ends in +N, else the old last " [" rule; the elements line takes the
+  # rightmost " for 0x<hex> <" (a dir named "x for 0x1" parses); no " <" after it -> X
+  for G51 in 'app [v2]' 'a) [b' 'a ) [1]' 'x [y at z]' 'a) [b at c'; do
+    g51="$g51$(srec mk "[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+5 at /w/$G51/g.cjs:3]")#"
+  done
+  E51='elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in ~mk+9 at /w/'
+  check "M7 matrix (C-24) SHAPE_STDOUT_AWK: the rightmost ) [ (key k) [z+1 at w) and dirs app [v2] / a) [b / a ) [1] / x [y at z] / a) [b at c -> E at g.cjs:3; the rightmost for 0x<hex> < (dir x for 0x1 <y) -> E; no ) [ -> the old last [ rule; no < after for 0x -> X" \
+    "$(srec mk '[generalizing]k) [z+1 at w:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+5 at /w/p/g.cjs:3]')#$g51$(srec mk "${E51}x for 0x1 <y/e.cjs:5 for 0x4444 <JSArray[3]> from 0x5555 <FixedArray[3]> to 0x6666 <FixedDoubleArray[3]>")#$(srec mk '[generalizing]x:d{Any;const}->d{Any;mutable} [~mk+5 at /w/p/g.cjs:3]')#$(srec mk "${E51}p/e.cjs:5 for 0x4444 JSArray[3]")" \
+    "E mk|GEN|g.cjs:3|k) [z+1 at w:d{Any;const}->d{Any;mutable}|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#E mk|ELEM|e.cjs:5|PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS|1;#E mk|GEN|g.cjs:3|x:d{Any;const}->d{Any;mutable}|1;#X malformed elements transition (missing for 0x) at out line 1;"
+
+  # Test 52: M8 (C-27 / C-29): code-disable-optimization is a known log event; a JS code-creation with an empty marker is
+  # accepted (K, no R: never an optimizing marker) only when its 8th field is hex; a non-hex one -> X
+  L52='v8-version,14,6,202,34,-node.28,0'$'\n''code-disable-optimization,mk,Optimization is always disabled'
+  check "M8 (C-27 / C-29) MAP_AWK: code-disable-optimization is a known event; an empty-marker code-creation with a hex 8th field -> K; a non-hex 8th field -> X" \
+    "$(mrec mk "$L52"$'\n''code-creation,JS,10,200,0x200000000,64,mk file:///w/d.mjs:1:1,0x300000001,')#$(mrec mk "$L52"$'\n''code-creation,JS,10,200,0x200000000,64,mk file:///w/d.mjs:1:1,sfi,')" \
+    "K mk;#X JS code-creation does not parse (JS) at log line 3;"
+
+  # Test 53: M12 (C-27): a DIFF whose unattributed multiset differs too prints the REPORTED unattributed lines; the verdict
+  # stays DIFF (report-only)
+  EB="$EA"$'\n'"UM MAP_NORMALIZE"$'\t'"Builtin:ReflectDeleteProperty"$'\t'"DeletingProperty"
+  check "M12 (C-27) diff_fn: a DIFF with a differing unattributed multiset prints the REPORTED unattributed lines; the verdict stays DIFF" \
+    "$(st_df "$OB" "$EB")" \
+    "DIFF#  mk: DIFF -- shape-instability multiset differs (before 1 | after 2 site(s));  before=0 after=1  mk  GEN  y:s{Any;const}->d{Any;const};    REPORTED unattributed/external shape instability also differs (not in the verdict; an instability may have moved to or from a non-target owner):;      before=0 after=1  UNATTR  MAP_NORMALIZE  Builtin:ReflectDeleteProperty  DeletingProperty;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;"
+
+  # Test 54: Q-B111-FOLDSAME (C-23; the d1r pair): (a) the key is optimized-only BEFORE (one d1r-b.mjs:opt site) and
+  # interpreted + optimized AFTER: interpreted multisets and O sets equal -> NO-VERDICT "interpreted key set"; (b) BEFORE
+  # interpreted only, AFTER optimized only: both sets differ -> the optimized-frame check is first
+  P54='elements transition [PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS] in '
+  S54=' for 0x1 <JSArray[3]> from 0x2 <FixedArray[3]> to 0x3 <FixedDoubleArray[3]>'
+  OB=$(st_sr "${P54}*mk+0 at file:///w/d1r-b.mjs:1$S54"); OA=$(st_sr "${P54}~mk+40 at file:///w/d1r-a.mjs:6$S54$nl${P54}*mk+0 at file:///w/d1r-a.mjs:1$S54")
+  EB=$(st_sr "${P54}~mk+40 at file:///w/d1r-b.mjs:6$S54"); EA=$(st_sr "${P54}*mk+0 at file:///w/d1r-a.mjs:1$S54")
+  check "E-B1b FOLDSAME (C-23) diff_fn: (a) key optimized-only before, interpreted after -> NO-VERDICT 'tier-up differs (interpreted key set)'; (b) interpreted-only before, optimized-only after -> 'optimized-frame key set' (checked first)" \
+    "$(st_df "$OB" "$OA")@$(st_df "$EB" "$EA")" \
+    "NO-VERDICT#  mk: NO-VERDICT -- tier-up differs (interpreted key set):;  before=0 after=1  mk  ELEM  PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS  interpreted;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;@NO-VERDICT#  mk: NO-VERDICT -- tier-up differs (optimized-frame key set):;  before=0 after=1  mk  ELEM  PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS  optimized-frame;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;"
 
   echo
   if [[ $fails -eq 0 ]]; then
