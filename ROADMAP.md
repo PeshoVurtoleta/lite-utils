@@ -246,6 +246,12 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
        lengths must read SAME; every A/A so far used one path on both sides.
      Process: Opus cross-check (b113 X-SIG), F1 ruling, engine fix + self-test rows, then the LiteSignal pairs
      P3 / P4d / S1 re-run on the final engine before /release.
+     Pre-release real-code test (maintainer 2026-11-26: "Plan one prerelease test on real code, as signal proved
+     there can be problems"; plan .handoff/PLAN-RP-1.2.0.md): its own burst after the F1 / F2 fix and the test
+     batches, before the docs batch. shape-diff on real commits of LiteSignal, LiteArena, LiteFastBit32, LiteLogLogN
+     and LiteYggdrasil (the b70 set): known-DIFF and known-SAME pairs with expectations written before any run, A/A
+     (same path and different path lengths) and an injected must-fail per package. Gate: every A/A SAME, every
+     must-fail DIFF, 0 open wrong-verdict findings; a wrong verdict means fix + full re-run before /release.
   4. 1.3.0 code-size-diff (L4 below).
   5. 1.4.0 import-audit (L1 below).
   6. 1.5.0 suite-run (L6 below).
@@ -253,6 +259,17 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      Its research burst lands the bash 3.2 port (R2-L5-1), a streaming count past the ~512 MiB string-length
      ceiling (readFileSync + JSON.parse, R2-L5-2) and a stated per-run cost before any planner pass.
   ablation-run (L3 below) is not a minor: if ever wanted, a mode of deopt-diff / allocation-diff.
+  Known-answer corpus (maintainer 2026-11-26, after 1.2.0: "different mock tests - different shape changes, detection,
+  same for all scripts. Easily can detect bugs and anyone can run to see"): a set of small runnable programs, each
+  with a known answer, covering every tool (bytecode-budget, inlining-budget-diff, deopt-diff, allocation-diff, ic-diff,
+  alloc-per-op, shape-diff): per tool, before / after pairs for each change class the tool claims to catch (for
+  shape-diff: field add / delete / reorder, elements-kind transitions, Smi -> Double, dictionary mode, literal-size
+  cache, map-move under compaction), pairs that must read SAME, A/A controls, and limit cases with their documented
+  verdict. One command runs it and prints expected vs got per case, so a user can see what each tool detects and a
+  wrong verdict shows up as a failing case. Origin: the b70 / b112 real-project passes found tool bugs the canned
+  suite missed. New public surface -> research burst + PROPOSAL first (ORCHESTRATOR "Research bursts"). Open for that
+  burst: order vs items 4-7; shipped in files[] or repo-only; expected answers per node version or verdict-class only;
+  in `npm test` (DETERMINISTIC) or its own command, since real V8 output varies by node version.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
   Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
   other minor gets one reviewer + a cross-check.
