@@ -234,6 +234,18 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      Items 3-7 follow Q-M-ORDER2 (a) (maintainer 2026-11-23); the 2026-11-12 order (import-audit first, shape-diff last)
      is history.
   3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23; IN PROGRESS (b103 / b104).
+     Release blockers added 2026-11-26 (maintainer: "Yes, add to roadmap"), from the real-project pass on
+     LiteSignal (b112, evidence .handoff/b112/real-signal/HANDBACK.md), fixed before 1.2.0 ships:
+     - F1 (wrong verdict): it reports instability when one side builds an object literal with a property count
+       V8's cache has not seen yet and the other side does not (`ReplaceDescriptors MapCreate`). Growing a
+       literal triggers it, and so can unchanged code, depending on what ran first. The createScope and
+       snapshot pairs read wrong for this reason.
+     - F2 (no verdict): a garbage-collection `map-move` event makes the whole run give no verdict
+       (4 of 70 runs).
+     - Path-length control (LiteSignal session): one driver copied to two directories with different path
+       lengths must read SAME; every A/A so far used one path on both sides.
+     Process: Opus cross-check (b113 X-SIG), F1 ruling, engine fix + self-test rows, then the LiteSignal pairs
+     P3 / P4d / S1 re-run on the final engine before /release.
   4. 1.3.0 code-size-diff (L4 below).
   5. 1.4.0 import-audit (L1 below).
   6. 1.5.0 suite-run (L6 below).
