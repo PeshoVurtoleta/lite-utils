@@ -11,6 +11,7 @@
 // (proto:168; proto:768 strips all 4 on --version and every driver run) and which has no Q-ENV unset line: exactly 1 leak line.
 // sd spawns 8 = 1 --version + 1 --v8-options + 2 drivers x 3 runs (default --runs 3, shape-diff.sh:1476).
 // Every row works in its own mkdtemp dir, removed in finally; E7 checks the dirs are gone. Every spawn is capSync.
+// b118 (Q-B117-NL (a)): E5sd asserts the compile-cache dir only when a same-run probe (ccHonored) shows this node creates NODE_COMPILE_CACHE; else the positive check is off and the dir must be absent.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, chmodSync } from 'node:fs';
@@ -87,7 +88,7 @@ const SD_OUT = ['[generalizing]x:d{Any;const}->d{Any;mutable} (uninitialized fie
     '[generalizing]x:d{Any;const}->d{Any;mutable} (field type generalization) [~mk+7 at file:///w/mono/driver.mjs:2]', 'done', ''].join('\n');
 
 // ---- env: the host env minus the 4 names and everything that steers bash / git editors, then the probe values ----
-const DROP = [...NAMES, 'NODE', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'CDPATH',
+const DROP = [...NAMES, 'NODE', 'NODE_DISABLE_COMPILE_CACHE', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'EDITOR', 'VISUAL', 'BASH_ENV', 'ENV', 'CDPATH',
     'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT'];
 function cleanEnv() {
     const e = { ...process.env };
@@ -415,11 +416,51 @@ for (const tool of PIN4) {
     });
 }
 
+// ---- the compile-cache probe (Q-B117-NL (a), b118): does THIS node create NODE_COMPILE_CACHE at all? (node v27.0.0-alpha.0.2.0 does not) ----
+let CC_HONORED;
+function ccHonored() {
+    if (CC_HONORED !== undefined) return CC_HONORED;
+    const d = mkdtempSync(join(tmpdir(), 'es-'));
+    MADE.push(d);
+    try {
+        mkdirSync(join(d, 'tmp'));
+        writeFileSync(join(d, 'p.mjs'), 'export default 1;\n');
+        // probe control: the same run with NODE_COMPILE_CACHE an own undefined key (a strip) must create no cc dir
+        const ctl = { ...probeEnv(d, '--trace-warnings'), NODE_COMPILE_CACHE: undefined };
+        const rc = capSync(process.execPath, [join(d, 'p.mjs')], { encoding: 'utf8', cwd: d, killSignal: 'SIGKILL', env: ctl }, 60000, 'env-strip cc probe control');
+        assert.equal(rc.status, 0, `ccHonored: the probe control run exited ${rc.status} (${rc.signal}): ${rc.stderr}`);
+        if (existsSync(join(d, 'cc'))) throw new Error('ccHonored: the stripped control run created the cache dir; the probe cannot tell the two apart');
+        const rp = capSync(process.execPath, [join(d, 'p.mjs')], { encoding: 'utf8', cwd: d, killSignal: 'SIGKILL', env: probeEnv(d, '--trace-warnings') }, 60000, 'env-strip cc probe');
+        assert.equal(rp.status, 0, `ccHonored: the probe run exited ${rp.status} (${rp.signal}): ${rp.stderr}`);
+        CC_HONORED = existsSync(join(d, 'cc'));
+    }
+    finally { rmSync(d, { recursive: true, force: true }); }
+    return CC_HONORED;
+}
+// honored -> the tool run must have made the dir; not honored -> it must NOT have (else the probe is broken)
+function ccCheck(honored, ccMade, sfx = '') {
+    if (honored) assert.equal(ccMade, true, `sd mutant: no compile cache dir${sfx}`);
+    else assert.equal(ccMade, false, `sd mutant: the run made the compile cache while the probe said this node does not honor NODE_COMPILE_CACHE (probe broken)${sfx}`);
+}
+
+test('E5cc canned (no spawn): ccCheck over the 4 cells; the old unconditional rule fails the (not honored, absent) nightly cell', () => {
+    ccCheck(true, true);
+    ccCheck(false, false);
+    assert.throws(() => ccCheck(true, false), assert.AssertionError);
+    assert.throws(() => ccCheck(false, true), (e) => e instanceof assert.AssertionError && /probe broken/.test(e.message));
+    const oldRule = (h, m) => assert.equal(m, true);   // the pre-b118 rule: ignores the probe
+    oldRule(true, true);
+    assert.throws(() => oldRule(false, false), assert.AssertionError);   // nightly 45833685584 cell
+});
+
 // ---- E5sd: control, real node, the E5sd mutant of the live sd root (no history needed) ----
-test('E5sd real node (control, mutant: Q-ENV unset line deleted + PROBE_ENV emptied): coverage entry, compile cache, the warn file holds the warning, and E3\'s checks throw', { skip }, () => {
+test('E5sd real node (control, mutant: Q-ENV unset line deleted + PROBE_ENV emptied): coverage entry, compile cache (when this node honors it; else the dir must be absent), the warn file holds the warning, and E3\'s checks throw', { skip }, (t) => {
+    const honored = ccHonored();
     const r = runTool('sd', 'real', 'mut');
     assert.ok(r.covN >= 1, `sd mutant: no coverage entry (${r.covN})${tail(r)}`);
-    assert.equal(r.ccMade, true, `sd mutant: no compile cache dir${tail(r)}`);
+    t.diagnostic(`E5sd: compile-cache probe honored=${honored} on ${process.version}`);
+    ccCheck(honored, r.ccMade, tail(r));
+    if (!honored) t.diagnostic('E5sd: this node does not create NODE_COMPILE_CACHE (probe); positive check off; the dir must be absent');
     assert.ok(r.warn !== null && r.warn.includes('env-strip'), `sd mutant: warn file lacks the warning (${JSON.stringify(r.warn)})${tail(r)}`);
     assert.throws(() => checkE3('sd', r), (e) => e instanceof assert.AssertionError && /sd: a node spawn saw one of the 4 names/.test(e.message));
 });
@@ -441,8 +482,8 @@ test(`E6 pin: the ${PIN} history is reachable and holds the 4 control roots (ski
 
 // ---- E7: retention (the per-run TMPDIR check is in runTool; this row runs last) ----
 test('E7 retention: every es- dir this file created is gone', { skip }, () => {
-    // E1 + 10 live-root rows + E5sd; + 8 control rows + E6 when the 0560272 pin is reachable; + E4sd when the 4dc6a53 pin is reachable
-    const floor = 12 + (hasPin === true ? 9 : 0) + (hasProto === true ? 1 : 0);
+    // E1 + 10 live-root rows + E5sd (its tool run + the cc probe); + 8 control rows + E6 when the 0560272 pin is reachable; + E4sd when the 4dc6a53 pin is reachable
+    const floor = 13 + (hasPin === true ? 9 : 0) + (hasProto === true ? 1 : 0);
     assert.ok(MADE.length >= floor, `coverage floor: ${MADE.length} dirs made, want >= ${floor}`);
     const left = MADE.filter((p) => existsSync(p));
     assert.deepEqual(left, [], 'a row left its temp dir behind');
