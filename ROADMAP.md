@@ -267,9 +267,12 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   cache, map-move under compaction), pairs that must read SAME, A/A controls, and limit cases with their documented
   verdict. One command runs it and prints expected vs got per case, so a user can see what each tool detects and a
   wrong verdict shows up as a failing case. Origin: the b70 / b112 real-project passes found tool bugs the canned
-  suite missed. New public surface -> research burst + PROPOSAL first (ORCHESTRATOR "Research bursts"). Open for that
-  burst: order vs items 4-7; shipped in files[] or repo-only; expected answers per node version or verdict-class only;
-  in `npm test` (DETERMINISTIC) or its own command, since real V8 output varies by node version.
+  suite missed. Maintainer 2026-11-26 ("repo only, in package json command, no need to run in test, mocks/ maybe as a
+  folder name; small units, easy to be understand by anyone, all kinds of shapes, inlining, etc"): repo-only (NOT in
+  files[]); run by its own package.json script, NOT part of `npm test`; folder `mocks/` (name provisional); each case
+  a small unit anyone can read; covers every change class of every tool (shapes, inlining, deopts, allocations, ICs,
+  bytecode size). Research burst + PROPOSAL first (ORCHESTRATOR "Research bursts"); still open for it: order vs items
+  4-7, the script name, and whether a case's expected answer is per node version or the verdict class only.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
   Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
   other minor gets one reviewer + a cross-check.
