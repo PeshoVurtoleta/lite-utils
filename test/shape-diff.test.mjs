@@ -7,12 +7,12 @@
 // test/fixtures/shape-diff/canned/golden-proto (cut from the frozen prototype eb7c1b65 only);
 // test/fixtures/shape-diff/real/<M>/excerpt/run.{log,out} + PROVENANCE.txt [excerpt] (the identity row's oracle); the
 // row-to-mutant facts of the b105 G-E / b106 G-E2 hand-backs and reviews -- never what the script printed (the ROW labels
-// 41-44 and 45-54 alone are copied by script from the built root's self-test output, as the G-E2 B2 / b113 E-B3 briefs order).
+// 41-44 and 45-58 alone are copied by script from the built root's self-test output, as the G-E2 B2 / b113 E-B3 briefs order).
 // TIER: DETERMINISTIC. No real node: the self-test feeds canned text and its own fake node; the e2e rows run
 // test/fixtures/shape-diff/canned/fake-node.sh copied into a private temp dir. git: the A8 old twin only (`git show 9770f78:`,
 // a history pin: skipped when the commit is absent, a failure under CI=true).
 //
-// Mutant table (46 = 35 + 11 E mutants, b113 E-B3; the A8 M-OUTNAMES twin is outside it): each is ONE exact-once edit, except the multi-site engine hunks E-M8 / E-M3 (3 edits) and E-M2a / E-M7 (2), every edit exact-once (the census pins each count) (an anchor matching 0 or > 1 times fails the row) on a private copy
+// Mutant table (55 = 35 + 11 E mutants (b113 E-B3) + 9 E-B5 mutants (b115 E-B3b); the A8 M-OUTNAMES twin is outside it): each is ONE exact-once edit, except the multi-site engine hunks E-M8 / E-M3 (3 edits) and E-M2a / E-M7 / M-F2-EV (2), every edit exact-once (the census pins each count) (an anchor matching 0 or > 1 times fails the row) on a private copy
 // of the built root under os.tmpdir(); it must exit 1 with `self-test: <n> check(s) FAILED` and FAIL every named row
 // (found by its exact label). Each revert row runs the kill assertion on the clean copy's output and requires it to
 // throw. M10 is the exception: the self-test passes on it, and its killer is the SIGNAL row (A12 (iii)), not a
@@ -43,6 +43,8 @@
 //     E-M12 (53), E-FOLDSAME (54): PLAN-FIX-E task 5 + SPEC A34 / A36; edit text and rows = the E-B2 coder's gates table (b112,
 //     gates-r2: 45-M1 .. 54ii-swap), one mutant per engine hunk (M1 M2a M2b M3 M4 M7 M8 M12 + the E-B1b tier-up order); E-M4fold's
 //     extra rows are the ones the coder measured; a mutant may FAIL more rows than listed (assertKilled is a subset check).
+//   M-F1-NOFILTER (45 55 56), M-F1-GE1 (55 56), M-F1-GE3 (45 55 56), M-F1-OWNERKEY (55 56), M-F1-UMONLY (55), M-F1-ALLREPL (45 56),
+//     M-F2-NOREMAP (57), M-F2-NODELETE (57), M-F2-EV (57 58; 2 edits): E-B5 b115, C-30 / C-21, the E-B5 coder's gates table (CODER-E-B5 hand-back, G3); anchors exact-once on the built root.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, realpathSync, existsSync, cpSync } from 'node:fs';
@@ -57,7 +59,7 @@ beforeEach(() => new Promise((r) => setImmediate(r)));
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = join(PKG, 'shape-diff.sh');   // the root anchor (a revert check points a private copy of this file elsewhere)
 const CANNED = join(PKG, 'test', 'fixtures', 'shape-diff', 'canned');
-const C = 54;   // self-test ok lines (G-E2 B2: 40 -> 44, rows 41-44 = the real-capture replays; E-B2 b112: 44 -> 54, rows 45-54 = the 2026-11-26 audit-fix rows, SPEC A34 / C-29)
+const C = 58;   // self-test ok lines (G-E2 B2: 40 -> 44, rows 41-44 = the real-capture replays; E-B2 b112: 44 -> 54, rows 45-54 = the 2026-11-26 audit-fix rows, SPEC A34 / C-29; E-B5 b115: 54 -> 58, rows 55-58 = F1 / F2, C-30)
 const BASH = '/bin/bash';
 const ST_CAP = 180000;    // one --self-test (about 4 s locally)
 const E2E_CAP = 60000;    // one fake-node e2e pair (8 fake spawns)
@@ -73,9 +75,9 @@ ENV.NODE_V8_COVERAGE = undefined;
 const BASE_PATH = '/usr/bin:/bin';
 const REAL_AWK = ['/usr/bin/awk', '/bin/awk'].find((p) => existsSync(p));
 
-// The 54 self-test rows in print order, exact labels (CODER-GE-B2 output, rows 17 / 40 per CODER-GE-B2-fix1, row 22 per
+// The 58 self-test rows in print order, exact labels (CODER-GE-B2 output, rows 17 / 40 per CODER-GE-B2-fix1, row 22 per
 // SPEC A12 (ii), rows 41-44 copied by script from the built root's (edecd742) self-test output, G-E2 B2; rows 45-54 = the 2026-11-26 audit-fix rows (E-B2 b112),
-// copied by script from the built root's (59c44fff) `--self-test` stdout lines 45-54, b113 E-B3).
+// copied by script from the built root's (59c44fff) `--self-test` stdout lines 45-54, b113 E-B3; row 45's new label + rows 55-58 (E-B5 b115, C-30) copied by script from the built root's (e7cfaa9d = 2478f409's lines 45, 55-58) stdout lines 45, 55-58, b115 E-B3b).
 const ROW = [null,
     /*  1 */ 'MAP_AWK: clean mono fn -> K+R+T; compiled-but-uncalled (~ and ^) -> K only (no R)',
     /*  2 */ 'MAP_AWK (N1 + N5 NONE-owner): Builtin:ReflectDeleteProperty + NONE + user:helperDel all -> UM',
@@ -121,7 +123,7 @@ const ROW = [null,
     /* 42 */ 'real capture node 24 (v24.22.3): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME',
     /* 43 */ 'real capture node 26 (v26.8.2): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME',
     /* 44 */ 'real capture node 27 (v27.0.0-alpha.0.1.0): MAP + SHAPE records equal the golden; the excerpt vs the excerpt minus its map,Normalize line -> exit 1 DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME',
-    /* 45 */ 'M1 (C-21) MAP_AWK: a non-target MAP_REPLACE line (MapCreate, another reason, none) -> UM MAP_REPLACE, never dropped',
+    /* 45 */ 'M1 (C-21) MAP_AWK: a non-target MAP_REPLACE line (a MapCreate site with 2 hits, another reason, none) -> UM MAP_REPLACE, never dropped',
     /* 46 */ 'M2a (C-22) SHAPE_STDOUT_AWK: a FROM == TO generalization with (+N maps) is not a no-op (target -> E, non-target -> UE GEN); v{None;...} with (+N maps) stays a no-op (I)',
     /* 47 */ 'M2b (C-22) SHAPE_STDOUT_AWK: a target [reconfiguring] frame -> E RECONF (its optimized hit folds; {symbol 0x<hex>} -> {symbol 0xADDR}); non-target / node: / runtime / <unknown> -> UE RECONF; no trailing ], no frame bracket, a bad payload, a loc with no :N, a TAB -> X',
     /* 48 */ 'M3 (C-27) MAP_AWK + judge_side: a target fn defined at >1 location -> A; NO-VERDICT \'ambiguous target function\', A judged before N',
@@ -131,6 +133,10 @@ const ROW = [null,
     /* 52 */ 'M8 (C-27 / C-29) MAP_AWK: code-disable-optimization is a known event; an empty-marker code-creation with a hex 8th field -> K; a non-hex 8th field -> X',
     /* 53 */ 'M12 (C-27) diff_fn: a DIFF with a differing unattributed multiset prints the REPORTED unattributed lines; the verdict stays DIFF',
     /* 54 */ 'E-B1b FOLDSAME (C-23) diff_fn: (a) key optimized-only before, interpreted after -> NO-VERDICT \'tier-up differs (interpreted key set)\'; (b) interpreted-only before, optimized-only after -> \'optimized-frame key set\' (checked first)',
+    /* 55 */ 'F1 (C-21) MAP_AWK target: a MapCreate site with 1 hit -> no M (R kept); a site with 2 hits -> M kept (x2, or one M per nkey)',
+    /* 56 */ 'F1 (C-21) MAP_AWK non-target: two 1-hit MapCreate sites of one owner -> no UM; another owner\'s 2-hit site -> UM x2; a 1-hit non-MapCreate line -> UM',
+    /* 57 */ 'F2 (C-30) MAP_AWK map-move: a moved map keeps its elements kind (-> MAP_ELEM_DICT); a move from an unknown map clears a stale kind (-> T + N)',
+    /* 58 */ 'F2 (C-30) MAP_AWK: a malformed map-move (3 or 5 fields, a non-hex address) -> X map-move does not parse',
 ];
 const SIG = 'SIGNAL';   // M10's killer: the signal row below, not a self-test row
 
@@ -300,6 +306,16 @@ const MUT = [
     ['E-M4tier', [50, 54], [['    if [[ "$MSB" == "$MSA" && "$OSB" != "$OSA" ]]; then\n      FV=NO-VERDICT\n      say "  $fn: NO-VERDICT -- tier-up differs (optimized-frame key set):"\n      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf \'%s\\n\' "$OSB") <(printf \'%s\\n\' "$OSA") | sort -k3)\n    elif [[ "$MSB" == "$MSA" && "$ISB" != "$ISA" ]]; then\n', '    if [[ "$MSB" == "$MSA" && "$ISB" != "$ISA" ]]; then\n']]],
     ['E-M12', [53], [['      if [[ "$UNATTR_DIFF" != "" ]]; then   # (not the -n spelling of the SAME branch: its line stays unique)\n        say "    REPORTED unattributed/external shape instability also differs (not in the verdict; an instability may have moved to or from a non-target owner):"\n        while IFS= read -r l; do say "    $l"; done <<< "$UNATTR_DIFF"\n      fi\n', '']]],
     ['E-FOLDSAME', [54], [['    if [[ "$MSB" == "$MSA" && "$OSB" != "$OSA" ]]; then\n      FV=NO-VERDICT\n      say "  $fn: NO-VERDICT -- tier-up differs (optimized-frame key set):"\n      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf \'%s\\n\' "$OSB") <(printf \'%s\\n\' "$OSA") | sort -k3)\n    elif [[ "$MSB" == "$MSA" && "$ISB" != "$ISA" ]]; then\n      FV=NO-VERDICT\n      say "  $fn: NO-VERDICT -- tier-up differs (interpreted key set):"\n      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf \'%s\\n\' "$ISB") <(printf \'%s\\n\' "$ISA") | sort -k3)\n', '    if [[ "$MSB" == "$MSA" && "$ISB" != "$ISA" ]]; then\n      FV=NO-VERDICT\n      say "  $fn: NO-VERDICT -- tier-up differs (interpreted key set):"\n      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf \'%s\\n\' "$ISB") <(printf \'%s\\n\' "$ISA") | sort -k3)\n    elif [[ "$MSB" == "$MSA" && "$OSB" != "$OSA" ]]; then\n      FV=NO-VERDICT\n      say "  $fn: NO-VERDICT -- tier-up differs (optimized-frame key set):"\n      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf \'%s\\n\' "$OSB") <(printf \'%s\\n\' "$OSA") | sort -k3)\n']]],
+    // E-B5 mutants (b115 E-B3b; edit text + rows: the E-B5 coder's gates table, anchors exact-once on the built root)
+    ['M-F1-NOFILTER', [45, 55, 56], [["  mc = (mtype == \"ReplaceDescriptors\" && reason == \"MapCreate\")\n", "  mc = 0\n"]]],
+    ['M-F1-GE1', [55, 56], [["function mc_kept(k) { return MCS[k] >= 2 }", "function mc_kept(k) { return MCS[k] >= 1 }"]]],
+    ['M-F1-GE3', [45, 55, 56], [["function mc_kept(k) { return MCS[k] >= 2 }", "function mc_kept(k) { return MCS[k] >= 3 }"]]],
+    ['M-F1-OWNERKEY', [55, 56], [[": \"T\" SUBSEP cf[h] SUBSEP cp[h]) SUBSEP $7 \":\" $8; MCS[mck]++ }", ": \"T\" SUBSEP cf[h] SUBSEP cp[h]); MCS[mck]++ }"]]],
+    ['M-F1-UMONLY', [55], [["    if ((i in MSITE) && !mc_kept(MSITE[i])) continue\n", ""]]],
+    ['M-F1-ALLREPL', [45, 56], [["  mc = (mtype == \"ReplaceDescriptors\" && reason == \"MapCreate\")\n", "  mc = (mtype == \"ReplaceDescriptors\")\n"]]],
+    ['M-F2-NOREMAP', [57], [["  if ($3 in map_ek) { map_ek[$4] = map_ek[$3]; delete map_ek[$3] }\n", "  if ($3 in map_ek) { delete map_ek[$3] }\n"]]],
+    ['M-F2-NODELETE', [57], [["  else delete map_ek[$4]\n", ""]]],
+    ['M-F2-EV', [57, 58], [["map-create code-disable-optimization\"", "map-create code-disable-optimization map-move\""], ["$1 == \"map-move\" {\n  if (NF != 4 || $3 !~ /^0x[0-9a-fA-F]+$/ || $4 !~ /^0x[0-9a-fA-F]+$/ || length($3) > 15 || length($4) > 15) {\n    failx(\"map-move does not parse\"); next\n  }\n  if ($3 in map_ek) { map_ek[$4] = map_ek[$3]; delete map_ek[$3] }\n  else delete map_ek[$4]\n  next\n}\n", ""]]],
 ];
 
 // the source with exact-once edits (split / join, never String.replace: bash text holds `$'`)
@@ -576,11 +592,11 @@ test('A7 identity-kill assertion control (pure JS): the M-CAPID text with a synt
     assert.throws(() => assertIdKilled('M-CAPID', src, { status: 1, stdout: 'self-test: 1 check(s) FAILED (43 ok)\n', stderr: '' }));
 });
 
-test('A7 mutant census: 46 mutants, unique labels, every named row a self-test row (M10: the signal row; M-CAPID: the identity row)', { skip }, () => {
-    assert.equal(MUT.length, 46);
+test('A7 mutant census: 55 mutants, unique labels, every named row a self-test row (M10: the signal row; M-CAPID: the identity row)', { skip }, () => {
+    assert.equal(MUT.length, 55);
     assert.equal(new Set(MUT.map((m) => m[0])).size, MUT.length, 'labels are unique');
     assert.equal(new Set(MUT.map((m) => JSON.stringify(m[2]))).size, MUT.length, 'edits are distinct');
-    const MULTI_EDIT = new Map([['E-M8', 3], ['E-M3', 3], ['E-M2a', 2], ['E-M7', 2]]);   // one engine hunk spanning several exact-once sites
+    const MULTI_EDIT = new Map([['E-M8', 3], ['E-M3', 3], ['E-M2a', 2], ['E-M7', 2], ['M-F2-EV', 2]]);   // one engine hunk spanning several exact-once sites
     for (const [name, rows, edits] of MUT) {
         assert.equal(edits.length, MULTI_EDIT.get(name) ?? 1, `${name}: edit count (one per hunk; MULTI_EDIT lists the multi-site hunks)`);
         if (rows === SIG) { assert.equal(name, 'M10'); continue; }

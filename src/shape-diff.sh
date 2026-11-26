@@ -137,6 +137,7 @@ function js_owner_tag(ty, nm,   p, fn_part, loc_part) {
   }
   return "user:<anon>"
 }
+function mc_kept(k) { return MCS[k] >= 2 }   # Q-B113-F1: a MapCreate (owner, site) with 1 hit is the literal-map cache fill
 function norm_key(k) {
   if (substr(k, 1, 7) == "symbol(") gsub(/hash [0-9a-fA-F]+/, "hash *", k)
   return k
@@ -148,7 +149,7 @@ function add_code(s, z, f, b, p, tag) {
 BEGIN {
   FS = ","
   NF_N = split(fns, FNS, ",")
-  nc = 0; gen = 0; NX = 0; NM = 0; NUM = 0
+  nc = 0; gen = 0; NX = 0; NM = 0; NUM = 0; NUMC = 0
 
   split("v8-version v8-platform new delete heap-available heap-capacity script-source code-source-info sfi-move code-deopt map-create code-disable-optimization", t, " ")
   for (i in t) EV[t[i]] = 1
@@ -216,6 +217,16 @@ $1 == "code-move" {
   add_code(hex($3), ce[h] - cs[h], cf[h], cb[h], cp[h], ctag[h])
   next
 }
+# Q-B113-F2 (C-30): `map-move,<time>,<from>,<to>` (GC compaction moved a map): its map-details elements kind follows it;
+# a move from a map with no kind clears any stale kind at the new address
+$1 == "map-move" {
+  if (NF != 4 || $3 !~ /^0x[0-9a-fA-F]+$/ || $4 !~ /^0x[0-9a-fA-F]+$/ || length($3) > 15 || length($4) > 15) {
+    failx("map-move does not parse"); next
+  }
+  if ($3 in map_ek) { map_ek[$4] = map_ek[$3]; delete map_ek[$3] }
+  else delete map_ek[$4]
+  next
+}
 $1 == "map" {
   if (NF != 10) { failx("map line not 10 fields (NF=" NF ")"); next }
   if (index($0, "\t") > 0) { failx("map line contains TAB"); next }
@@ -254,6 +265,10 @@ $1 == "map" {
   # Q-B103-SD-D5 (a): a Transition whose from or to map has no map-details line: its elements kind is unknown (an
   # elements change would hide as a normal T). Additive: the target keeps its T / MAP_TRANSITION record and gains N.
   ekx = (mtype == "Transition" && (!($4 in map_ek) || !($5 in map_ek)))
+  # Q-B113-F1 (C-21): a reason-MapCreate ReplaceDescriptors line counts per (owner, source site), both sides (target:
+  # fn + script + line:col; non-target: owner tag + line:col); END drops it when its site has exactly 1 hit (mc_kept)
+  mc = (mtype == "ReplaceDescriptors" && reason == "MapCreate")
+  if (mc) { mck = ((!h || cf[h] == "") ? "U" SUBSEP (h ? ctag[h] : "NONE") : "T" SUBSEP cf[h] SUBSEP cp[h]) SUBSEP $7 ":" $8; MCS[mck]++ }
 
   # Any non-target instability (NONE, Builtin:*, non-target user:<fn>, or node:<fn>) -> UM (Q-SD-OWNER (a))
   if (!h || cf[h] == "") {
@@ -265,7 +280,8 @@ $1 == "map" {
       else if (reason != "") det = reason
       else if (nkey != "") det = nkey
       else det = "-"
-      UM_LIST[++NUM] = cls "\t" ow "\t" det
+      if (mc) { UMC_LIST[++NUMC] = cls "\t" ow "\t" det; UMC_K[NUMC] = mck }
+      else UM_LIST[++NUM] = cls "\t" ow "\t" det
     }
     next
   }
@@ -286,9 +302,11 @@ $1 == "map" {
   else detail = "-"
 
   sk = fn SUBSEP cls SUBSEP cp[h] SUBSEP $7 ":" $8 SUBSEP detail
+  if (mc) sk = sk SUBSEP "MapCreate"
   if (!(sk in MCNT)) {
     MORD[++NM] = sk
     MFN[NM] = fn; MCLS[NM] = cls; MLOC[NM] = cb[h] ":" $7 ":" $8; MDET[NM] = detail
+    if (mc) MSITE[NM] = mck
   }
   MCNT[sk]++
   next
@@ -306,10 +324,15 @@ END {
   }
   for (i = 1; i <= NM; i++) {
     sk = MORD[i]
+    if ((i in MSITE) && !mc_kept(MSITE[i])) continue
     printf "M %s\t%s\t%s\t%s\t%d\n", MFN[i], MCLS[i], MLOC[i], MDET[i], MCNT[sk]
   }
   for (i = 1; i <= NUM; i++) {
     print "UM " UM_LIST[i]
+  }
+  # MapCreate UM lines come after the inline UM lines, in log order (every UM consumer, u_ms, sorts: order-free)
+  for (i = 1; i <= NUMC; i++) {
+    if (mc_kept(UMC_K[i])) print "UM " UMC_LIST[i]
   }
   if (NX > 0) {
     printf "X %s at log line %d%s\n", XW, XL, (NX > 1 ? " (+" (NX - 1) " more X line(s))" : "")
@@ -1324,14 +1347,15 @@ SD_CAP27_OUT
     printf '%s#%s' "$VERDICT" "$(tr '\n' ';' <"$ST_D/df.out")"
   }
 
-  # Test 45: M1 (C-21): a ReplaceDescriptors map line owned by no target is UM MAP_REPLACE for every reason (MapCreate,
-  # another reason, none), never dropped
+  # Test 45: M1 (C-21): a ReplaceDescriptors map line owned by no target is UM MAP_REPLACE for every reason (a MapCreate
+  # site with 2 hits (Q-B113-F1: a 1-hit MapCreate site drops, row 56), another reason, none), never dropped
   R45="$H"$'\n''map,ReplaceDescriptors,500,0x601,0x602,0x000000000000,-1,-1,MapCreate,'
+  R45="$R45"$'\n''map,ReplaceDescriptors,505,0x607,0x608,0x000000000000,-1,-1,MapCreate,'
   R45="$R45"$'\n''map,ReplaceDescriptors,510,0x603,0x604,0x200003010,30,10,CopyAsPrototype,'
   R45="$R45"$'\n''map,ReplaceDescriptors,520,0x605,0x606,0x100000040,0,-1,,'
-  check "M1 (C-21) MAP_AWK: a non-target MAP_REPLACE line (MapCreate, another reason, none) -> UM MAP_REPLACE, never dropped" \
+  check "M1 (C-21) MAP_AWK: a non-target MAP_REPLACE line (a MapCreate site with 2 hits, another reason, none) -> UM MAP_REPLACE, never dropped" \
     "$(mrec optDel "$R45")" \
-    "K optDel;R optDel;UM MAP_REPLACE|NONE|MapCreate;UM MAP_REPLACE|user:helperDel|CopyAsPrototype;UM MAP_REPLACE|Builtin:ReflectDeleteProperty|-;"
+    "K optDel;R optDel;UM MAP_REPLACE|user:helperDel|CopyAsPrototype;UM MAP_REPLACE|Builtin:ReflectDeleteProperty|-;UM MAP_REPLACE|NONE|MapCreate;UM MAP_REPLACE|NONE|MapCreate;"
 
   # Test 46: M2a (C-22): ` (+N maps)` makes a FROM == TO generalization a real change (target E, non-target UE GEN); the
   # v{None;...} rule is decided first, so a v{None} init with ` (+N maps)` stays a no-op (I)
@@ -1437,6 +1461,49 @@ EOF
   check "E-B1b FOLDSAME (C-23) diff_fn: (a) key optimized-only before, interpreted after -> NO-VERDICT 'tier-up differs (interpreted key set)'; (b) interpreted-only before, optimized-only after -> 'optimized-frame key set' (checked first)" \
     "$(st_df "$OB" "$OA")@$(st_df "$EB" "$EA")" \
     "NO-VERDICT#  mk: NO-VERDICT -- tier-up differs (interpreted key set):;  before=0 after=1  mk  ELEM  PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS  interpreted;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;@NO-VERDICT#  mk: NO-VERDICT -- tier-up differs (optimized-frame key set):;  before=0 after=1  mk  ELEM  PACKED_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS  optimized-frame;    REPORTED normal-transitions: before=0 after=0  boilerplate-noop-inits: before=0 after=0;"
+
+  # --- Tests 55-58: the LiteSignal real-project findings (SPEC-1.2.0 C-30 / C-21; Q-B113-F1, Q-B113-F2; unit E-B5) ---
+  local R55A R55B R56 R57 M58="$H"$'\n'
+  # Test 55: F1 target: a 1-hit MapCreate site drops (no M) but keeps R (execution evidence); a 2-hit site (same nkey)
+  # is one M record x2; a 2-hit site with two nkeys is two M records x1 (the site count ignores the detail)
+  R55A="$H"$'\n''map,ReplaceDescriptors,800,0x701,0x702,0x200002010,40,7,MapCreate,'
+  R55A="$R55A"$'\n''map,ReplaceDescriptors,810,0x703,0x704,0x200002020,41,9,MapCreate,'
+  R55A="$R55A"$'\n''map,ReplaceDescriptors,811,0x705,0x706,0x200002020,41,9,MapCreate,'
+  R55A="$R55A"$'\n''map,ReplaceDescriptors,820,0x707,0x708,0x200002030,42,3,MapCreate,a'
+  R55A="$R55A"$'\n''map,ReplaceDescriptors,821,0x709,0x70a,0x200002030,42,3,MapCreate,b'
+  R55B="$H"$'\n''map,ReplaceDescriptors,800,0x701,0x702,0x200002010,40,7,MapCreate,'
+  check "F1 (C-21) MAP_AWK target: a MapCreate site with 1 hit -> no M (R kept); a site with 2 hits -> M kept (x2, or one M per nkey)" \
+    "$(mrec dictArr "$R55A")#$(mrec dictArr "$R55B")" \
+    "K dictArr;R dictArr;M dictArr|MAP_REPLACE|d.mjs:41:9|MapCreate|2;M dictArr|MAP_REPLACE|d.mjs:42:3|MapCreate:a|1;M dictArr|MAP_REPLACE|d.mjs:42:3|MapCreate:b|1;#K dictArr;R dictArr;"
+
+  # Test 56: F1 non-target: two 1-hit MapCreate sites of one owner both drop; another owner's 2-hit site is UM x2 (after
+  # the inline UM lines); a 1-hit ReplaceDescriptors line of another reason stays UM
+  R56="$H"$'\n''map,ReplaceDescriptors,900,0x801,0x802,0x200003010,30,10,MapCreate,'
+  R56="$R56"$'\n''map,ReplaceDescriptors,901,0x803,0x804,0x200003020,31,4,MapCreate,'
+  R56="$R56"$'\n''map,ReplaceDescriptors,902,0x805,0x806,0x100000040,5,6,MapCreate,'
+  R56="$R56"$'\n''map,ReplaceDescriptors,903,0x807,0x808,0x100000080,5,6,MapCreate,'
+  R56="$R56"$'\n''map,ReplaceDescriptors,903,0x80b,0x80c,0x1000000c0,30,10,MapCreate,'
+  R56="$R56"$'\n''map,ReplaceDescriptors,904,0x809,0x80a,0x000000000000,-1,-1,CopyAsPrototype,'
+  check "F1 (C-21) MAP_AWK non-target: two 1-hit MapCreate sites of one owner -> no UM; another owner's 2-hit site -> UM x2; a 1-hit non-MapCreate line -> UM" \
+    "$(mrec optDel "$R56")" \
+    "K optDel;R optDel;UM MAP_REPLACE|NONE|CopyAsPrototype;UM MAP_REPLACE|Builtin:ReflectDeleteProperty|MapCreate;UM MAP_REPLACE|Builtin:ReflectDeleteProperty|MapCreate;"
+
+  # Test 57: F2 (C-30): map-move carries the elements kind (A -> B, then B -> C changes kind: MAP_ELEM_DICT); a move from
+  # an unknown map clears the stale kind at its target D (D -> E: elements kind unknown, T + N); the old address loses
+  # its kind (A -> C after the move: a second T)
+  R57="$H"$'\n''map-details,600,0xa01,type: JS_ARRAY_TYPE\n - elements kind: PACKED_SMI_ELEMENTS\n'$'\n''map-details,601,0xc01,type: JS_ARRAY_TYPE\n - elements kind: DICTIONARY_ELEMENTS\n'
+  R57="$R57"$'\n''map-move,602,0xa01,0xb01'$'\n''map,Transition,603,0xb01,0xc01,0x200002010,21,5,,x'
+  R57="$R57"$'\n''map-details,604,0xd01,type: JS_ARRAY_TYPE\n - elements kind: HOLEY_ELEMENTS\n'$'\n''map-details,605,0xe01,type: JS_ARRAY_TYPE\n - elements kind: DICTIONARY_ELEMENTS\n'
+  R57="$R57"$'\n''map-move,606,0xf01,0xd01'$'\n''map,Transition,607,0xd01,0xe01,0x200002010,22,5,,y'
+  R57="$R57"$'\n''map,Transition,608,0xa01,0xc01,0x200002010,23,5,,z'
+  check "F2 (C-30) MAP_AWK map-move: a moved map keeps its elements kind (-> MAP_ELEM_DICT); a move from an unknown map clears a stale kind (-> T + N)" \
+    "$(mrec dictArr "$R57")" \
+    "K dictArr;R dictArr;T dictArr|2;N dictArr;M dictArr|MAP_ELEM_DICT|d.mjs:21:5|PACKED_SMI_ELEMENTS -> DICTIONARY_ELEMENTS|1;"
+
+  # Test 58: F2 (C-30): a malformed map-move (3 fields, 5 fields, a non-hex address) -> X 'map-move does not parse'
+  check "F2 (C-30) MAP_AWK: a malformed map-move (3 or 5 fields, a non-hex address) -> X map-move does not parse" \
+    "$(mrec dictArr "${M58}map-move,700,0xa01")#$(mrec dictArr "${M58}map-move,700,0xa01,0xb01,0")#$(mrec dictArr "${M58}map-move,700,0xa01,0xzz1")" \
+    "K dictArr;X map-move does not parse at log line 10;#K dictArr;X map-move does not parse at log line 10;#K dictArr;X map-move does not parse at log line 10;"
 
   echo
   if [[ $fails -eq 0 ]]; then
