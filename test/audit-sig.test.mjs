@@ -528,8 +528,14 @@ for (const sig of SIGS) {
         assert.ok(p.length > 0, `the mutant passed the A1 oracle (a vacuous row)\n${msg(r)}`);
         assert.ok(p.some((x) => /interrupted|status|signal|OVERRUN/.test(x)), `mutant failed for an unexpected reason: ${p.join('; ')}`);
         // b108 measured (bash 3.2.57): the noted signal ends drv_wait's `wait` early (a trapped signal), the run goes on and the
-        // tool exits rc 2 / 1 VERDICT while the held sleeper still runs: exactly these two problems
-        assert.deepEqual(p, [`"${SDT}: interrupted (SIG${sig})" appears 0 times, want 1`, 'the driver pid is still alive at tool exit'], msg(r));
+        // tool exits rc 2 / 1 VERDICT while the held sleeper still runs: exactly these two problems. b110 (ci 45696658560, macos node
+        // 26.8.2, SIGINT only; its SIGTERM / SIGHUP rows took ~1 s on that leg): the noted signal did not cut drv_wait's wait short
+        // (e.g. it landed before the wait began), so the tool waited out the 12 s hold (exit 12495 ms after the signal): the sleeper is
+        // dead at exit and the second problem is OVERRUN instead. p[0] stays
+        // exact; every later entry is the driver-alive text or an OVERRUN, and there is at least one (no wall-clock-exact list)
+        assert.equal(p[0], `"${SDT}: interrupted (SIG${sig})" appears 0 times, want 1`, `${p.join('; ')}\n${msg(r)}`);
+        assert.ok(p.length >= 2 && p.slice(1).every((x) => x === 'the driver pid is still alive at tool exit' || /^OVERRUN: /.test(x)),
+            `want the interrupted problem plus driver-alive and / or OVERRUN only: ${p.join('; ')}\n${msg(r)}`);
     });
 }
 test('A2o-sd mutant: sd with its EXIT trap\'s rm dropped leaves exactly 1 shape-diff.* in TMPDIR after SIGTERM in the driver run', { skip }, async () => {
