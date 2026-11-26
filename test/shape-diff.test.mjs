@@ -357,6 +357,12 @@ function pair(c, b, a, extra = []) {
     return E2E.get(c);
 }
 function golden(c, f) { return readFileSync(join(CANNED, 'golden-proto', 'e2e', c, f), 'utf8'); }
+// b114 C-25: the NOTE line now ends `see README, Known limits.`; the frozen prototype golden still says `see RESEARCH.md.`
+function goldenReport(c) {
+    const g = golden(c, 'report.txt');
+    assert.equal(count(g, '; see RESEARCH.md.\n'), 1, `golden ${c}: the RESEARCH.md pointer exactly once`);
+    return g.replace('; see RESEARCH.md.\n', '; see README, Known limits.\n');
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 test(`A1 C pin: --self-test (no node on PATH) exits 0 with exactly ${C} ok lines, last line "self-test: ${C} check(s) ok", 0 TMPDIR entries`, { skip }, () => {
@@ -380,7 +386,7 @@ test(`A1 the ROW table: the clean copy outside the repo prints the ${C} labels i
 const PARITY = [['mono-mono2', 'mono', 'mono2', 0], ['mono-addf', 'mono', 'addf', 1], ['mono-nc', 'mono', 'nc', 2], ['mono-umd', 'mono', 'umd', 2]];
 for (const [c, b, a, rc] of PARITY) {
     test(`A2 parity ${b}/${a}: rc ${rc}, report.txt == golden-proto after the line-1 rename; 8 spawns, 1 mktemp, 0 left`, { skip }, () => {
-        const g = golden(c, 'report.txt');
+        const g = goldenReport(c);
         const nl = g.indexOf('\n');
         const g1 = g.slice(0, nl);
         assert.equal(count(g1, 'shape-diff (prototype)  node'), 1, 'golden line 1');
@@ -396,7 +402,7 @@ for (const [c, b, a, rc] of PARITY) {
 }
 
 test('A2 parity da: the proto (golden) gives 0|VERDICT SAME; the port gives 2|VERDICT NO-VERDICT + the UNATTR node:setMaxListeners line; 8 spawns, 1 mktemp', { skip }, () => {
-    const g = golden('mono-da', 'report.txt');
+    const g = goldenReport('mono-da');
     assert.match(golden('mono-da', 'meta.txt'), / rc=0 node_spawns=8 mktemp=1 tmpdir_left=0 /);
     assert.equal(g.replace(/\n+$/, '').split('\n').pop(), 'VERDICT SAME');
     const e = pair('mono-da', 'mono', 'da');

@@ -13,7 +13,15 @@
 #   --node BIN             node binary (default: $NODE or node); node >= 22: a --version that does not parse as
 #                          v<major>.<minor>.<patch>, or a major below 22, exits 2 after the one --version spawn
 #                          (before --v8-options and before any write)
-#   --v8-flags STR         extra V8 tuning flags (validated against `node --v8-options` allowlist)
+#   --v8-flags STR         extra V8 tuning flags; traces run with --log-maps --trace-elements-transitions
+#                          --trace-generalization --no-sparkplug --no-concurrent-recompilation
+#                          --no-concurrent-sparkplug --no-node-snapshot. Accepted: V8 flags this node
+#                          lists in --v8-options -- bool as --flag or --no-flag (never --noflag), numeric
+#                          as --flag=N -- except log / trace / print / prof / perf / dump / snapshot / file
+#                          flags and *sparkplug* / *concurrent-recompilation* / *stress-concurrent-inlining*.
+#                          Refused, exit 2 at the latest after one --v8-options read and before any measured
+#                          run: every node option (--run, --test, --watch, --check, --inspect, --cpu-prof,
+#                          --snapshot-blob, ...), every string-valued V8 flag, and the tool's own flags above.
 #   --out DIR              keep DIR/report.txt and DIR/raw/<side>/run.<k>.{log,out}
 #   --self-test            canned + diff_fn + CLI + fake-node e2e checks, no real node (exit 0 / 1); takes no other argument
 #   -h, --help             this text (exit 2)
@@ -22,11 +30,18 @@
 #   0 SAME        identical attributed shape-instability multisets AND identical unattributed /
 #                 non-target instability multisets (known limit: a single cold call to
 #                 Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27).
-#   1 DIFF        attributed shape-instability multiset differs for >= 1 target fn.
+#   1 DIFF        attributed shape-instability multiset differs for >= 1 target fn; a target
+#                 [reconfiguring] line is a RECONF verdict record, so a changed one reads DIFF.
 #   2 NO-VERDICT  refusal, trace parse error, null-control failure, missing execution evidence,
 #                 a target Transition whose from / to map has no map-details line (elements kind unknown),
-#                 or unattributed/external instability (Reflect.deleteProperty, splice, non-target
-#                 user helper, a node: or other non-file-path frame) changed while attributed sites looked SAME.
+#                 "tier-up differs (optimized-frame key set)" or "tier-up differs (interpreted key set)"
+#                 while the interpreted multisets are equal, or unattributed/external instability
+#                 (Reflect.deleteProperty, splice, non-target user helper, a node: or other non-file-path
+#                 frame) changed while attributed sites looked SAME.
+#
+# Classes: a ReplaceDescriptors map line is MAP_REPLACE for every reason, target and non-target, except
+#   a reason-MapCreate line whose (owner, source site) has exactly 1 hit in a run: it is not counted
+#   (the literal-map cache fill; execution evidence is kept); >= 2 hits count.
 
 # Combines ALL THREE V8 shape streams in ONE run:
 #   1. --log-maps --logfile=<abs>/run.log  (keeping map-details ON: separates
@@ -1706,6 +1721,8 @@ OUT=""
 POS=()
 REPORT=/dev/null   # say tees here until --out names DIR/report.txt (lib/common.sh say)
 OUT_NAMES=""       # rep_refuse checks report.txt only; an inherited env OUT_NAMES never joins it
+OPTS="--fn --include-transitions --runs --node --v8-flags --out --self-test --help"
+hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 
 need() { # value from --opt=value (returns 0) or from the next argument (returns 1: caller shifts)
   if [[ -n "$v" ]]; then return 0; fi
@@ -1729,13 +1746,13 @@ while [[ $# -gt 0 ]]; do
       [[ $# -eq 1 && ${#POS[@]} -eq 0 && $SEEN_FN$SEEN_INC$SEEN_RUNS$SEEN_NODE$SEEN_V8$SEEN_OUT == 000000 ]] || die "--self-test takes no other argument"
       if self_test; then FINAL=1; exit 0; else FINAL=1; exit 1; fi ;;
     --include-transitions) [[ $SEEN_INC -eq 0 ]] || die "--include-transitions given more than once"; SEEN_INC=1; INC_TRANS=1; shift ;;
-    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; FNLIST="$v"; shift ;;
-    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; RUNS="$v"; shift ;;
-    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; NODE_BIN="$v"; shift ;;
-    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; V8FLAGS="$v"; shift ;;
-    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; OUT="$v"; shift ;;
+    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; FNLIST="$v"; shift ;;
+    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; RUNS="$v"; shift ;;
+    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; NODE_BIN="$v"; shift ;;
+    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; V8FLAGS="$v"; shift ;;
+    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; OUT="$v"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POS+=("$1"); shift; done ;;
-    -*) die "unknown option: $a (see --help)" ;;
+    -*) die "unknown option: $a$(hint "$a") (see --help)" ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -1748,8 +1765,8 @@ nl_refuse "--v8-flags" "$V8FLAGS"
 nl_refuse "DRIVER" ${POS[@]+"${POS[@]}"}
 [[ -z "$OUT" ]] || nl_refuse "--out" "$OUT"
 
-RE_INT='^[0-9]+$'
-[[ "$RUNS" =~ $RE_INT && "$RUNS" -ge 2 && "$RUNS" -le 20 ]] || die "--runs must be 2..20, got '$RUNS'"
+RUNS_ARG=$RUNS; RE_INT='^[0-9]{1,2}$'
+[[ "$RUNS" =~ $RE_INT ]] && RUNS=$((10#$RUNS)) && [[ $RUNS -ge 2 && $RUNS -le 20 ]] || die "--runs must be 2..20, got '$RUNS_ARG'"
 [[ -n "$FNLIST" ]] || die "--fn LIST is required"
 case ",$FNLIST," in *,,*) die "--fn must not have an empty entry" ;; esac
 
@@ -1789,6 +1806,7 @@ fi
 
 # --out validation BEFORE any spawn or write (D9: includes symlink check on --out itself + nl_dir!)
 if [[ -n "$OUT" ]]; then
+  while :; do case "$OUT" in ?*/) OUT=${OUT%/} ;; ?*/.) OUT=${OUT%/.} ;; *) break ;; esac; done
   [[ "$OUT" != -* ]] || OUT="./$OUT"
   [[ ! -L "$OUT" ]] || die "--out: $OUT is a symlink (refused)"
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
@@ -1823,8 +1841,10 @@ NODE_RES=$NODE_C
 nl_refuse "--node (resolved)" "$NODE_RES"
 [[ "$NODE_RES" != *=* ]] || die "node binary: an = is not allowed in the resolved path: $NODE_RES"
 
-DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
-DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+DRV_B_DIR=$(dirname -- "${POS[0]}"); [[ "$DRV_B_DIR" != - ]] || DRV_B_DIR=./-
+DRV_B_DIR=$(cd -- "$DRV_B_DIR" 2>/dev/null && pwd) || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"; DRV_B_BASE=$(basename -- "${POS[0]}")
+DRV_A_DIR=$(dirname -- "${POS[1]}"); [[ "$DRV_A_DIR" != - ]] || DRV_A_DIR=./-
+DRV_A_DIR=$(cd -- "$DRV_A_DIR" 2>/dev/null && pwd) || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"; DRV_A_BASE=$(basename -- "${POS[1]}")
 [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"
 [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"
 nl_refuse "DRIVER (resolved)" "$DRV_B_DIR/$DRV_B_BASE" "$DRV_A_DIR/$DRV_A_BASE"
@@ -1890,7 +1910,7 @@ VERDICT=SAME
 for fn in "${TARGETS[@]}"; do diff_fn "$fn" "$MSDIR"; done
 
 say ""
-say "NOTE: a single cold call to Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27 (200 calls emit unattributed push+0); see RESEARCH.md."
+say "NOTE: a single cold call to Array.prototype.push(1.5) emits 0 trace lines on Node 22/24/26/27 (200 calls emit unattributed push+0); see README, Known limits."
 say ""
 say "VERDICT $VERDICT"
 FINAL=1

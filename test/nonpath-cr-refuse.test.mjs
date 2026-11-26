@@ -334,6 +334,11 @@ for (const [id, S] of Object.entries(CTL)) {
         const c = mkCase();
         const r = run(LIVE(S.tool), c, S, `${id} (control live)`); const n = c.spawns();
         const o = run(sd ? protoRoot() : oldRoot(S.tool), c, S, `${id} (control old)`); const n2 = c.spawns() - n;
+        if (sd && id === 'G1 unknown --nod x sd') {   // b114 C-27: the live sd prints the did-you-mean hint; the frozen prototype does not
+            const from = 'unknown option: --nod (see --help)';
+            assert.equal(o.stderr.split(from).length - 1, 1, `prototype stderr carries ${from} exactly once\n${msg(o)}`);
+            o.stderr = o.stderr.replace(from, 'unknown option: --nod (did you mean --node?) (see --help)');
+        }
         assert.equal(r.status, 2, msg(r));
         assert.ok(r.stderr !== '' && (S.g9 || !r.stderr.includes(NEWTEXT)), msg(r));
         assert.deepEqual([r.status, r.stdout, r.stderr, n], [o.status, o.stdout, o.stderr, n2], `live vs old\n${msg(r)}\n--- old\n${msg(o)}`);
