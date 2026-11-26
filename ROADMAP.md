@@ -271,8 +271,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   folder name; small units, easy to be understand by anyone, all kinds of shapes, inlining, etc"): repo-only (NOT in
   files[]); run by its own package.json script, NOT part of `npm test`; folder `mocks/` (name provisional); each case
   a small unit anyone can read; covers every change class of every tool (shapes, inlining, deopts, allocations, ICs,
-  bytecode size). Research burst + PROPOSAL first (ORCHESTRATOR "Research bursts"); still open for it: order vs items
-  4-7, the script name, and whether a case's expected answer is per node version or the verdict class only.
+  bytecode size). Research burst DONE 2026-11-26 (.handoff/PROPOSAL-mocks.md, evidence .handoff/research/mocks/);
+  Q-MK-* 15/15 RULED (a) 2026-11-26: built RIGHT AFTER 1.2.0, before 1.3.0 code-size-diff; folder `mocks/`, script
+  `npm run mocks`; case.json per case (hand-written; one expected verdict + reason, per-node overrides only where a tool
+  documents the variance); `mocks/run.mjs` runner (node, zero deps); limits and guards included; one node per run;
+  run by hand and once per /release (a MISMATCH stops the release); each later minor ships its own mocks/<tool>/ cases.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
   Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
   other minor gets one reviewer + a cross-check.
