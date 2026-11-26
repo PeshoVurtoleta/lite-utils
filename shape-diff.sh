@@ -395,7 +395,7 @@ BEGIN {
   NF_N = split(fns, FNS, ",")
   nc = 0; gen = 0; NX = 0; NM = 0; NUM = 0
 
-  split("v8-version v8-platform new delete heap-available heap-capacity script-source code-source-info sfi-move code-deopt map-create", t, " ")
+  split("v8-version v8-platform new delete heap-available heap-capacity script-source code-source-info sfi-move code-deopt map-create code-disable-optimization", t, " ")
   for (i in t) EV[t[i]] = 1
 
   split("Builtin BytecodeHandler RegExp Stub Handler Wasm", t, " ")
@@ -405,6 +405,7 @@ BEGIN {
   for (i in t) JSTY[t[i]] = 1
 
   mk["~"] = 1; mk["^"] = 1
+  mk[""] = 1   # V8 logs no marker for Liftoff wasm code and for an interpreted function whose optimization is disabled; never an optimizing marker
   mk["+"] = 1; mk["+\047"] = 1; mk["o+"] = 1; mk["o+\047"] = 1
   mk["*"] = 1; mk["*\047"] = 1; mk["o*"] = 1; mk["o*\047"] = 1
   opt_mk["+"] = 1; opt_mk["+\047"] = 1; opt_mk["o+"] = 1; opt_mk["o+\047"] = 1
@@ -433,7 +434,7 @@ $1 == "code-creation" {
     next
   }
   if (!($2 in JSTY)) { failx("unknown code-creation type " safe($2)); next }
-  if (NF != 9 || $5 !~ /^0x[0-9a-fA-F]+$/ || length($5) > 15 || $6 !~ /^[0-9]+$/ || !($9 in mk)) {
+  if (NF != 9 || $5 !~ /^0x[0-9a-fA-F]+$/ || length($5) > 15 || $6 !~ /^[0-9]+$/ || !($9 in mk) || ($9 == "" && $8 !~ /^0x[0-9a-fA-F]+$/)) {
     failx("JS code-creation does not parse (" safe($2) ")")
     next
   }
@@ -442,6 +443,9 @@ $1 == "code-creation" {
   if (f != "") {
     COMP[f] = 1
     if ($9 in opt_mk) EXEC[f] = 1
+    floc = substr($7, length(f) + 2)
+    if (!(f in FDEF)) FDEF[f] = floc
+    else if (FDEF[f] != floc) AMBIG[f] = 1
   }
   add_code(hex($5), $6 + 0, f, BASE, SCR, js_owner_tag($2, $7))
   next
@@ -500,7 +504,7 @@ $1 == "map" {
   if (!h || cf[h] == "") {
     if (ekx) {
       UM_LIST[++NUM] = "MAP_EK_UNKNOWN\t" (h ? ctag[h] : "NONE") "\t-"
-    } else if (cls == "MAP_DEPRECATE" || cls == "MAP_NORMALIZE" || cls == "MAP_SLOW2FAST" || cls == "MAP_ELEM_DICT") {
+    } else if (cls == "MAP_DEPRECATE" || cls == "MAP_NORMALIZE" || cls == "MAP_SLOW2FAST" || cls == "MAP_ELEM_DICT" || cls == "MAP_REPLACE") {
       ow = (h ? ctag[h] : "NONE")
       if (reason != "" && nkey != "") det = reason ":" nkey
       else if (reason != "") det = reason
@@ -543,6 +547,7 @@ END {
     if (f in EXEC) print "R " f
     if (f in TCNT) printf "T %s\t%d\n", f, TCNT[f]
     if (f in NEK) print "N " f
+    if (f in AMBIG) print "A " f
   }
   for (i = 1; i <= NM; i++) {
     sk = MORD[i]
@@ -584,7 +589,7 @@ function norm_gen(p) {
   sub(/ \((uninitialized field|field type generalization)\)$/, "", p)
   return p
 }
-function is_noop_or_vnone(core,   m, from, to) {
+function is_noop_or_vnone(core,   m, from, to, pm) {
   # core shape: "<prop>:<FROM>-><TO>[ (+N maps)]". FROM / TO are parsed ANCHORED AT THE LINE END (D-B, Q-SD-GEN-INIT
   # (a)): V8 prints the property name raw, so a key such as `k:v{None;const}->` must never decide the test. No match
   # = never a no-op. A no-op is:
@@ -592,11 +597,13 @@ function is_noop_or_vnone(core,   m, from, to) {
   # 2. the Node 22 & Node 24 no-op boilerplate verification: FROM == TO (e.g. a:s{Any;const}->s{Any;const})
   if (!match(core, /:(c|[a-z]\{[^{}]*\})->[a-z]\{[^{}]*\}( \(\+[0-9]+ maps\))?$/)) return 0
   m = substr(core, RSTART + 1, RLENGTH - 1)
+  pm = (m ~ / \(\+[0-9]+ maps\)$/)   # V8 built N new maps (MapUpdater::ConstructNewMap): a real change, even with FROM == TO
   sub(/ \(\+[0-9]+ maps\)$/, "", m)
   if (substr(m, 1, 3) == "c->") from = "c"
   else from = substr(m, 1, index(m, "}"))
   to = substr(m, length(from) + 3)
   if (substr(from, 1, 7) == "v{None;") return 1
+  if (pm) return 0
   return (from == to)
 }
 function ext_owner(fr, loc,   b) {
@@ -615,17 +622,40 @@ function loc_base(loc,   r) {
   sub(/.*\//, "", r)
   return r
 }
-function record_e(fn, kind, full_loc, detail,   sk) {
+function frame_pos(line, sep, lo,   i, n, c, a) {
+  # the frame bracket of a trailing "...<sep>[<frame>]": the rightmost sep (lo = lowest start) whose bracket is empty or
+  # whose text before the first " at " ends in +N; returns the index of the space before "[" (i + 1), 0 when none
+  n = length(sep)
+  for (i = length(line) - n; i >= lo; i--) {
+    if (substr(line, i, n) != sep) continue
+    c = substr(line, i + n, length(line) - i - n)
+    if (c == "") return i + 1
+    a = index(c, " at ")
+    if (a > 1 && substr(c, 1, a - 1) ~ /\+[0-9]+$/) return i + 1
+  }
+  return 0
+}
+function is_opt(fr) { return (fr ~ /^(new )?o?[+*]/) }
+function record_e(fn, kind, full_loc, detail, fr,   sk, ok, b) {
+  # an optimized frame (marker + or *, with o / \047) prints offset 0 and line 1 of the script, not the site: its hits are
+  # folded in END into the first interpreted site of the same fn / kind / detail; with none it is ONE site "<file>:opt"
+  ok = fn SUBSEP kind SUBSEP detail
+  if (is_opt(fr)) {
+    if (!(ok in OCNT)) { OORD[++NO] = ok; OFN[NO] = fn; OKIND[NO] = kind; ODET[NO] = detail; b = loc_base(full_loc); sub(/:[0-9]+$/, ":opt", b); OLOC[NO] = b }
+    OCNT[ok]++
+    return
+  }
   sk = fn SUBSEP kind SUBSEP full_loc SUBSEP detail
   if (!(sk in ECNT)) {
     EORD[++NE] = sk
     EFN[NE] = fn; EKIND[NE] = kind; ELOC[NE] = loc_base(full_loc); EDET[NE] = detail
+    if (!(ok in EFIRST)) EFIRST[ok] = sk
   }
   ECNT[sk]++
 }
 BEGIN {
   NF_N = split(fns, FNS, ",")
-  NX = 0; NE = 0; NUE = 0
+  NX = 0; NE = 0; NUE = 0; NO = 0
 }
 { sub(/\r$/, "") }
 /^elements transition / {
@@ -638,7 +668,10 @@ BEGIN {
   if (kinds !~ /^[A-Z0-9_]+ -> [A-Z0-9_]+$/) { failx("malformed elements transition kinds"); next }
 
   rest = substr(line, rb + 5)
-  forp = index(rest, " for 0x")
+  forp = 0
+  for (i = length(rest) - 7; i >= 2; i--) {
+    if (substr(rest, i, 7) == " for 0x" && substr(rest, i + 7) ~ /^[0-9a-fA-F]+ </) { forp = i; break }
+  }
   if (forp <= 1) { failx("malformed elements transition (missing for 0x)"); next }
   fr_loc = substr(rest, 1, forp - 1)
 
@@ -662,7 +695,7 @@ BEGIN {
   if (fr !~ /\+[0-9]+$/) { failx("malformed elements transition frame"); next }
   fn = strip_frame(fr)
   if (fn == "") fn = "<anon>"
-  if (is_target(fn)) record_e(fn, "ELEM", loc, kinds)
+  if (is_target(fn)) record_e(fn, "ELEM", loc, kinds, fr)
   else UE_LIST[++NUE] = "ELEM\tuser:" fn "\t" kinds
   next
 }
@@ -670,8 +703,8 @@ BEGIN {
   if (index($0, "\t") > 0) { failx("generalizing line contains TAB"); next }
   line = $0
   if (substr(line, length(line), 1) != "]") { failx("malformed generalizing line (no trailing ])"); next }
-  pos = 0
-  for (i = length(line) - 1; i >= 15; i--) {
+  pos = frame_pos(line, ") [", 15)
+  if (pos == 0) for (i = length(line) - 1; i >= 15; i--) {
     if (substr(line, i, 2) == " [") { pos = i; break }
   }
   if (pos == 0) { failx("malformed generalizing line (missing frame bracket)"); next }
@@ -715,11 +748,43 @@ BEGIN {
       ik = fn SUBSEP loc SUBSEP core
       if (!(ik in ISEEN)) { ISEEN[ik] = 1; ICNT[fn]++ }
     } else {
-      record_e(fn, "GEN", loc, core)
+      record_e(fn, "GEN", loc, core, fr)
     }
   } else if (!noop) {
     UE_LIST[++NUE] = "GEN\tuser:" fn "\t" core
   }
+  next
+}
+/^\[reconfiguring\]/ {
+  # "[reconfiguring]<name>: <kData|ACCESSORS>, attrs: [<attrs>] [<frame>]" (Map::PrintReconfiguration); the frame bracket
+  # is found by the [generalizing] frame rule (frame_pos on "] ["), with no fallback: none = X
+  if (index($0, "\t") > 0) { failx("reconfiguring line contains TAB"); next }
+  line = $0
+  if (substr(line, length(line), 1) != "]") { failx("malformed reconfiguring line (no trailing ])"); next }
+  pos = frame_pos(line, "] [", 16)
+  if (pos == 0) { failx("malformed reconfiguring line (missing frame bracket)"); next }
+  core = substr(line, 16, pos - 16)
+  gsub(/\{symbol 0x[0-9a-fA-F]+\}/, "{symbol 0xADDR}", core)
+  if (core !~ /: (kData|ACCESSORS), attrs: \[[A-Z_]*\]$/) { failx("malformed reconfiguring line (payload)"); next }
+  bracket = substr(line, pos + 2, length(line) - pos - 2)
+  if (bracket == "") { UE_LIST[++NUE] = "RECONF\t<runtime>\t" core; next }
+  atp = index(bracket, " at ")
+  if (atp <= 1) { failx("malformed reconfiguring frame (missing at)"); next }
+  fr = substr(bracket, 1, atp - 1)
+  loc = substr(bracket, atp + 4)
+  if (loc == "<unknown>:<unknown>" || loc == "<unknown>") {
+    bfr = strip_frame(fr)
+    if (bfr == "") bfr = fr
+    UE_LIST[++NUE] = "RECONF\t" bfr "\t" core
+    next
+  }
+  if (substr(loc, 1, 1) != "/" && substr(loc, 1, 8) != "file:///") { UE_LIST[++NUE] = "RECONF\t" ext_owner(fr, loc) "\t" core; next }
+  if (loc !~ /:[0-9]+$/) { failx("malformed reconfiguring loc"); next }
+  if (fr !~ /\+[0-9]+$/) { failx("malformed reconfiguring frame"); next }
+  fn = strip_frame(fr)
+  if (fn == "") fn = "<anon>"
+  if (is_target(fn)) record_e(fn, "RECONF", loc, core, fr)
+  else UE_LIST[++NUE] = "RECONF\tuser:" fn "\t" core
   next
 }
 END {
@@ -727,10 +792,13 @@ END {
     f = FNS[i]
     if (f in ICNT) printf "I %s\t%d\n", f, ICNT[f]
   }
+  for (i = 1; i <= NO; i++) if (OORD[i] in EFIRST) ECNT[EFIRST[OORD[i]]] += OCNT[OORD[i]]
   for (i = 1; i <= NE; i++) {
     sk = EORD[i]
     printf "E %s\t%s\t%s\t%s\t%d\n", EFN[i], EKIND[i], ELOC[i], EDET[i], ECNT[sk]
   }
+  for (i = 1; i <= NO; i++) if (!(OORD[i] in EFIRST)) printf "E %s\t%s\t%s\t%s\t%d\n", OFN[i], OKIND[i], OLOC[i], ODET[i], OCNT[OORD[i]]
+  for (i = 1; i <= NO; i++) printf "O %s\t%s\t%s\n", OFN[i], OKIND[i], ODET[i]   # presence of an optimized-frame hit per key, not count
   for (i = 1; i <= NUE; i++) {
     print "UE " UE_LIST[i]
   }
@@ -743,11 +811,19 @@ END {
 # =============================================================================================
 # RECORD EXTRACTORS, JUDGE, AND DIFF_FN (space-formatted, 0 raw TABs, lib/nullctl.sh pattern)
 # =============================================================================================
-s_ms() { # combined_recs fn (null control: keeps loc)
+s_ms() { # combined_recs fn (null control: keeps loc; also the optimized-frame key set)
   printf '%s\n' "$1" | awk -v fn="$2" '
-    BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t" }
+    BEGIN { FS = "\t"; pm = "M " fn "\t"; pe = "E " fn "\t"; po = "O " fn "\t" }
     substr($0, 1, length(pm)) == pm { printf "*\t%s  %s  %s\n", $2, $3, $4 }
     substr($0, 1, length(pe)) == pe { printf "*\t%s  %s  %s\n", $2, $3, $4 }
+    substr($0, 1, length(po)) == po { printf "*\t%s  optimized-frame  %s\n", $2, $3 }
+  ' | multiset
+}
+
+o_ms() { # combined_recs fn (the SET of fn / kind / detail keys with optimized-frame hits)
+  printf '%s\n' "$1" | awk -v fn="$2" '
+    BEGIN { FS = "\t"; po = "O " fn "\t" }
+    substr($0, 1, length(po)) == po { printf "*\t%s  %s  %s  optimized-frame\n", fn, $2, $3 }
   ' | multiset
 }
 
@@ -813,6 +889,7 @@ judge_side() {
   # elements kind: per run, pure bash (no spawn)
   for ((i = 0; i < n; i++)); do
     case $'\n'"${JREC[$i]}"$'\n' in
+      *$'\n'"A $fn"$'\n'*) JWHY="ambiguous target function '$fn' defined at >1 location in run $((i + 1))"; return 0 ;;
       *$'\n'"N $fn"$'\n'*) JWHY="elements kind unknown for a Transition in '$fn' (no map-details line) in run $((i + 1))"; return 0 ;;
     esac
   done
@@ -882,7 +959,7 @@ compute_unattr_diff() { # msdir (reads REB[], REA[]; sets UNATTR_DIFF)
 # diff_fn FN MSDIR: judges both sides, compares V multisets, enforces unattributed-delta guard
 # on SAME (sets FV and folds into VERDICT). Extracted so --self-test tests it directly (N5 fix!).
 diff_fn() {
-  local fn="$1" msdir="$2" VB VA WB WA NB NA MSB MSA MB MA l
+  local fn="$1" msdir="$2" VB VA WB WA NB NA MSB MSA MB MA l OSB="" OSA=""
   JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge_side "$fn" "$msdir" before; VB=$JV; WB=$JWHY
   JRC=("${RCA[@]}"); JLOG=("${LGA[@]}"); JREC=("${REA[@]}"); judge_side "$fn" "$msdir" after;  VA=$JV; WA=$JWHY
   if [[ "$VB" == NO-VERDICT || "$VA" == NO-VERDICT ]]; then
@@ -892,7 +969,13 @@ diff_fn() {
   else
     NB=$(count_instab "${REB[0]}" "$fn"); NA=$(count_instab "${REA[0]}" "$fn")
     MSB=$(v_ms "${REB[0]}" "$fn"); MSA=$(v_ms "${REA[0]}" "$fn")
-    if [[ "$MSB" == "$MSA" ]]; then
+    # C-23 tier-up guard, ONLY on a would-be SAME (interpreted multisets equal), before the unattributed guard
+    [[ "$MSB" != "$MSA" ]] || { OSB=$(o_ms "${REB[0]}" "$fn"); OSA=$(o_ms "${REA[0]}" "$fn"); }
+    if [[ "$MSB" == "$MSA" && "$OSB" != "$OSA" ]]; then
+      FV=NO-VERDICT
+      say "  $fn: NO-VERDICT -- tier-up differs (optimized-frame key set):"
+      while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$OSB") <(printf '%s\n' "$OSA") | sort -k3)
+    elif [[ "$MSB" == "$MSA" ]]; then
       if [[ -n "$UNATTR_DIFF" ]]; then
         FV=NO-VERDICT
         say "  $fn: NO-VERDICT -- attributed sites identical (before $NB | after $NA), but unattributed/external shape instability differs:"
@@ -905,6 +988,10 @@ diff_fn() {
       FV=DIFF
       say "  $fn: DIFF -- shape-instability multiset differs (before $NB | after $NA site(s))"
       while IFS= read -r l; do say "$l"; done < <(awk "$MSDIFF_AWK" <(printf '%s\n' "$MSB") <(printf '%s\n' "$MSA") | sort -k3)
+      if [[ "$UNATTR_DIFF" != "" ]]; then   # (not the -n spelling of the SAME branch: its line stays unique)
+        say "    REPORTED unattributed/external shape instability also differs (not in the verdict; an instability may have moved to or from a non-target owner):"
+        while IFS= read -r l; do say "    $l"; done <<< "$UNATTR_DIFF"
+      fi
     fi
     MB=$(reported_fn_meta "${REB[0]}" "$fn"); MA=$(reported_fn_meta "${REA[0]}" "$fn")
     say "    REPORTED normal-transitions: before=${MB%% *} after=${MA%% *}  boilerplate-noop-inits: before=${MB#* } after=${MA#* }"
