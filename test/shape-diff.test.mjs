@@ -12,13 +12,15 @@
 // test/fixtures/shape-diff/canned/fake-node.sh copied into a private temp dir. git: the A8 old twin only (`git show 9770f78:`,
 // a history pin: skipped when the commit is absent, a failure under CI=true).
 //
-// Mutant table (55 = 35 + 11 E mutants (b113 E-B3) + 9 E-B5 mutants (b115 E-B3b); the A8 M-OUTNAMES twin is outside it): each is ONE exact-once edit, except the multi-site engine hunks E-M8 / E-M3 (3 edits) and E-M2a / E-M7 / M-F2-EV (2), every edit exact-once (the census pins each count) (an anchor matching 0 or > 1 times fails the row) on a private copy
+// Mutant table (60 = 35 + 11 E mutants (b113 E-B3) + 9 E-B5 mutants (b115 E-B3b) + 5 C mutants (b116 C-B2); the A8 M-OUTNAMES twin is outside it): each is ONE exact-once edit, except the multi-site engine hunks E-M8 / E-M3 (3 edits) and E-M2a / E-M7 / M-F2-EV (2), every edit exact-once (the census pins each count) (an anchor matching 0 or > 1 times fails the row) on a private copy
 // of the built root under os.tmpdir(); it must exit 1 with `self-test: <n> check(s) FAILED` and FAIL every named row
 // (found by its exact label). Each revert row runs the kill assertion on the clean copy's output and requires it to
 // throw. M10 is the exception: the self-test passes on it, and its killer is the SIGNAL row (A12 (iii)), not a
 // self-test row; its revert row runs the signal-kill assertion on the clean signal run. M-CAPID is the other exception:
 // the self-test passes on it (rows 41-44 replay the heredoc, not the fixture), and its killer is the IDENTITY row (PLAN-SD-E2
 // A4); its revert row runs the identity-kill assertion on the clean root and requires it to throw.
+// The 5 C mutants (b116 C-B2) are the third exception: the self-test is not run; the killer is their CLI row (CL_KILL), which
+// must throw ERR_ASSERTION on the variant, and the revert row requires that row not to throw on the clean root.
 // Label -> source (names collide in the sources, so every label here is unique):
 //   P-M1 P-M2 P-M8 (row 4), P-M3 (row 2), P-M4 (row 7), P-M5 P-M9 (row 9), P-M5b (row 10): PLAN-SD-E A7 "kept from
 //     the proto" = the proto reviewer's M1 / M2 / M3 / M4 / M5 / M5b / M8 / M9 (RECHECK2-shape-diff.md section 4).
@@ -45,9 +47,10 @@
 //     extra rows are the ones the coder measured; a mutant may FAIL more rows than listed (assertKilled is a subset check).
 //   M-F1-NOFILTER (45 55 56), M-F1-GE1 (55 56), M-F1-GE3 (45 55 56), M-F1-OWNERKEY (55 56), M-F1-UMONLY (55), M-F1-ALLREPL (45 56),
 //     M-F2-NOREMAP (57), M-F2-NODELETE (57), M-F2-EV (57 58; 2 edits): E-B5 b115, C-30 / C-21, the E-B5 coder's gates table (CODER-E-B5 hand-back, G3); anchors exact-once on the built root.
+//   M-EMPTY (CL1), M-RUNS10 (CL3), M-HINT (CL4), M-OUTDOT (CL5), M-DASH (CL6): C-B2 b116, C-25 / C-26 / C-27, PLAN-FIX-C task 5 / A5; killed by the CLI rows (not a self-test row), anchors exact-once on src and the built root.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, realpathSync, existsSync, cpSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, realpathSync, existsSync, cpSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -316,6 +319,13 @@ const MUT = [
     ['M-F2-NOREMAP', [57], [["  if ($3 in map_ek) { map_ek[$4] = map_ek[$3]; delete map_ek[$3] }\n", "  if ($3 in map_ek) { delete map_ek[$3] }\n"]]],
     ['M-F2-NODELETE', [57], [["  else delete map_ek[$4]\n", ""]]],
     ['M-F2-EV', [57, 58], [["map-create code-disable-optimization\"", "map-create code-disable-optimization map-move\""], ["$1 == \"map-move\" {\n  if (NF != 4 || $3 !~ /^0x[0-9a-fA-F]+$/ || $4 !~ /^0x[0-9a-fA-F]+$/ || length($3) > 15 || length($4) > 15) {\n    failx(\"map-move does not parse\"); next\n  }\n  if ($3 in map_ek) { map_ek[$4] = map_ek[$3]; delete map_ek[$3] }\n  else delete map_ek[$4]\n  next\n}\n", ""]]],
+    // C mutants (b116 C-B2; C-25 / C-26 / C-27; edit text: the CODER-C-B1 hand-back anchors, each exact-once on src and the built root).
+    // The row is a CLI row (CL_KILL below), not a self-test row: the mutant's killer is that row going red; its revert row runs it on the clean root.
+    ['M-EMPTY', 'CL1', [['SEEN_OUT=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; OUT="$v"', 'SEEN_OUT=1; need "$@" || shift; OUT="$v"']]],
+    ['M-RUNS10', 'CL3', [['RUNS=$((10#$RUNS))', 'RUNS=$((RUNS))']]],
+    ['M-HINT', 'CL4', [['unknown option: $a$(hint "$a") (see --help)', 'unknown option: $a (see --help)']]],
+    ['M-OUTDOT', 'CL5', [['?*/.) OUT=${OUT%/.} ;;', '*/.) OUT=${OUT%/.} ;;']]],
+    ['M-DASH', 'CL6', [['; [[ "$DRV_B_DIR" != - ]] || DRV_B_DIR=./-\n', '\n']]],
 ];
 
 // the source with exact-once edits (split / join, never String.replace: bash text holds `$'`)
@@ -516,6 +526,126 @@ for (const val of ON_VALS) {
     });
 }
 
+// --- CLI rows (b116 C-B2; oracle: SPEC-1.2.0 C-25 / C-26 / C-27 (M9) and PLAN-FIX-C TASK 1 "Refusal order" / TASKS 2-3 / TASK 5 CL1-CL6, A1 / A2;
+// the expected texts are the spec's, not read back from the script). Every row runs the built root in a private mktemp cwd with
+// PATH = a logging node stub (prints v21.0.0, so a stray spawn is refused by the version gate) + /usr/bin:/bin, TMPDIR = a private dir.
+function cli(path, mk, what, envf) {
+    const t = mkT('sdt-cl-');
+    try {
+        for (const d of ['fk', 'cwd', 'tmp', 'other']) mkdirSync(join(t, d));
+        const stub = join(t, 'fk', 'node');
+        writeFileSync(stub, `#!/bin/bash\nprintf 'spawn %s\\n' "$*" >>'${t}/fk.log'\necho v21.0.0\n`);
+        chmodSync(stub, 0o755); writeFileSync(join(t, 'fk.log'), '');
+        const cwd = join(t, 'cwd');
+        const m = mk({ t, cwd, stub });
+        const env = { ...ENV, PATH: `${t}/fk:${BASE_PATH}`, TMPDIR: join(t, 'tmp') };
+        delete env.OLDPWD;   // a host OLDPWD never leaks in; CL6 sets its own
+        if (envf) Object.assign(env, envf(t));
+        const r = capSync(BASH, [path, ...m.argv], { cwd, encoding: 'utf8', group: true, env }, E2E_CAP, what);
+        const lines = r.stderr.split('\n');
+        return { status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr, first: lines[0], lines, cwd,
+            spawns: readFileSync(join(t, 'fk.log'), 'utf8').split('\n').filter((l) => l !== '').length,
+            left: readdirSync(join(t, 'tmp')).length, x: m.probe ? m.probe() : null };
+    } finally { rmSync(t, { recursive: true, force: true }); }
+}
+const cliMsg = (r) => `rc=${r.status} signal=${r.signal} spawns=${r.spawns}\n--- stdout\n${r.stdout}--- stderr\n${r.stderr}`;
+function cliRefused(r, firstLine, spawns = 0) {
+    assert.equal(r.status, 2, cliMsg(r));
+    assert.equal(r.first, firstLine, cliMsg(r));
+    assert.equal(r.spawns, spawns, `node spawns\n${cliMsg(r)}`);
+    assert.equal(r.left, 0, 'TMPDIR entries left');
+}
+const CL_OPTS = ['--fn', '--runs', '--node', '--v8-flags', '--out'];
+const NO_DRV = 'shape-diff: requires exactly 2 drivers (DRIVER_BEFORE DRIVER_AFTER), got 0';
+const runsArgv = (v) => () => ({ argv: ['--fn', 'x', '--runs', v] });
+// CL1: an empty value dies at its own argv position, before any later option name
+function cl1(path, opt) {
+    cliRefused(cli(path, () => ({ argv: [opt, '', '--bogus'] }), `shape-diff CL1 ${opt}`), `shape-diff: ${opt} must not be empty`);
+}
+// CL2: the unknown option prints first; the SEEN check runs before need
+function cl2a(path) {
+    cliRefused(cli(path, () => ({ argv: ['--bogus', '--out', ''] }), 'shape-diff CL2a'), 'shape-diff: unknown option: --bogus (see --help)');
+}
+function cl2b(path) {
+    cliRefused(cli(path, () => ({ argv: ['--fn', 'x', '--fn', ''] }), 'shape-diff CL2b'), 'shape-diff: --fn given more than once');
+}
+// CL3: a 3-digit or 0-padded 3-digit value is refused with the user's spelling; 09 / 08 are 9 / 8 (decimal) and reach the drivers refusal
+function cl3Text(path, v) {
+    cliRefused(cli(path, runsArgv(v), `shape-diff CL3 ${v}`), `shape-diff: --runs must be 2..20, got '${v}'`);
+}
+function cl3Dec(path, v) {
+    const r = cli(path, runsArgv(v), `shape-diff CL3 ${v}`);
+    cliRefused(r, NO_DRV);
+    assert.doesNotMatch(r.stderr, /value too great/, cliMsg(r));
+}
+// CL4: did-you-mean (the sibling hint(): the first option sharing a prefix either way)
+function cl4(path, bad, want) {
+    cliRefused(cli(path, () => ({ argv: [bad, 'x'] }), `shape-diff CL4 ${bad}`), `shape-diff: unknown option: ${bad}${want} (see --help)`);
+}
+// CL5: --out with a trailing / or /. is stripped before the symlink check; real/ (the link target) stays empty
+const SYM_SUFS = ['/', '//', '/.', '/./', '/.//'];
+function cl5Argv(c, out) {
+    return ['--fn', 'x', '--node', '/nonexistent/node', '--out', out, '--', join(c, 'd', 'b.js'), join(c, 'd', 'a.js')];
+}
+function cl5Setup(c) {
+    for (const d of ['real', 'plain', 'd']) mkdirSync(join(c, d));
+    symlinkSync('real', join(c, 'lnk'));
+    writeFileSync(join(c, 'd', 'a.js'), ''); writeFileSync(join(c, 'd', 'b.js'), '');
+}
+function cl5Sym(path, suf) {
+    const r = cli(path, ({ cwd }) => { cl5Setup(cwd); return { argv: cl5Argv(cwd, join(cwd, 'lnk') + suf), probe: () => readdirSync(join(cwd, 'real')).length }; }, `shape-diff CL5 lnk${suf}`);
+    cliRefused(r, `shape-diff: --out: ${r.cwd}/lnk is a symlink (refused)`);
+    assert.equal(r.x, 0, `real/ entries\n${cliMsg(r)}`);
+}
+function cl5Plain(path, suf) {
+    const r = cli(path, ({ cwd }) => { cl5Setup(cwd); return { argv: cl5Argv(cwd, join(cwd, 'plain') + suf) }; }, `shape-diff CL5 plain${suf}`);
+    cliRefused(r, 'shape-diff: node binary is not executable: /nonexistent/node');
+}
+function cl5Dot(path) {   // `/./` -> `/.` (never ""): the run names /./report.txt and never reaches the node refusal
+    const r = cli(path, ({ cwd }) => { cl5Setup(cwd); return { argv: cl5Argv(cwd, '/./') }; }, 'shape-diff CL5 /./');
+    cliRefused(r, 'shape-diff: --out: cannot write /./report.txt');
+}
+// CL6 (M9): a driver under a dir named - resolves as ./- : no `cd -` into OLDPWD, the node version refusal after exactly 1 spawn
+function cl6(path) {
+    const r = cli(path, ({ cwd, stub }) => {
+        mkdirSync(join(cwd, '-')); writeFileSync(join(cwd, '-', 'a.js'), ''); writeFileSync(join(cwd, '-', 'b.js'), '');
+        return { argv: ['--fn', 'x', '--node', stub, '--', '-/b.js', '-/a.js'] };
+    }, 'shape-diff CL6', (t) => ({ OLDPWD: join(t, 'other') }));
+    assert.equal(r.status, 2, cliMsg(r));
+    assert.equal(r.lines.filter((l) => l.startsWith('shape-diff: node v21.0.0 is not supported: shape-diff needs node >= 22 (')).length, 1, cliMsg(r));
+    assert.equal(r.spawns, 1, `node spawns\n${cliMsg(r)}`);
+    assert.doesNotMatch(r.stderr, /\bcd:/, cliMsg(r));
+}
+const CL_KILL = {   // the C mutants' killing rows (one per mutant)
+    CL1: (p) => cl1(p, '--out'), CL3: (p) => cl3Dec(p, '09'), CL4: (p) => cl4(p, '--outt', ' (did you mean --out?)'),
+    CL5: (p) => cl5Dot(p), CL6: (p) => cl6(p),
+};
+for (const opt of CL_OPTS) {
+    test(`C-25 CL1 ${opt} '' --bogus -> first stderr line "shape-diff: ${opt} must not be empty", rc 2, 0 node spawns, 0 TMPDIR entries`, { skip }, () => cl1(SCRIPT, opt));
+}
+test('C-25 CL2 --bogus --out "" -> the unknown-option refusal prints first (control: equal on the old root)', { skip }, () => cl2a(SCRIPT));
+test('C-25 CL2 --fn x --fn "" -> "given more than once" prints first (control: equal on the old root)', { skip }, () => cl2b(SCRIPT));
+for (const v of ['024', '020']) {
+    test(`C-25 CL3 --runs ${v} -> refused with the user's spelling '${v}', 0 node spawns`, { skip }, () => cl3Text(SCRIPT, v));
+}
+for (const v of ['09', '08']) {
+    test(`C-25 CL3 --runs ${v} (decimal ${Number(v)}) -> the drivers refusal, no "value too great", 0 node spawns`, { skip }, () => cl3Dec(SCRIPT, v));
+}
+for (const v of ['99', '1', 'x']) {
+    test(`C-25 CL3 --runs ${v} -> "--runs must be 2..20, got '${v}'" (control: equal on the old root)`, { skip }, () => cl3Text(SCRIPT, v));
+}
+for (const [bad, want] of [['--outt', ' (did you mean --out?)'], ['--nod', ' (did you mean --node?)'], ['--zz', '']]) {
+    test(`C-25 CL4 ${bad} x -> "unknown option: ${bad}${want} (see --help)"${want === '' ? ' (no hint)' : ''}, 0 node spawns`, { skip }, () => cl4(SCRIPT, bad, want));
+}
+for (const suf of SYM_SUFS) {
+    test(`C-26 CL5 --out lnk${suf} (lnk -> real/) -> "--out: <cwd>/lnk is a symlink (refused)", real/ keeps 0 entries, 0 node spawns`, { skip }, () => cl5Sym(SCRIPT, suf));
+}
+for (const suf of ['/', '/.']) {
+    test(`C-26 CL5 control: --out plain${suf} (a real dir) reaches the node refusal (equal on the old root)`, { skip }, () => cl5Plain(SCRIPT, suf));
+}
+test('C-26 CL5 --out /./ names /. (never empty): "--out: cannot write /./report.txt", never the node refusal', { skip }, () => cl5Dot(SCRIPT));
+test('C-27 CL6 drivers -/b.js -/a.js, node v21.0.0, env OLDPWD=<other dir> -> "node v21.0.0 is not supported", 1 spawn, no cd: line', { skip }, () => cl6(SCRIPT));
+
 test('A5 static TRACE_FLAGS row: the built root holds the 7-flag literal, one flag per line', { skip }, () => {
     assertTraceBlock(readFileSync(SCRIPT, 'utf8'));
 });
@@ -592,8 +722,8 @@ test('A7 identity-kill assertion control (pure JS): the M-CAPID text with a synt
     assert.throws(() => assertIdKilled('M-CAPID', src, { status: 1, stdout: 'self-test: 1 check(s) FAILED (43 ok)\n', stderr: '' }));
 });
 
-test('A7 mutant census: 55 mutants, unique labels, every named row a self-test row (M10: the signal row; M-CAPID: the identity row)', { skip }, () => {
-    assert.equal(MUT.length, 55);
+test('A7 mutant census: 60 mutants, unique labels, every named row a self-test row (M10: the signal row; M-CAPID: the identity row; M-EMPTY / M-RUNS10 / M-HINT / M-OUTDOT / M-DASH: a CLI row key in CL_KILL)', { skip }, () => {
+    assert.equal(MUT.length, 60);
     assert.equal(new Set(MUT.map((m) => m[0])).size, MUT.length, 'labels are unique');
     assert.equal(new Set(MUT.map((m) => JSON.stringify(m[2]))).size, MUT.length, 'edits are distinct');
     const MULTI_EDIT = new Map([['E-M8', 3], ['E-M3', 3], ['E-M2a', 2], ['E-M7', 2], ['M-F2-EV', 2]]);   // one engine hunk spanning several exact-once sites
@@ -601,6 +731,7 @@ test('A7 mutant census: 55 mutants, unique labels, every named row a self-test r
         assert.equal(edits.length, MULTI_EDIT.get(name) ?? 1, `${name}: edit count (one per hunk; MULTI_EDIT lists the multi-site hunks)`);
         if (rows === SIG) { assert.equal(name, 'M10'); continue; }
         if (rows === IDENT) { assert.equal(name, 'M-CAPID'); continue; }
+        if (typeof rows === 'string') { assert.ok(Object.hasOwn(CL_KILL, rows), `${name}: unknown CLI row ${rows}`); continue; }
         for (const n of rows) assert.ok(Number.isInteger(n) && n >= 1 && n <= C, `${name}: row ${n}`);
     }
     for (const k of MULTI_EDIT.keys()) assert.ok(MUT.some((m) => m[0] === k), `MULTI_EDIT ${k}: no such mutant`);
@@ -614,6 +745,15 @@ for (const [name, rows, edits] of MUT) {
         });
         test(`A7 revert ${name}: the kill assertion throws on the clean signal run`, { skip }, () => {
             assert.throws(() => assertSigKilled(name, sigClean()));
+        });
+        continue;
+    }
+    if (typeof rows === 'string' && rows !== IDENT) {
+        test(`A7 mutant ${name}: the CLI row ${rows} goes red (an assertion failure, not a crash)`, { skip }, () => {
+            withVariant(name, edits, (p) => assert.throws(() => CL_KILL[rows](p), (e) => e && e.code === 'ERR_ASSERTION'));
+        });
+        test(`A7 revert ${name}: the CLI row ${rows} stays green on the clean root`, { skip }, () => {
+            assert.doesNotThrow(() => CL_KILL[rows](SCRIPT));
         });
         continue;
     }

@@ -10,10 +10,11 @@
 // There: strict exit codes and every run-probes line. Any other node accepts only the row's non-fail-open codes:
 // must-differ {1, 2}, a 2 with no `shape-diff: ` die and no usage text (Q-B107-DIFF2 (a)) and >= 1 `<fn>: NO-VERDICT -- `
 // line, every one the UE-diff reason or the warm-up guard (Q-B107-DIFF3 (a), an allowlist: a crashed, unreadable,
-// D5, null-control or never-run child is no verdict); NO-VERDICT {1, 2}, a 2 naming the owner (S7: `<fn>: NO-VERDICT --
+// D5, null-control or never-run child is no verdict; nor is the UE `varied between run 1 and run N` noise, FILLERS 71
+// (a)); NO-VERDICT {1, 2} (S7 A/A: {2} only), a 2 with no die or usage text naming the owner (S7: `<fn>: NO-VERDICT --
 // before|after: no execution evidence` / `compiled`); SAME {0}, or {2} whose every NO-VERDICT reason is the warm-up guard;
-// never the fail-open code. Tool-format facts (0 TABs, --out files, CLI refusals, S1's log facts) are
-// strict on every node.
+// never the fail-open code. Every tier: exactly one `VERDICT <want>` line anywhere in the output (M13).
+// Tool-format facts (0 TABs, --out files, CLI refusals, S1's log facts) are strict on every node.
 // L1: TRACE_FLAGS parsed from the built root (`TRACE_FLAGS=(` one flag per line): exactly 7, incl. --no-sparkplug and
 // --no-node-snapshot (0 found is red; synthetic 6-flag / no-block controls are red in-row). L2: every
 // real/<major>/PROVENANCE.txt `flags=` equals L1's list, majors 22 / 24 / 26 / 27.
@@ -122,19 +123,26 @@ function countSub(text, sub) { return text.split('\n').filter((l) => l.includes(
 
 // Tier checks (Q-B103-LIVETIER (a)).
 const WARMUP = 'warm up more until optimizing compile';
+// M13 / FILLERS 71 (b116 C-B3): exactly ONE `VERDICT ` line anywhere in the output (not the last line only: a stderr line
+// glued after stdout breaks a last-line check benignly), and it names the wanted verdict.
+function assertVerdict(r, want, label) {
+    const v = r.out.split('\n').filter((l) => l.startsWith('VERDICT '));
+    assert.deepEqual(v, [`VERDICT ${want}`], `${label}: expected exactly one VERDICT ${want} line\n${r.out}`);
+}
 function sameCode(r, label, exact = EXACT) {
-    if (exact) { assert.equal(r.status, 0, `${label}: exit (exact tier)\n${r.out}`); return; }
-    if (r.status === 0) return;
+    if (exact) { assert.equal(r.status, 0, `${label}: exit (exact tier)\n${r.out}`); assertVerdict(r, 'SAME', label); return; }
+    if (r.status === 0) { assertVerdict(r, 'SAME', label); return; }
     assert.equal(r.status, 2, `${label}: SAME row accepts {0} or {2 warm-up only} on ${process.version}\n${r.out}`);
     const nv = r.out.split('\n').filter((l) => l.includes(': NO-VERDICT -- '));
     assert.ok(nv.length >= 1 && nv.every((l) => l.includes(WARMUP)), `${label}: exit 2 with a reason other than the warm-up guard\n${r.out}`);
     assert.ok(!r.out.includes('unattributed/external') && !r.out.includes('shape-diff: '), `${label}: exit 2 not from the warm-up guard\n${r.out}`);
     assert.ok(!r.out.includes(': DIFF -- '), `${label}: a DIFF hidden under a warm-up exit 2\n${r.out}`);
+    assertVerdict(r, 'NO-VERDICT', label);
 }
 function differCode(r, want, label, exact = EXACT) {
-    if (exact) { assert.equal(r.status, want, `${label}: exit (exact tier)\n${r.out}`); return; }
+    if (exact) { assert.equal(r.status, want, `${label}: exit (exact tier)\n${r.out}`); assertVerdict(r, want === 1 ? 'DIFF' : 'NO-VERDICT', label); return; }
     assert.ok(r.status === 1 || r.status === 2, `${label}: must-differ row accepts {1, 2} on ${process.version}, got ${r.status}\n${r.out}`);
-    if (r.status !== 2) return;
+    if (r.status === 1) { assertVerdict(r, 'DIFF', label); return; }
     // Q-B107-DIFF2 (a): a die or usage exit 2 is a refusal, not a verdict (includes, as sameCode: a stderr line glued to
     // stdout's last line still counts)
     assert.ok(!r.out.includes('shape-diff: '), `${label}: a shape-diff: die is not a must-differ verdict on ${process.version}\n${r.out}`);
@@ -142,10 +150,14 @@ function differCode(r, want, label, exact = EXACT) {
     // Q-B107-DIFF3 (a), allowlist (law 4): an exit 2 counts only when every per-fn NO-VERDICT reason is the UE diff or the
     // warm-up guard; driver exited / unreadable shape trace / elements kind unknown / null control / no execution
     // evidence (judge_side) are a child that did not measure, never a must-differ verdict
+    // FILLERS 71 (a) / Q-B110-F71: the UE-diff line whose detail is `unattributed/external instability varied between run 1 and
+    // run N` is run-to-run noise, not a measured difference
+    assert.ok(!r.out.includes('instability varied between run'), `${label}: UE run-to-run noise (varied between run 1 and run N) is not a must-differ verdict on ${process.version}\n${r.out}`);
     const nv = r.out.split('\n').filter((l) => l.includes(': NO-VERDICT -- '));
     assert.ok(nv.length >= 1, `${label}: exit 2 on a must-differ row needs >= 1 <fn>: NO-VERDICT line on ${process.version}\n${r.out}`);
     const bad = nv.filter((l) => !DIFF_NV_OK.some((re) => re.test(l)));
     assert.deepEqual(bad, [], `${label}: exit 2 on a must-differ row allows only the UE-diff or warm-up reason on ${process.version}\n${r.out}`);
+    assertVerdict(r, 'NO-VERDICT', label);
 }
 const DIFF_NV_OK = [
     /^  \S.*: NO-VERDICT -- attributed sites identical \(before [0-9]+ \| after [0-9]+\), but unattributed\/external shape instability differs:$/,
@@ -156,10 +168,19 @@ const DIFF_NV_OK = [
 function d2Owners(fn) {
     return ['before', 'after'].flatMap((side) => [`${fn}: NO-VERDICT -- ${side}: no execution evidence`, `${fn}: NO-VERDICT -- ${side}: compiled`]);
 }
-function noVerdictCode(r, owners, label, exact = EXACT) {
-    if (exact) { assert.equal(r.status, 2, `${label}: exit (exact tier)\n${r.out}`); return; }
-    assert.ok(r.status === 1 || r.status === 2, `${label}: NO-VERDICT row accepts {1, 2} on ${process.version}, got ${r.status}\n${r.out}`);
-    if (r.status === 2) assert.ok(owners.some((o) => r.out.includes(o)), `${label}: NO-VERDICT names none of ${owners.join(' / ')}\n${r.out}`);
+// allowDiff=false (S7, C1 d2): an A/A row has no DIFF to accept, exit 2 only.
+function noVerdictCode(r, owners, label, exact = EXACT, allowDiff = true) {
+    if (exact) { assert.equal(r.status, 2, `${label}: exit (exact tier)\n${r.out}`); assertDieFree(r, label); assertVerdict(r, 'NO-VERDICT', label); return; }
+    if (allowDiff) assert.ok(r.status === 1 || r.status === 2, `${label}: NO-VERDICT row accepts {1, 2} on ${process.version}, got ${r.status}\n${r.out}`);
+    else assert.equal(r.status, 2, `${label}: strict NO-VERDICT row accepts {2} only on ${process.version}, got ${r.status}\n${r.out}`);
+    if (r.status === 1) { assertVerdict(r, 'DIFF', label); return; }
+    assertDieFree(r, label);
+    assert.ok(owners.some((o) => r.out.includes(o)), `${label}: NO-VERDICT names none of ${owners.join(' / ')}\n${r.out}`);
+    assertVerdict(r, 'NO-VERDICT', label);
+}
+function assertDieFree(r, label) {
+    assert.ok(!r.out.includes('shape-diff: '), `${label}: a shape-diff: die is not a NO-VERDICT measurement on ${process.version}\n${r.out}`);
+    assert.ok(!r.out.includes('shape-diff.sh -- '), `${label}: usage text is not a NO-VERDICT measurement on ${process.version}\n${r.out}`);
 }
 function contains(r, sub, label) {
     if (!EXACT) return;
@@ -285,9 +306,9 @@ test(`S6 D1 builtin mutations: builtins-clean vs builtins-dirty -> NO-VERDICT na
 test(`S7 D2 compiled-but-uncalled -> NO-VERDICT (default lazy and --no-lazy) (${TIER})`, { skip }, () => {
     const u = driver('uncalled.mjs');
     const r1 = tool(['--fn', 'neverCalledParenFn', u, u], '--fn neverCalledParenFn uncalled A/A');
-    noVerdictCode(r1, d2Owners('neverCalledParenFn'), 'D2 neverCalledParenFn (default lazy) -> NO-VERDICT (rc 2)');
+    noVerdictCode(r1, d2Owners('neverCalledParenFn'), 'D2 neverCalledParenFn (default lazy) -> NO-VERDICT (rc 2)', EXACT, false);
     const r2 = tool(['--v8-flags', '--no-lazy', '--fn', 'neverCalledTop', u, u], '--v8-flags --no-lazy --fn neverCalledTop uncalled A/A');
-    noVerdictCode(r2, d2Owners('neverCalledTop'), 'D2 neverCalledTop (--no-lazy) -> NO-VERDICT (rc 2)');
+    noVerdictCode(r2, d2Owners('neverCalledTop'), 'D2 neverCalledTop (--no-lazy) -> NO-VERDICT (rc 2)', EXACT, false);
 });
 
 test(`S8 Array.prototype.push(1.5): 1 cold call = 0 lines vs 200 calls = 2 lines (${TIER})`, { skip }, () => {
@@ -518,14 +539,14 @@ test('C1 codes-only tier checkers: synthetic fail-open results throw, good resul
     const same = (r) => sameCode(r, 'C1 SAME', false);
     const differ = (r) => differCode(r, 1, 'C1 DIFF', false);
     const nv = (r) => noVerdictCode(r, ['user:del'], 'C1 NO-VERDICT', false);
-    const d2 = (r) => noVerdictCode(r, d2Owners('neverCalledTop'), 'C1 S7 NO-VERDICT', false);
+    const d2 = (r) => noVerdictCode(r, d2Owners('neverCalledTop'), 'C1 S7 NO-VERDICT', false, false);
     // good results pass
     same(R(0, '  mk: SAME -- identical\nVERDICT SAME\n'));
     same(R(2, WARM));
     differ(R(1, 'VERDICT DIFF\n'));
     differ(R(2, UE));
     differ(R(2, WARM));
-    differ(R(2, UE + WARM.split('mk').join('work')));
+    differ(R(2, UE.split('VERDICT NO-VERDICT\n').join('') + WARM.split('mk').join('work')));
     nv(R(2, UE));
     nv(R(1, 'VERDICT DIFF\n'));
     d2(R(2, "  neverCalledTop: NO-VERDICT -- before: no execution evidence for 'neverCalledTop' in run 1 (no such name or never called)\nVERDICT NO-VERDICT\n"));
@@ -534,9 +555,34 @@ test('C1 codes-only tier checkers: synthetic fail-open results throw, good resul
     assert.throws(() => differ(R(0, 'VERDICT SAME\n')), /must-differ row accepts \{1, 2\}/, 'exit 0 on a must-differ row');
     assert.throws(() => nv(R(0, 'VERDICT SAME\n')), /NO-VERDICT row accepts \{1, 2\}/, 'exit 0 on a NO-VERDICT row');
     assert.throws(() => same(R(2, DIE)), /exit 2 with a reason other than the warm-up guard/, 'a shape-diff: die on a SAME row');
-    assert.throws(() => nv(R(2, DIE)), /NO-VERDICT names none of user:del/, 'a shape-diff: die on a NO-VERDICT row');
+    assert.throws(() => nv(R(2, DIE)), /a shape-diff: die is not a NO-VERDICT measurement/, 'a shape-diff: die on a NO-VERDICT row');
+    assert.throws(() => nv(R(2, 'shape-diff: DRIVER_BEFORE not readable: /tmp/user:del/x.mjs\nVERDICT NO-VERDICT\n')), /a shape-diff: die is not a NO-VERDICT measurement/, 'a shape-diff: die naming the owner on a NO-VERDICT row');
     assert.throws(() => same(R(2, USAGE)), /exit 2 with a reason other than the warm-up guard/, 'a usage exit on a SAME row');
-    assert.throws(() => nv(R(2, USAGE)), /NO-VERDICT names none of user:del/, 'a usage exit on a NO-VERDICT row');
+    assert.throws(() => nv(R(2, USAGE)), /usage text is not a NO-VERDICT measurement/, 'a usage exit on a NO-VERDICT row');
+    assert.throws(() => same(R(2, WARM.split('VERDICT NO-VERDICT\n').join(''))), /expected exactly one VERDICT NO-VERDICT/, 'missing VERDICT on a warm-up exit 2 SAME row');
+    assert.throws(() => sameCode(R(0, ''), 'C1 SAME exact', true), /expected exactly one VERDICT SAME/, 'exact tier: empty output on exit 0 SAME');
+    assert.throws(() => differCode(R(1, ''), 1, 'C1 DIFF exact', true), /expected exactly one VERDICT DIFF/, 'exact tier: empty output on exit 1 DIFF');
+    assert.throws(() => noVerdictCode(R(2, DIE), ['user:del'], 'C1 NO-VERDICT exact', true), /a shape-diff: die is not a NO-VERDICT measurement/, 'exact tier: a die on a NO-VERDICT row');
+    assert.throws(() => noVerdictCode(R(2, USAGE), ['user:del'], 'C1 NO-VERDICT exact', true), /usage text is not a NO-VERDICT measurement/, 'exact tier: a usage exit on a NO-VERDICT row');
+    assert.throws(() => noVerdictCode(R(2, UE.split('VERDICT NO-VERDICT\n').join('')), ['user:del'], 'C1 NO-VERDICT exact', true), /expected exactly one VERDICT NO-VERDICT/, 'exact tier: missing VERDICT on a NO-VERDICT row');
+    // M13 / FILLERS 71 (b116 C-B3): VERDICT-line checks (any line, exactly one) and the two named teeth
+    assert.throws(() => same(R(0, '')), /expected exactly one VERDICT SAME/, 'empty output on exit 0 SAME');
+    assert.throws(() => same(R(0, 'VERDICT DIFF\n')), /expected exactly one VERDICT SAME/, 'wrong verdict word on exit 0 SAME');
+    assert.throws(() => same(R(0, 'VERDICT SAME\nVERDICT SAME\n')), /expected exactly one VERDICT SAME/, 'two VERDICT lines on exit 0 SAME');
+    assert.throws(() => same(R(0, 'VERDICT SAME\nstray\nVERDICT DIFF\n')), /expected exactly one VERDICT SAME/, 'a VERDICT line that is not last-only on SAME');
+    assert.throws(() => differ(R(1, '')), /expected exactly one VERDICT DIFF/, 'empty output on exit 1 DIFF');
+    assert.throws(() => nv(R(1, '')), /expected exactly one VERDICT DIFF/, 'empty output on exit 1 NO-VERDICT row');
+    assert.throws(() => nv(R(2, UE.split('VERDICT NO-VERDICT\n').join(''))), /expected exactly one VERDICT NO-VERDICT/, 'missing VERDICT on exit 2');
+    assert.throws(() => nv(R(2, UE + 'VERDICT NO-VERDICT\n')), /expected exactly one VERDICT NO-VERDICT/, 'two VERDICT lines on exit 2');
+    assert.throws(() => differ(R(2, UE.split('VERDICT NO-VERDICT\n').join('VERDICT DIFF\n'))), /expected exactly one VERDICT NO-VERDICT/, 'VERDICT DIFF on a must-differ exit 2');
+    assert.throws(() => d2(R(1, 'VERDICT DIFF\n')), /strict NO-VERDICT row accepts \{2\} only/, 'S7 A/A rejects exit 1 DIFF');
+    // FILLERS 71 (a): the UE-diff line with the run-to-run-noise detail is not a must-differ verdict
+    assert.throws(() => differ(R(2, UE.split('\nVERDICT').join('\n    before: unattributed/external instability varied between run 1 and run 2\nVERDICT'))), /UE run-to-run noise/, 'UE varied between run 1 and run N on a must-differ row');
+    assert.throws(() => differ(R(2, UE.split('\nVERDICT').join('\n    after: unattributed/external instability varied between run 1 and run 3\nVERDICT'))), /UE run-to-run noise/, 'UE varied (after, run 3) on a must-differ row');
+    // F71(b) / CM13: the UE regex start anchor (`^  \S.*`); an unindented or one-space line ending in the UE text is no UE reason
+    assert.throws(() => differ(R(2, UE.split('  mk: NO-VERDICT').join('mk: NO-VERDICT'))), /allows only the UE-diff or warm-up reason/, 'CM13: unindented UE-text reason line');
+    assert.throws(() => differ(R(2, UE.split('  mk: NO-VERDICT').join(' mk: NO-VERDICT'))), /allows only the UE-diff or warm-up reason/, 'CM13: one-space UE-text reason line');
+    assert.throws(() => differ(R(2, "  mk: NO-VERDICT -- before: driver exited 133 in run 1\n" + UE.split('  mk: NO-VERDICT').join('x: NO-VERDICT'))), /allows only the UE-diff or warm-up reason/, 'CM13: a non-UE reason beside an unanchored UE-text line');
     assert.throws(() => same(R(2, NULLC)), /exit 2 with a reason other than the warm-up guard/, 'a null-control reason on a SAME row');
     assert.throws(() => nv(R(2, NULLC)), /NO-VERDICT names none of user:del/, 'a null-control reason on a NO-VERDICT row');
     assert.throws(() => differ(R(2, DIE)), /a shape-diff: die is not a must-differ verdict/, 'a shape-diff: die on a must-differ row');
