@@ -12,7 +12,8 @@ minors item 2).
 1.1.2 RELEASED 2026-11-24 (17:09Z): commit 37efd97, tag v1.1.2, npm latest 1.1.2
 (b102; the 1.1.2 patch: G-A the allocation-diff --zero null control, Q-ADZ-NC (a); G-B alloc-per-op test rows;
 G-C the deopt-diff T11 SIGPIPE fix).
-1.2.0 shape-diff IN PROGRESS (b103 spec + plans; b104 first coder wave). Then the post-1.0 minors (section 3,
+1.2.0 shape-diff RELEASE PREPARED, NOT TAGGED (b121; b103 spec + plans, b104-b120 code / docs,
+b117 real-code pass). Then the post-1.0 minors (section 3,
 "Post-1.0 minors"; D-5) in the Q-M-ORDER2 (a) order: 1.3.0 code-size-diff next. The guard fix F-H1 is PARKED
 per Q-B103-FH1 (a) (2026-11-25): no F-H1 planner until a probe after 1.2.0 names the H3d mechanism (UNVERIFIED).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
@@ -233,7 +234,7 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      feb9210, docs 5173e8e.
      Items 3-7 follow Q-M-ORDER2 (a) (maintainer 2026-11-23); the 2026-11-12 order (import-audit first, shape-diff last)
      is history.
-  3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23; IN PROGRESS (b103 / b104).
+  3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23; PREPARED (b121; status line 15).
      Release blockers added 2026-11-26 (maintainer: "Yes, add to roadmap"), from the real-project pass on
      LiteSignal (b112, evidence .handoff/b112/real-signal/HANDBACK.md), fixed before 1.2.0 ships:
      - F1 (wrong verdict): it reports instability when one side builds an object literal with a property count

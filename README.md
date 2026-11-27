@@ -22,7 +22,7 @@ answer in its own trace output, but reading two traces by eye does not scale and
 flags, reduces the trace to a normalized multiset, compares it between two builds, and ends with a `VERDICT` line and
 an exit code. Anything it cannot establish is `NO-VERDICT` (exit 2), never a guess.
 
-Install (version 1.1.2), three ways:
+Install (version 1.2.0), three ways:
 
 ```bash
 # 1. from the npm registry
@@ -539,9 +539,9 @@ holds only for the build it was measured on.
 
 ## Testing
 
-`npm test` runs 4344 tests (node:test), 4329 pass / 0 fail / 15 skip in one local run (2026-11-24, node v26.8.2,
-macOS arm64, /bin/bash 3.2.57, 1687 s, host QUIET at start (load1 1.38 vs baseline 2.21); the 1.1.2 release gate,
-tree 52f3f2b + the 1.1.2 docs + the version bump; a measurement, not a guarantee).
+`npm test` runs 4699 tests (node:test), 4682 pass / 0 fail / 17 skip in one local run (2026-11-27, node v26.8.2,
+macOS arm64, /bin/bash 3.2.57, 1899 s, host QUIET at start (load1 2.91 vs baseline 2.34); the 1.2.0 release gate,
+tree d07f1d1 + the 1.2.0 release-step files, before this line was filled; a measurement, not a guarantee).
 
 Scripts: `npm test`, `npm run build` (regenerate the six bash roots from `src/` and `lib/`, and copy `alloc-per-op.mjs` from `src/`).
 

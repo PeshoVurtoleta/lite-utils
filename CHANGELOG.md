@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-27
+
+Minor release. Adds a seventh tool, `shape-diff` (a bash root, `bin: shape-diff`); the five other bash tools and
+`alloc-per-op` are unchanged. Zero runtime dependencies; node >= 22, bash >= 3.2.
+npm test (the b121 release gate): 4699 tests, 4682 pass, 0 fail, 17 skip (2026-11-27, node v26.8.2, /bin/bash 3.2.57,
+macOS arm64, host QUIET: load1 2.91 at start vs baseline 2.34, no other node >= 10% CPU at start or end; 1899 s; private
+copy with .git, quiet-lock; one run; tree d07f1d1 + the 1.2.0 release-step files (sha-pinned in the run log), before
+this count line and the README Testing line were edited).
+
 ### Added
 
 - shape-diff (`shape-diff.sh`, `bin: shape-diff`, the seventh tool and the sixth bash root): did the shape instability
