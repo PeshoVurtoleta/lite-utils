@@ -13,8 +13,13 @@
 #
 # Architectural note on promotion to src/code-size-diff.sh:
 #   The [PROTOTYPE SHIM] sections below match LiteUtils's real lib/*.sh fragment boundaries
-#   1:1 (`prologue.sh`, `msdiff.sh`, `common.sh`, `args.sh`, `v8flags.sh`, `nullctl.sh`) so
-#   promotion replaces shims with `# @include lib/<name>.sh` without altering any 1.0.0 lib file.
+#   (`prologue.sh`, `msdiff.sh`, `common.sh`, `args.sh`, `v8flags.sh`), EXCEPT null control
+#   (B2 / Q-CSD-NCTL): `lib/nullctl.sh` is a text macro hard-coding `for side in before after`,
+#   so single-driver modes (`--report`, `--max`, side `one`) keep a local null control rather
+#   than modifying any 1.0.0 lib file.
+
+unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS
+unset CDPATH
 
 # =============================================================================================
 # [PROTOTYPE SHIM] -- replaced by `# @include lib/prologue.sh`
@@ -33,7 +38,7 @@ SIG_PID=""
 DRV_RC=0
 TMP_DIR=""
 REPORT=""
-SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+SELF="$(cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
 trap 'rc=$?; if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then rm -rf -- "$TMP_DIR"; fi; if [[ -z "$FINAL" ]]; then set +e; [[ -n "$DIED" ]] || printf "code-size-diff: unexpected error (exit %s)\nVERDICT NO-VERDICT\n" "$rc" >&2; exit 2; fi' EXIT
 
 _sig() {
@@ -328,13 +333,16 @@ function loc_base(rest,   p, i, c) {
     if (substr(rest, 1, 1) == "/" || substr(rest, 1, 8) == "file:///") {
       lb = loc_base(rest)
       f = flist[i]
-      # Track distinct full definition locations per target fn (RECHECK Defect 1)
+      # Track distinct full definition locations per target fn (RECHECK Defect 1; M1b/M1c)
       dk = f SUBSEP rest
       if (!(dk in seen_def)) {
         seen_def[dk] = 1
         def_n[f]++
-        if (def_n[f] == 1) def_l1[f] = lb
-        else if (def_n[f] == 2) def_l2[f] = lb
+        if (def_n[f] == 1) { def_l1[f] = lb; def_r1[f] = rest }
+        else if (def_n[f] == 2) {
+          if (lb == def_l1[f]) { def_l1[f] = def_r1[f]; def_l2[f] = rest }
+          else def_l2[f] = lb
+        }
       }
       printf "C %s\t%s\t%s\t%d\t%s\t%s\n", f, mparts[1], bt, ($6 + 0), lb, mparts[3]
       break
@@ -501,7 +509,7 @@ run_side() { # side dir base k
   local -a LF
   if [[ -n "$OUT" ]]; then out="$rd/run.$4.out"; fi
   rd_esc=${rd//%/%%}
-  ( cd "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd_esc/run.log" "./$3" ) \
+  ( cd -- "$2" && exec "${PROBE_ENV[@]}" "$NODE_RES" ${V8_EXTRA[@]+"${V8_EXTRA[@]}"} "${TRACE_FLAGS[@]}" "--logfile=$rd_esc/run.log" "./$3" ) \
     >"$out" 2>&1 <&0 &
   drv_wait; rc=$DRV_RC
   RUN_RC=$rc; RUN_LOG=""; RUN_REC=""
@@ -686,6 +694,157 @@ EOF
   forged=0; case "$msg" in *"VERDICT SAME"*) forged=1 ;; esac
   check "D6: newline in missing DRIVER path refused before readability error (0 forged lines)" "$rc:$forged" "2:0"
 
+  # --- v4 self-test rows (A2, A3 M3b/M3c/M4b/M5, A4 M1b/M1c, A6 N7, A7, C1, C2, C5) ---
+  # Stub node that logs each invocation to $STUB_COUNT and writes canned --log-code logs.
+  local stub_dir="$ST_D/stub" stub_node="$ST_D/stub/node" stub_cnt="$ST_D/stub/spawns.log" stub_run="$ST_D/stub/run.idx"
+  mkdir -p "$stub_dir"
+  : >"$stub_cnt"
+  cat >"$stub_node" <<'STUBEOF'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >> "${CSD_STUB_LOG:?}"
+if [[ "${1:-}" == "-p" ]]; then
+  printf 'v26.8.2 darwin-arm64\n'
+  exit 0
+fi
+if [[ "${1:-}" == "--v8-options" ]]; then
+  printf '  --maglev (enable maglev)\n        type: bool  default: --maglev\n'
+  printf '  --turbolev (enable turbolev)\n        type: bool  default: --no-turbolev\n'
+  printf '  --turbolev-future (enable turbolev future)\n        type: bool  default: --no-turbolev-future\n'
+  exit 0
+fi
+lf=""
+for arg in "$@"; do
+  case "$arg" in --logfile=*) lf="${arg#--logfile=}" ;; esac
+done
+if [[ -n "$lf" ]]; then
+  d=$(dirname -- "$lf"); b=$(basename -- "$lf")
+  idx=0
+  if [[ -f "${CSD_STUB_RUN:-}" ]]; then idx=$(cat "$CSD_STUB_RUN"); fi
+  idx=$((idx + 1))
+  if [[ -n "${CSD_STUB_RUN:-}" ]]; then printf '%s\n' "$idx" > "$CSD_STUB_RUN"; fi
+  sz=824
+  if [[ "${CSD_STUB_DRIFT_RUN:-0}" == "$idx" ]]; then sz=999; fi
+  {
+    printf 'v8-version,14,6,202,34,-node.28,0\n'
+    printf 'v8-platform,macos,macos\n'
+    printf 'code-creation,Builtin,3,100,0x1000,64,StubA\n'
+    printf 'code-creation,JS,10,200,0x2000,38,hot file:///w/d.mjs:2:13,0x3000,~\n'
+    printf "code-creation,JS,12,300,0x2100,%s,hot file:///w/d.mjs:2:13,0x3000,+'" "$sz"; printf '\n'
+    printf "code-creation,JS,13,400,0x2200,596,hot file:///w/d.mjs:2:13,0x3000,*'\n"
+  } > "$d/isolate-0x7500000000-$$-$b"
+fi
+exit 0
+STUBEOF
+  chmod +x "$stub_node"
+  stub_spawns() { wc -l < "$stub_cnt" | tr -d ' '; }
+
+  # A2 (N2) + A3 (M3c): empty separate value AND empty --opt= refused with 0 spawns for EVERY value option
+  local opt a2_bad=0 m3c_bad=0
+  for opt in --fn --tiers --max --node-version --platform-arch --runs --node --v8-flags --out; do
+    : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" "$opt" "" "$dummy" 2>&1) || rc=$?
+    if [[ "$opt" == "--node" ]]; then
+      : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "" --report --fn hot "$dummy" 2>&1) || rc=$?
+    fi
+    [[ "$rc:$(stub_spawns):${msg%%$'\n'*}" == "2:0:code-size-diff: $opt must not be empty" ]] || a2_bad=$((a2_bad + 1))
+    : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" "${opt}=" "$dummy" 2>&1) || rc=$?
+    if [[ "$opt" == "--node" ]]; then
+      : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node= --report --fn hot "$dummy" 2>&1) || rc=$?
+    fi
+    [[ "$rc:$(stub_spawns):${msg%%$'\n'*}" == "2:0:code-size-diff: $opt must not be empty" ]] || m3c_bad=$((m3c_bad + 1))
+  done
+  check "A2/N2: empty separate '' refused (0 spawns) for all 9 value options" "$a2_bad" "0"
+  check "A3/M3c: empty --opt= refused (0 spawns) for all 9 value options" "$m3c_bad" "0"
+
+  # D5 gap (--max trailing comma, RECHECK2 s1)
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --max 'hot=100,' --node-version v26.8.2 --platform-arch darwin-arm64 "$dummy" 2>&1) || rc=$?
+  check "D5: --max 'hot=100,' trailing comma refused (0 spawns)" "$rc:$(stub_spawns):${msg%%$'\n'*}" "2:0:code-size-diff: --max must not have an empty entry"
+
+  # A3 M3b: duplicate --fn refused with 0 spawns
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --report --fn hot --fn hot "$dummy" 2>&1) || rc=$?
+  check "A3/M3b: duplicate --fn refused exit 2 with 0 spawns" "$rc:$(stub_spawns):${msg%%$'\n'*}" "2:0:code-size-diff: --fn given more than once"
+
+  # A3 M4b: resolved --out newline via symlink/.. walk refused BEFORE spawn and BEFORE mkdir (matches lib/common.sh nl_dir T5b)
+  local nl_out_tgt="$ST_D/nl"$'\n'"out/a/b" nl_lnk="$ST_D/s36"
+  mkdir -p "$nl_out_tgt"
+  ln -s "$nl_out_tgt" "$nl_lnk"
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --report --fn hot --out "$nl_lnk/../c" "$dummy" 2>&1) || rc=$?
+  local sub_made=0; [[ -e "$ST_D/nl"$'\n'"out/a/c" || -e "$ST_D/c" ]] && sub_made=1
+  check "A3/M4b: resolved --out newline via symlink/.. refused before spawn/mkdir" "$rc:$(stub_spawns):$sub_made:${msg%%$'\n'*}" \
+    "2:0:0:code-size-diff: --out (resolved): a newline or a CR is not allowed (it would forge report lines)"
+
+  # A3 M5: default 3-run null control end-to-end (run 3 drifts while run 1 == run 2 -> NO-VERDICT)
+  : >"$stub_cnt"; rm -f "$stub_run"; rc=0
+  msg=$(CSD_STUB_LOG="$stub_cnt" CSD_STUB_RUN="$stub_run" CSD_STUB_DRIFT_RUN=3 /bin/bash "$SELF" --node "$stub_node" --report --fn hot "$dummy" 2>&1) || rc=$?
+  local m5_hit=0; case "$msg" in *"null control: run 3 differs from run 1"*) m5_hit=1 ;; esac
+  check "A3/M5: default 3-run null control catches run 3 drift end-to-end" "$rc:$m5_hit" "2:1"
+
+  # A4 M1b: two index.mjs in different directories -> ambiguous NO-VERDICT (kills basename-only keying)
+  local AMBIG_IDX AMBIG_IDX_REC
+  AMBIG_IDX="$H"$'\n''code-creation,JS,12,98600,0x114c09680,824,hot file:///w/dir1/index.mjs:3:13,0x29a78805a970,+'$SQ
+  AMBIG_IDX="$AMBIG_IDX"$'\n''code-creation,JS,12,98700,0x114c09b40,1144,hot file:///w/dir2/index.mjs:3:13,0x29a78805a990,+'$SQ
+  AMBIG_IDX_REC=$(printf '%s\n' "$AMBIG_IDX" | awk -v fns=hot "$CODESIZE_AWK")
+  JRC=(0 0); JLOG=("" ""); JREC=("$AMBIG_IDX_REC" "$AMBIG_IDX_REC")
+  judge_side hot "turbo,maglev" "$msdir" ambig_idx
+  check "A4/M1b: two index.mjs in different dirs -> NO-VERDICT (ambiguous)" "$JV:${JWHY%% (*}" \
+    "NO-VERDICT:ambiguous function name 'hot' in run 1: compiled at 2 definition locations"
+
+  # A4 M1c: two nested hot functions in one file -> ambiguous NO-VERDICT (kills :line:col stripping)
+  local AMBIG_NEST AMBIG_NEST_REC
+  AMBIG_NEST="$H"$'\n''code-creation,JS,12,98600,0x114c09680,824,hot file:///w/same.mjs:3:13,0x29a78805a970,+'$SQ
+  AMBIG_NEST="$AMBIG_NEST"$'\n''code-creation,JS,12,98700,0x114c09b40,1144,hot file:///w/same.mjs:11:13,0x29a78805a990,+'$SQ
+  AMBIG_NEST_REC=$(printf '%s\n' "$AMBIG_NEST" | awk -v fns=hot "$CODESIZE_AWK")
+  JRC=(0 0); JLOG=("" ""); JREC=("$AMBIG_NEST_REC" "$AMBIG_NEST_REC")
+  judge_side hot "turbo,maglev" "$msdir" ambig_nest
+  check "A4/M1c: two nested hot in one file -> NO-VERDICT (ambiguous)" "$JV:${JWHY%% (*}" \
+    "NO-VERDICT:ambiguous function name 'hot' in run 1: compiled at 2 definition locations"
+
+  # A6 (N7): --turbolev exact-name refusal runs BEFORE node -p spawn (0 spawns, law 3)
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --v8-flags "--turbolev" --report --fn hot "$dummy" 2>&1) || rc=$?
+  local tl_hit=0; case "$msg" in *"Turbolev logs identical"*) tl_hit=1 ;; esac
+  check "A6/N7: --turbolev refused exit 2 BEFORE any node spawn (0 spawns)" "$rc:$(stub_spawns):$tl_hit" "2:0:1"
+
+  # C1 (SD-neon-5): --out SYMLINK/ and --out SYMLINK/. refused exit 2 with 0 spawns
+  local real_out="$ST_D/real_out" sym_out="$ST_D/sym_out" real_out2="$ST_D/real_out2" sym_out2="$ST_D/sym_out2"
+  mkdir -p "$real_out" "$real_out2"
+  ln -s "$real_out" "$sym_out"
+  ln -s "$real_out2" "$sym_out2"
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --report --fn hot --out "$sym_out/" "$dummy" 2>&1) || rc=$?
+  local sym_hit=0; case "$msg" in *"is a symlink (refused)"*) sym_hit=1 ;; esac
+  check "C1/SD-neon-5: --out SYMLINK/ refused exit 2 with 0 spawns" "$rc:$(stub_spawns):$sym_hit" "2:0:1"
+  : >"$stub_cnt"; rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --report --fn hot --out "$sym_out2/." "$dummy" 2>&1) || rc=$?
+  sym_hit=0; case "$msg" in *"is a symlink (refused)"*) sym_hit=1 ;; esac
+  check "C1/SD-neon-5: --out SYMLINK/. refused exit 2 with 0 spawns" "$rc:$(stub_spawns):$sym_hit" "2:0:1"
+
+  # C2 (SD-neon-6): driver in a directory named '-' runs cleanly (no cd - OLDPWD trap)
+  local dash_work="$ST_D/dash_work"
+  mkdir -p "$dash_work/-"
+  printf '1;\n' > "$dash_work/-/d.mjs"
+  : >"$stub_cnt"; rm -f "$stub_run"; rc=0
+  msg=$(cd "$dash_work" && OLDPWD=/nonexistent_csd_oldpwd CSD_STUB_LOG="$stub_cnt" CSD_STUB_RUN="$stub_run" /bin/bash "$SELF" --node "$stub_node" --runs 2 --report --fn hot -- -/d.mjs 2>&1) || rc=$?
+  local dash_ok=0; case "$msg" in *"VERDICT OK"*) dash_ok=1 ;; esac
+  check "C2/SD-neon-6: driver in '-' dir runs cleanly (VERDICT OK, rc 0)" "$rc:$dash_ok" "0:1"
+  : >"$stub_cnt"; rm -f "$stub_run"; rc=0; msg=$(cd "$dash_work" && OLDPWD=/nonexistent_csd_oldpwd CSD_STUB_LOG="$stub_cnt" CSD_STUB_RUN="$stub_run" /bin/bash "$SELF" --node "$stub_node" --runs 2 --fn hot -- -/d.mjs -/d.mjs 2>&1) || rc=$?; dash_ok=0; case "$msg" in *"VERDICT SAME"*) dash_ok=1 ;; esac; check "C2/SD-neon-6: diff mode, both drivers in '-' dir -> SAME rc 0" "$rc:$dash_ok" "0:1"
+
+  # C5 (SD-neon-8): unknown option did-you-mean hint + -h documents trace flags
+  rc=0; msg=$(/bin/bash "$SELF" --outt /tmp/x "$dummy" 2>&1) || rc=$?
+  local h1=0; case "$msg" in *"(did you mean --out?)"*) h1=1 ;; esac
+  check "C5: unknown --outt prints did-you-mean --out hint" "$rc:$h1" "2:1"
+  rc=0; msg=$(/bin/bash "$SELF" --zzz "$dummy" 2>&1) || rc=$?
+  local h2=0; case "$msg" in *"did you mean"*) h2=1 ;; esac
+  check "C5: unknown --zzz prints no hint" "$rc:$h2" "2:0"
+  rc=0; msg=$(/bin/bash "$SELF" -h 2>&1) || rc=$?
+  local hh=0
+  case "$msg" in *"--log-code"*"--no-concurrent-sparkplug"*"--turbolev"*) hh=1 ;; esac
+  check "C5: -h documents trace flags and Turbolev refusal (exit 2)" "$rc:$hh" "2:1"
+
+  # A7: stub-node exit-2 checks assert reason lines (platform-arch mismatch, --inspect allowlist)
+  rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --max hot=1000 --node-version v26.8.2 --platform-arch linux-x64 "$dummy" 2>&1) || rc=$?
+  local pa_hit=0; case "$msg" in *"platform-arch mismatch: got darwin-arm64, want linux-x64"*) pa_hit=1 ;; esac
+  check "A7: --platform-arch mismatch asserts reason text" "$rc:$pa_hit" "2:1"
+  rc=0; msg=$(CSD_STUB_LOG="$stub_cnt" /bin/bash "$SELF" --node "$stub_node" --v8-flags "--inspect" --report --fn hot "$dummy" 2>&1) || rc=$?
+  local ins_hit=0; case "$msg" in *"--v8-flags must not set --inspect:"*) ins_hit=1 ;; esac
+  check "A7: --inspect refusal asserts reason text" "$rc:$ins_hit" "2:1"
+
   echo
   if [[ $fails -eq 0 ]]; then
     echo "self-test: $oks check(s) ok"
@@ -710,22 +869,37 @@ Usage:
   code-size-diff.prototype.sh --self-test
 
 Options:
-  --fn LIST                comma-separated short function names (e.g. get,get\ value)
-  --tiers LIST             subset of turbo,maglev,sparkplug,ignition (default: turbo,maglev)
-  --report                 single-driver mode: print sizes and exit 0 OK / 2 NO-VERDICT
-  --max fn=N[,fn=N]        gate mode: fail (exit 1 OVER) if max selected-tier size > N
+  --fn LIST                comma-separated short function names (e.g. get,get\ value); empty/duplicate/trailing comma refused
+  --tiers LIST             subset of turbo,maglev,sparkplug,ignition (default: turbo,maglev); empty/duplicate/trailing comma refused
+  --report                 single-driver mode: print sizes and exit 0 OK / 2 NO-VERDICT (mutually exclusive with --max)
+  --max fn=N[,fn=N]        gate mode: fail (exit 1 OVER) if max selected-tier size > N (mutually exclusive with --report/--fn)
   --node-version vX.Y.Z    required with --max (optional elsewhere); exact `node --version` match
   --platform-arch OS-ARCH  required with --max (optional elsewhere); exact `process.platform + "-" + process.arch`
                            match (e.g. darwin-arm64, linux-x64). Mismatch -> exit 2 NO-VERDICT.
-  --runs N                 runs per side, 2..20 (default: 3)
-  --node BIN               node binary (default: $NODE or node)
-  --v8-flags STR           extra V8 tuning flags (validated against `node --v8-options` allowlist)
-  --out DIR                keep DIR/report.txt and DIR/raw/<side>/run.<k>.{log,out}
-  --self-test              run canned checks + CLI refusal checks (exit 0 / 1)
+  --runs N                 runs per side, 2..20 (default: 3); run 1 vs runs 2..N is the null control
+  --node BIN               node binary (default: $NODE or node), resolved once to an absolute path
+  --v8-flags STR           extra V8 tuning flags; traces run with --log-code --no-concurrent-recompilation
+                           --no-concurrent-sparkplug --no-node-snapshot. Validated against `node --v8-options`
+                           allowlist (bool --flag / --no-flag, numeric --flag=N; log/trace/print/prof/dump/
+                           snapshot/file/string flags, node options, *concurrent-recompilation* / *concurrent-sparkplug* / *stress-concurrent-inlining*, and --turbolev /
+                           --turbolev-future refused exit 2; --turbolev refused before any node spawn).
+  --out DIR                keep DIR/report.txt and DIR/raw/<side>/run.<k>.{log,out}; symlinks (incl. trailing
+                           / or /.), hard-linked report.txt, non-empty DIR/raw, input collisions, and NL/CR
+                           paths (raw or resolved) are refused exit 2 before any spawn or write
+  --self-test              run canned + stub-node + CLI refusal checks (exit 0 / 1); takes no other argument
   -h, --help               this text (exit 2)
+
+Verdict:
+  0 SAME / OK / WITHIN     identical code-size multiset in selected tiers (diff), or all targets OK / <= max
+  1 DIFF / OVER            multiset differs for >= 1 target (diff), or max selected-tier size > N (gate)
+  2 NO-VERDICT             refusal, unreadable/unknown log record (X), ambiguous target fn (>1 location, A),
+                           null-control drift, missing compile evidence, version/arch mismatch, or default-on Turbolev
 EOF
   DIED=1; exit 2
 }
+
+OPTS="--fn --tiers --report --max --node-version --platform-arch --runs --node --v8-flags --out --self-test --help"
+hint() { local o; for o in $OPTS; do if [[ "$o" == "$1"* || "$1" == "$o"* ]]; then printf ' (did you mean %s?)' "$o"; return 0; fi; done; }
 
 MODE="diff"
 SEEN_REPORT=0; SEEN_MAX=0; SEEN_FN=0; SEEN_TIERS=0; SEEN_VER=0; SEEN_PA=0
@@ -753,19 +927,19 @@ while [[ $# -gt 0 ]]; do
   nl_refuse "option name" "$a"
   case "$a" in
     -h|--help) usage ;;
-    --self-test) [[ $# -eq 1 && ${#POS[@]} -eq 0 && $SEEN_FN -eq 0 && $SEEN_MAX -eq 0 && $SEEN_REPORT -eq 0 ]] || die "--self-test takes no other argument"; self_test ;;
+    --self-test) [[ $# -eq 1 && ${#POS[@]} -eq 0 && $SEEN_REPORT$SEEN_MAX$SEEN_FN$SEEN_TIERS$SEEN_VER$SEEN_PA$SEEN_RUNS$SEEN_NODE$SEEN_V8$SEEN_OUT == 0000000000 ]] || die "--self-test takes no other argument"; self_test ;;
     --report) [[ $SEEN_REPORT -eq 0 ]] || die "--report given more than once"; SEEN_REPORT=1; shift ;;
-    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; FNLIST="$v"; shift ;;
-    --tiers) [[ $SEEN_TIERS -eq 0 ]] || die "--tiers given more than once"; SEEN_TIERS=1; need "$@" || shift; TIERS="$v"; shift ;;
-    --max) [[ $SEEN_MAX -eq 0 ]] || die "--max given more than once"; SEEN_MAX=1; need "$@" || shift; MAXSPEC="$v"; shift ;;
-    --node-version) [[ $SEEN_VER -eq 0 ]] || die "--node-version given more than once"; SEEN_VER=1; need "$@" || shift; WANT_VER="$v"; shift ;;
-    --platform-arch) [[ $SEEN_PA -eq 0 ]] || die "--platform-arch given more than once"; SEEN_PA=1; need "$@" || shift; WANT_PA="$v"; shift ;;
-    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; RUNS="$v"; shift ;;
-    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; NODE_BIN="$v"; shift ;;
-    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; V8FLAGS="$v"; shift ;;
-    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; OUT="$v"; shift ;;
+    --fn) [[ $SEEN_FN -eq 0 ]] || die "--fn given more than once"; SEEN_FN=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; FNLIST="$v"; shift ;;
+    --tiers) [[ $SEEN_TIERS -eq 0 ]] || die "--tiers given more than once"; SEEN_TIERS=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; TIERS="$v"; shift ;;
+    --max) [[ $SEEN_MAX -eq 0 ]] || die "--max given more than once"; SEEN_MAX=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; MAXSPEC="$v"; shift ;;
+    --node-version) [[ $SEEN_VER -eq 0 ]] || die "--node-version given more than once"; SEEN_VER=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; WANT_VER="$v"; shift ;;
+    --platform-arch) [[ $SEEN_PA -eq 0 ]] || die "--platform-arch given more than once"; SEEN_PA=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; WANT_PA="$v"; shift ;;
+    --runs) [[ $SEEN_RUNS -eq 0 ]] || die "--runs given more than once"; SEEN_RUNS=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; RUNS="$v"; shift ;;
+    --node) [[ $SEEN_NODE -eq 0 ]] || die "--node given more than once"; SEEN_NODE=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; NODE_BIN="$v"; shift ;;
+    --v8-flags) [[ $SEEN_V8 -eq 0 ]] || die "--v8-flags given more than once"; SEEN_V8=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; V8FLAGS="$v"; shift ;;
+    --out) [[ $SEEN_OUT -eq 0 ]] || die "--out given more than once"; SEEN_OUT=1; need "$@" || shift; [[ -n "$v" ]] || die "$a must not be empty"; OUT="$v"; shift ;;
     --) shift; while [[ $# -gt 0 ]]; do POS+=("$1"); shift; done ;;
-    -*) die "unknown option: $a (see --help)" ;;
+    -*) die "unknown option: $a$(hint "$a") (see --help)" ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -870,12 +1044,15 @@ if [[ $SEEN_V8 -eq 1 ]]; then
         die "--v8-flags must not set $f: conflicts with synchronous compilation flags" ;;
       --require*|--import*|--loader*|--experimental-loader*|--env-file*|--experimental-config-file*|--experimental-default-config-file*|--eval*|--print*)
         die "--v8-flags must not set $f: node preload/eval/print flag is refused" ;;
+      --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)
+        die "--v8-flags must not set $f: Turbolev logs identical *' markers to TurboFan in --log-code" ;;
     esac
   done
 fi
 
-# --out validation BEFORE any spawn or write (LEDGER law 3)
+# --out validation BEFORE any spawn or write (LEDGER law 3; C1 SD-neon-5 trailing / and /. strip)
 if [[ -n "$OUT" ]]; then
+  while :; do case "$OUT" in ?*/) OUT=${OUT%/} ;; ?*/.) OUT=${OUT%/.} ;; *) break ;; esac; done
   [[ "$OUT" != -* ]] || OUT="./$OUT"
   [[ ! -L "$OUT" ]] || die "--out: $OUT is a symlink (refused)"
   [[ ! -e "$OUT" || -d "$OUT" ]] || die "--out: $OUT exists and is not a directory"
@@ -911,15 +1088,18 @@ NODE_RES=$NODE_C
 nl_refuse "--node (resolved)" "$NODE_RES"
 [[ "$NODE_RES" != *=* ]] || die "node binary: an = is not allowed in the resolved path: $NODE_RES"
 
-# Resolve driver paths & refuse resolved newline/CR BEFORE first spawn (LEDGER law 3)
+# Resolve driver paths & refuse resolved newline/CR BEFORE first spawn (LEDGER law 3; C2 SD-neon-6 '-' dir)
 if [[ "$MODE" == "diff" ]]; then
-  DRV_B_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_B_BASE=$(basename -- "${POS[0]}")
-  DRV_A_DIR=$(cd -- "$(dirname -- "${POS[1]}")" && pwd); DRV_A_BASE=$(basename -- "${POS[1]}")
+  DRV_B_DIR=$(dirname -- "${POS[0]}"); [[ "$DRV_B_DIR" != - ]] || DRV_B_DIR=./-
+  DRV_B_DIR=$(cd -- "$DRV_B_DIR" 2>/dev/null && pwd) || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"; DRV_B_BASE=$(basename -- "${POS[0]}")
+  DRV_A_DIR=$(dirname -- "${POS[1]}"); [[ "$DRV_A_DIR" != - ]] || DRV_A_DIR=./-
+  DRV_A_DIR=$(cd -- "$DRV_A_DIR" 2>/dev/null && pwd) || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"; DRV_A_BASE=$(basename -- "${POS[1]}")
   [[ "$DRV_B_DIR/$DRV_B_BASE" -ef "${POS[0]}" ]] || die "DRIVER_BEFORE: cannot resolve directory of ${POS[0]}"
   [[ "$DRV_A_DIR/$DRV_A_BASE" -ef "${POS[1]}" ]] || die "DRIVER_AFTER: cannot resolve directory of ${POS[1]}"
   nl_refuse "DRIVER (resolved)" "$DRV_B_DIR/$DRV_B_BASE" "$DRV_A_DIR/$DRV_A_BASE"
 else
-  DRV_DIR=$(cd -- "$(dirname -- "${POS[0]}")" && pwd); DRV_BASE=$(basename -- "${POS[0]}")
+  DRV_DIR=$(dirname -- "${POS[0]}"); [[ "$DRV_DIR" != - ]] || DRV_DIR=./-
+  DRV_DIR=$(cd -- "$DRV_DIR" 2>/dev/null && pwd) || die "DRIVER: cannot resolve directory of ${POS[0]}"; DRV_BASE=$(basename -- "${POS[0]}")
   [[ "$DRV_DIR/$DRV_BASE" -ef "${POS[0]}" ]] || die "DRIVER: cannot resolve directory of ${POS[0]}"
   nl_refuse "DRIVER (resolved)" "$DRV_DIR/$DRV_BASE"
 fi
@@ -939,14 +1119,7 @@ fi
 # Verbatim lib/v8flags.sh runtime allowlist (LEDGER law 4)
 v8fl_check "$NODE_RES"
 
-# Local Turbolev exact-name refusal + default-on check (Q-CSD-TLLIB (a); LEDGER #107 G5c)
-for f in ${V8_EXTRA[@]+"${V8_EXTRA[@]}"}; do
-  g=${f//_/-}
-  case "$g" in
-    --turbolev|--turbolev=*|--turbolev-future|--turbolev-future=*)
-      die "--v8-flags must not set $f: Turbolev logs identical *' markers to TurboFan in --log-code" ;;
-  esac
-done
+# Local Turbolev default-on check (Q-CSD-TLLIB (a); LEDGER #107 G5c; exact-name refusal already ran pre-spawn per A6/N7)
 TL_RAW=$("${PROBE_ENV[@]}" "$NODE_RES" --v8-options 2>/dev/null) || die "cannot run $NODE_RES --v8-options"
 TL_STATE=$(printf '%s\n' "$TL_RAW" | awk "$TURBOLEV_AWK")
 case "$TL_STATE" in
