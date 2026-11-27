@@ -314,6 +314,18 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
 - L6 suite-wide runner: run the shipped bash tools over every package's drivers; store the
   REPORTED tables as a per-package baseline.
+- L7 Turbolev default-on readiness (maintainer 2026-11-27: "Yes, add"; a watch item, not a minor). Turbolev = the
+  Maglev graph builder feeding the Turboshaft backend in place of TurboFan's frontend. REPORTED (2026-11-27, untimed,
+  `--v8-options` only): `--turbolev` / `--turbolev-future` default off and `--turboshaft` default on in v26.8.2 and
+  v27.0.0-alpha.0.1.0, so today's "turbo" tier results already come through the Turboshaft backend; Turboshaft phase
+  defaults move between nodes (e.g. `--turboshaft-trusted-load-elimination` off in v26.8.2, on in v27-alpha).
+  Exposure when a node turns Turbolev on by default: inlining-budget-diff refuses every tier (NO-VERDICT by design,
+  Q-RL-TURBO / Q-B62-TL: `--trace-maglev-inlining` would describe TurboFan-tier units); code-size-diff's draft refuses
+  the same way (Q-CSD-TL). Other tools: UNVERIFIED (deopt-diff tier markers, ic-diff, shape-diff, bytecode-budget).
+  Research input when it is picked up: run each tool with `--turbolev` on today's nodes in a private dir (which inlining
+  trace describes a Turbolev compile, what code-kind / tier marker its code objects carry, whether deopt reasons and
+  `--log-code` records change), and state per tool what a Turbolev mode would need. First signal: the CI node-latest leg
+  (a default flip there turns ibd's live rows NO-VERDICT).
 
 ## 4. Known drift to fix
 
