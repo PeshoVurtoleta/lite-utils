@@ -1,0 +1,34 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "--only-fn narrows verdict to target compile unit",
+  "kind": "same",
+  "claim": "inlining-budget-diff -h: --only-fn narrows verdict to lines naming --fn or made while compiling --fn -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--tiers",
+    "turbo",
+    "--only-fn",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "m0 (--only-fn):",
+        "SAME",
+        "identical multiset"
+      ]
+    ]
+  }
+}

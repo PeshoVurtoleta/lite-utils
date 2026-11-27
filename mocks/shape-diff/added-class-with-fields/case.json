@@ -1,0 +1,37 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "added non-target class with fields reads NO-VERDICT (1.2.0 #146 T-2 / R10)",
+  "kind": "limit",
+  "claim": "shape-diff README (#146 T-2): an added non-target class with fields adds a CopyAddDescriptor MAP_REPLACE line -> NO-VERDICT",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT"
+      ],
+      [
+        "UNATTR",
+        "MAP_REPLACE"
+      ],
+      [
+        "UNATTR",
+        "MAP_REPLACE",
+        "CopyAddDescriptor"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "lane returning a value is refused (AP-G1)",
+  "kind": "guard",
+  "claim": "alloc-per-op -h: a lane that returns a value is refused -> NO-VERDICT",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--max",
+    "4",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      {
+        "stream": "stderr",
+        "all": [
+          "alloc-per-op:",
+          "returned a value"
+        ]
+      }
+    ]
+  }
+}

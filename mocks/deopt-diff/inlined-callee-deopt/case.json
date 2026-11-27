@@ -1,0 +1,35 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "deopt inside inlined callee charged to caller (DD-C5)",
+  "kind": "change",
+  "claim": "deopt-diff -h: a deopt of an inlined callee counts for the caller named on the bailout line -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "outer",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "outer:",
+        "DIFF"
+      ],
+      [
+        "before=0 after=1",
+        "[outer@",
+        "deopt-eager (not a Smi)"
+      ]
+    ]
+  }
+}

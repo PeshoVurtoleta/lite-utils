@@ -1,0 +1,33 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "dropped non-escaping allocation elided by V8 reads PASS (AP-L1)",
+  "kind": "limit",
+  "claim": "alloc-per-op -h: known limit -- a dropped allocation may be elided by V8 and read 0 B/op -> PASS",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--max",
+    "1",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "PASS",
+    "text": [
+      [
+        "elided",
+        "PASS"
+      ]
+    ]
+  }
+}

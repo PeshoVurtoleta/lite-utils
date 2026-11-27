@@ -1,0 +1,35 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "existing eager deopt removed (DD-C2)",
+  "kind": "change",
+  "claim": "deopt-diff -h: removing a deopt record in after -> DIFF naming reason",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "add:",
+        "DIFF"
+      ],
+      [
+        "before=1 after=0",
+        "[add@",
+        "deopt-eager (not a Smi)"
+      ]
+    ]
+  }
+}

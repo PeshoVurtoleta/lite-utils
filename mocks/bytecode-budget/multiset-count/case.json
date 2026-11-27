@@ -1,0 +1,30 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "same-name function count changed (BB-C3)",
+  "kind": "change",
+  "claim": "bytecode-budget -h: compared as a multiset, one read -> two read is DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "read",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "read:",
+        "DIFF",
+        "length multiset differs"
+      ]
+    ]
+  }
+}

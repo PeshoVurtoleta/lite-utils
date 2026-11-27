@@ -1,0 +1,57 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "same-named target function across two modules (11.A A8 / SD-neon-3 / M3)",
+  "kind": "guard",
+  "claim": "shape-diff README (M3): a --fn name defined at >1 location (same-named fn at another path) -> NO-VERDICT ambiguous",
+  "files": {
+    "before": {
+      "src": "before.mjs",
+      "dir": "b",
+      "name": "driver.mjs"
+    },
+    "after": {
+      "src": "after.mjs",
+      "dir": "a",
+      "name": "driver.mjs"
+    },
+    "b_modA": {
+      "src": "modA-dirty.mjs",
+      "dir": "b",
+      "name": "modA.mjs"
+    },
+    "b_modB": {
+      "src": "modB-clean.mjs",
+      "dir": "b",
+      "name": "modB.mjs"
+    },
+    "a_modA": {
+      "src": "modA-clean.mjs",
+      "dir": "a",
+      "name": "modA.mjs"
+    },
+    "a_modB": {
+      "src": "modB-dirty.mjs",
+      "dir": "a",
+      "name": "modB.mjs"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "hot",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "hot:",
+        "NO-VERDICT",
+        "ambiguous target function"
+      ]
+    ]
+  }
+}

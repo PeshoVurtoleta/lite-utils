@@ -1,0 +1,28 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "single cold Array.prototype.push(1.5) blind spot (SD-L1)",
+  "kind": "limit",
+  "claim": "shape-diff -h: known limit -- a single cold call to Array.prototype.push(1.5) emits 0 trace lines -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ]
+  }
+}

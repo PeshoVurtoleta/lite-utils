@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "comment-only edit shifts line numbers (SD-S1)",
+  "kind": "same",
+  "claim": "shape-diff -h: identical attributed shape-instability multiset despite shifted source lines -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ],
+    "forbid": [
+      "before 0 | after 0"
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "deopt reason changes from Smi check to out-of-bounds (DD-C3)",
+  "kind": "change",
+  "claim": "deopt-diff -h: deopt reason is part of the multiset key -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "hot",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "hot:",
+        "DIFF"
+      ],
+      [
+        "before=1 after=0",
+        "[hot@",
+        "(not a Smi)"
+      ],
+      [
+        "before=0 after=1",
+        "[hot@",
+        "(out of bounds)"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "same-named target function defined twice in one file (SD-G2)",
+  "kind": "guard",
+  "claim": "shape-diff README (M3): target --fn name defined at >1 location in a run -> NO-VERDICT ambiguous target function",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT",
+        "ambiguous target function"
+      ]
+    ]
+  }
+}

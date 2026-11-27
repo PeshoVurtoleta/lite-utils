@@ -1,0 +1,25 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "--zero gate passes clean Smi-only Int32Array window as ZERO (AD-C3)",
+  "kind": "change",
+  "claim": "allocation-diff -h: --zero with no young GC in the window in any run -> ZERO",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "ZERO",
+    "text": [
+      [
+        "ZERO",
+        "no young GC in the window"
+      ]
+    ]
+  }
+}

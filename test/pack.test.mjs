@@ -61,7 +61,7 @@ const WANT_FILES = ['CHANGELOG.md', 'LICENSE', 'README.md', 'alloc-per-op.mjs', 
 const FILES_FIELD = ['alloc-per-op.mjs', 'allocation-diff.sh', 'bytecode-budget.sh', 'deopt-diff.sh', 'ic-diff.sh',
     'inlining-budget-diff.sh', 'shape-diff.sh', 'README.md', 'LICENSE', 'CHANGELOG.md', 'llms.txt'];
 const DECOYS = ['stray.sh', '.handoff/x', 'audit/x', 'src/x.sh', 'lib/x.sh', 'test/x.mjs', 'build.sh', 'LEDGER.md', 'ROADMAP.md',
-    'src/alloc-per-op.mjs', 'stray.mjs', 'research/alloc-probe/x.mjs'];
+    'src/alloc-per-op.mjs', 'stray.mjs', 'research/alloc-probe/x.mjs', 'mocks/run.mjs'];
 const WANT_BIN = {
     'alloc-per-op': 'alloc-per-op.mjs', 'allocation-diff': 'allocation-diff.sh', 'bytecode-budget': 'bytecode-budget.sh',
     'deopt-diff': 'deopt-diff.sh', 'ic-diff': 'ic-diff.sh', 'inlining-budget-diff': 'inlining-budget-diff.sh',

@@ -1,0 +1,33 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "boxing lane exceeds --max gate (AP-C1)",
+  "kind": "change",
+  "claim": "alloc-per-op -h: peak B/op above --max + hi -> FAIL",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--max",
+    "4",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "FAIL",
+    "text": [
+      [
+        "box",
+        "FAIL"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "constructor map deprecation across instances (SD-C5)",
+  "kind": "change",
+  "claim": "shape-diff -h: constructor field Smi -> Double across instances deprecates map / generalizes field -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "Point",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "Point:",
+        "DIFF"
+      ],
+      [
+        "GEN"
+      ]
+    ]
+  }
+}

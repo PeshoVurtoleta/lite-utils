@@ -1,0 +1,30 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "target name collides with node-internal compiled function (BB-G2)",
+  "kind": "guard",
+  "claim": "bytecode-budget -h: function name compiled by node itself cannot be distinguished -> NO-VERDICT",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "SyncWriteStream",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "SyncWriteStream:",
+        "NO-VERDICT",
+        "node itself compiles"
+      ]
+    ]
+  }
+}

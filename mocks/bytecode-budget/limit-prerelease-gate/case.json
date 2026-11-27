@@ -1,0 +1,31 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "gate",
+  "class": "prerelease --node-version refused in gate mode (BB-L1)",
+  "kind": "limit",
+  "claim": "bytecode-budget -h: release versions only; a prerelease --node-version is refused with exit 2",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--max",
+    "add=500",
+    "--node-version",
+    "v26.8.2-alpha.0",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      {
+        "stream": "stderr",
+        "all": [
+          "bytecode-budget:",
+          "prerelease"
+        ]
+      }
+    ]
+  }
+}

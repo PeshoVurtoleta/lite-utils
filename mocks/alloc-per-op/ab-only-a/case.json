@@ -1,0 +1,40 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apoab",
+  "class": "A/B lane present only in bench A (AP-C5 / RISK-3)",
+  "kind": "change",
+  "claim": "alloc-per-op -h: lane present only in A prints ONLY-A row and exits 1 (top-level A/B summary DIFF)",
+  "files": {
+    "a": {
+      "src": "bench-a.mjs",
+      "dir": "a",
+      "name": "bench.mjs"
+    },
+    "b": {
+      "src": "bench-b.mjs",
+      "dir": "b",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--tol",
+    "2",
+    "{a}",
+    "{b}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "x",
+        "ONLY-A"
+      ]
+    ]
+  }
+}

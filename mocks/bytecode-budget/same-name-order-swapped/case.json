@@ -1,0 +1,29 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "order of two same-name functions swapped (BB-S3)",
+  "kind": "same",
+  "claim": "bytecode-budget -h: lengths are compared as an order-free multiset -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "read",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "read:",
+        "SAME"
+      ]
+    ]
+  }
+}

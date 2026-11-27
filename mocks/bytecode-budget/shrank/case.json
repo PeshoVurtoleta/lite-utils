@@ -1,0 +1,30 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "function bytecode shrank (BB-C2)",
+  "kind": "change",
+  "claim": "bytecode-budget -h: length multiset differs when function shrinks -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "add:",
+        "DIFF",
+        "length multiset differs"
+      ]
+    ]
+  }
+}

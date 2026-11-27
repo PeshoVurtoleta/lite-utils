@@ -1,0 +1,29 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "unrelated helper grows while target unchanged (BB-S2)",
+  "kind": "same",
+  "claim": "bytecode-budget -h: only named --fn functions enter the verdict -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "null control catches run-to-run instability (SD-G3)",
+  "kind": "guard",
+  "claim": "shape-diff -h: run 1 vs runs 2..N of the same side must match, else null-control NO-VERDICT",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--runs",
+    "3",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT",
+        "null control"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "Worker thread creates second isolate map log (SD-G4)",
+  "kind": "guard",
+  "claim": "shape-diff src/shape-diff.sh: a Worker writes a second isolate map log -> NO-VERDICT another isolate or process logged",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT",
+        "another isolate or process logged"
+      ]
+    ]
+  }
+}

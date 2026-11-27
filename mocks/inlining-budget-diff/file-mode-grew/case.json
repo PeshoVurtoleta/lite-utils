@@ -1,0 +1,54 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "frozen-file mode (--before/--after --driver importing ./Signal.js) (11.A A8)",
+  "kind": "change",
+  "claim": "inlining-budget-diff -h: file mode stages frozen --before/--after beside --driver importing ./Signal.js -> DIFF",
+  "files": {
+    "before": {
+      "src": "sig-before.js",
+      "dir": "frz-b",
+      "name": "Signal.js"
+    },
+    "after": {
+      "src": "sig-after.js",
+      "dir": "frz-a",
+      "name": "Signal.js"
+    },
+    "driver": {
+      "src": "driver.mjs",
+      "dir": "drv",
+      "name": "run.mjs"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--tiers",
+    "turbo",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "--driver",
+    "{driver}",
+    "--before",
+    "{before}",
+    "--after",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "guard ok:",
+        "m0"
+      ],
+      [
+        "before=",
+        "Inlining 0x",
+        "SharedFunctionInfo g>"
+      ]
+    ]
+  }
+}

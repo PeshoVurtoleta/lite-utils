@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "MapCreate literal-map cache single-hit drop (SD-S4 / b112 F1)",
+  "kind": "same",
+  "claim": "shape-diff -h (C-21): a reason-MapCreate line with 1 hit in a run is not counted -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ],
+    "forbid": [
+      "MAP_REPLACE"
+    ]
+  }
+}

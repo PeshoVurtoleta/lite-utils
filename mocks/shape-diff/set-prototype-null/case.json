@@ -1,0 +1,33 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "Object.setPrototypeOf(o, null) in target (11.A A8 / SD-neon-1)",
+  "kind": "limit",
+  "claim": "shape-diff README (C-21 M1 + Owner): Object.setPrototypeOf runs in Builtin:ObjectSetPrototypeOf (MAP_REPLACE in UM), upgrading SAME to NO-VERDICT naming the builtin",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT"
+      ],
+      [
+        "UNATTR",
+        "MAP_REPLACE",
+        "Builtin:ObjectSetPrototypeOf"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "--v8-flags lowered max-inlined-bytecode-size separates tiny vs medium callee (IB-C4)",
+  "kind": "change",
+  "claim": "inlining-budget-diff -h: --v8-flags tuning applies to both sides and gates inlining decisions -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--tiers",
+    "turbo",
+    "--v8-flags",
+    "--max-inlined-bytecode-size=40",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "guard ok:",
+        "m0"
+      ],
+      [
+        "before=",
+        "Cannot consider",
+        "SharedFunctionInfo g>"
+      ]
+    ]
+  }
+}

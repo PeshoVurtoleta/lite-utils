@@ -1,0 +1,29 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "rename local variable and add comments (BB-S1)",
+  "kind": "same",
+  "claim": "bytecode-budget -h: identical bytecode lengths after renaming local / comments -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME"
+      ]
+    ]
+  }
+}

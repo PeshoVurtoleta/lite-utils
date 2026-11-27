@@ -1,0 +1,39 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "identical driver under different filename (SD-S3)",
+  "kind": "same",
+  "claim": "shape-diff src/shape-diff.sh: owner tags strip paths so byte-identical renamed drivers read SAME",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b",
+      "name": "driver.mjs"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a",
+      "name": "renamed.mjs"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ],
+    "forbid": [
+      "before 0 | after 0"
+    ]
+  }
+}

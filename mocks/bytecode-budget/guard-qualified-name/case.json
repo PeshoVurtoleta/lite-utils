@@ -1,0 +1,33 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "qualified dotted name refused in --fn (BB-G3)",
+  "kind": "guard",
+  "claim": "bytecode-budget -h: qualified function name (Store.read) refused with exit 2",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "Store.read",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      {
+        "stream": "stderr",
+        "all": [
+          "bytecode-budget:",
+          "fn must be a short V8 function name",
+          "got 'Store.read'"
+        ]
+      }
+    ]
+  }
+}

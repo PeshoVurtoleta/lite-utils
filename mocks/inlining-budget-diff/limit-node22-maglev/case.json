@@ -1,0 +1,46 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "Node 22 default tiers lack Maglev inlining trace (IB-L1)",
+  "kind": "limit",
+  "claim": "inlining-budget-diff README: default tiers on node 22 read NO-VERDICT for maglev; use --tiers turbo on 22",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "guard ok:",
+        "m0"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "guard ok:",
+          "m0"
+        ],
+        [
+          "=== maglev: NO-VERDICT",
+          "no inlining decisions at all",
+          "does not run Maglev by default"
+        ]
+      ]
+    }
+  }
+}

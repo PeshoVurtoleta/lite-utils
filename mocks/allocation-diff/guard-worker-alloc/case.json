@@ -1,0 +1,25 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "Worker thread GC lines missed by main-thread guard (AD-G2)",
+  "kind": "guard",
+  "claim": "allocation-diff -h: Worker GC lines appear in trace but not guard count -> NO-VERDICT the guard did not count",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "NO-VERDICT",
+        "the guard did not count"
+      ]
+    ]
+  }
+}

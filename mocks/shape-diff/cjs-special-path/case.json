@@ -1,0 +1,37 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "CommonJS driver under a dash-named directory (11.A A8 / SD-neon-6 / C-B1 M9)",
+  "kind": "same",
+  "claim": "shape-diff README (C-B1): a driver under a directory named \"-\" resolves as ./-/... and runs normally -> SAME",
+  "files": {
+    "before": {
+      "src": "program.cjs",
+      "dir": "-",
+      "name": "driver.cjs"
+    },
+    "after": {
+      "src": "program.cjs",
+      "dir": "after",
+      "name": "driver.cjs"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "--",
+    "-/driver.cjs",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ]
+  }
+}

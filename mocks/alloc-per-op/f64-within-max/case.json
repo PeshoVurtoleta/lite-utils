@@ -1,0 +1,33 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "zero-alloc Float64Array lane passes --max gate (AP-C2)",
+  "kind": "change",
+  "claim": "alloc-per-op -h: peak B/op + lo <= --max -> PASS",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--max",
+    "1",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "PASS",
+    "text": [
+      [
+        "f64",
+        "PASS"
+      ]
+    ]
+  }
+}

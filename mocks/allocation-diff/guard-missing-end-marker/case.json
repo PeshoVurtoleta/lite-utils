@@ -1,0 +1,25 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "missing @@LITE-MARK end marker triggers guard (AD-G1)",
+  "kind": "guard",
+  "claim": "allocation-diff -h: missing @@LITE-MARK end marker -> NO-VERDICT",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "NO-VERDICT",
+        "@@LITE-MARK gcn before @@LITE-MARK end"
+      ]
+    ]
+  }
+}

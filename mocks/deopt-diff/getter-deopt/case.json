@@ -1,0 +1,35 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "two-word getter name (--fn \"get value\") deopt detected",
+  "kind": "change",
+  "claim": "deopt-diff -h: supports two-word accessor names like \"get value\" -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get value",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "get value:",
+        "DIFF"
+      ],
+      [
+        "before=0 after=1",
+        "[get value@",
+        "deopt-eager (out of bounds)"
+      ]
+    ]
+  }
+}

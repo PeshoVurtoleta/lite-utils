@@ -1,0 +1,39 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "REPORTED tier-section op marker spacing differs -> SAME (DD-S2)",
+  "kind": "same",
+  "claim": "deopt-diff -h: tier section is REPORTED only and never moves the verdict -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME",
+        "before 0 | after 0"
+      ],
+      [
+        "tier    add  before  ops until",
+        "after op 2, before op 3"
+      ],
+      [
+        "tier    add  after  ops until",
+        "after op 20, before op 30"
+      ]
+    ]
+  }
+}

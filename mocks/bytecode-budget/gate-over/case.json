@@ -1,0 +1,43 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "gate",
+  "class": "gate --max exceeded (BB-C4 / A1 wide limit)",
+  "kind": "change",
+  "claim": "bytecode-budget -h: length > max -> OVER (prerelease node refused with exit 2)",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--max",
+    "add=1",
+    "--node-version",
+    "{node_ver}",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "OVER",
+    "text": [
+      [
+        "add:",
+        "OVER",
+        "> max 1"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "27": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        {
+          "stream": "stderr",
+          "all": [
+            "bytecode-budget:",
+            "prerelease"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "clean monomorphic optimized pair reads SAME",
+  "kind": "same",
+  "claim": "deopt-diff -h: optimized target with 0 deopts on both sides -> SAME",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME",
+        "before 0 | after 0"
+      ]
+    ]
+  }
+}

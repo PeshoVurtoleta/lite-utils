@@ -1,0 +1,30 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "diff",
+  "class": "escaping object allocation added in window (AD-C1)",
+  "kind": "change",
+  "claim": "allocation-diff -h: young-GC multiset in the marked window differs -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "DIFF --",
+        "young-GC multiset in the window differs"
+      ],
+      [
+        "before=",
+        "after="
+      ]
+    ]
+  }
+}

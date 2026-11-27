@@ -1,0 +1,23 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "runner teeth: deliberately wrong expectation must trip DIFF",
+  "kind": "teeth",
+  "claim": "PROPOSAL section 5: runner teeth control verifies a real DIFF is caught when SAME is expected",
+  "teeth_got": "DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME"
+  }
+}

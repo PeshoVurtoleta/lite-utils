@@ -1,0 +1,30 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "async lane function is refused (AP-G2)",
+  "kind": "guard",
+  "claim": "alloc-per-op -h: an async lane is refused because lanes must be plain synchronous functions -> NO-VERDICT",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--max",
+    "4",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      {
+        "stream": "stderr",
+        "all": [
+          "alloc-per-op:",
+          "plain synchronous function"
+        ]
+      }
+    ]
+  }
+}

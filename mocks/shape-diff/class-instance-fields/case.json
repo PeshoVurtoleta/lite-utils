@@ -1,0 +1,29 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "targeting --fn <Class> with instance fields reads NO-VERDICT (1.2.0 #146 T-1 / R10)",
+  "kind": "limit",
+  "claim": "shape-diff README (#146 T-1): --fn <Class> on a class with instance or static fields reads NO-VERDICT ambiguous target function",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "Box",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "Box:",
+        "NO-VERDICT",
+        "ambiguous target function"
+      ]
+    ]
+  }
+}

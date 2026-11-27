@@ -1,0 +1,35 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "lazy deopt triggered while optimized caller is on stack (DD-C6)",
+  "kind": "change",
+  "claim": "deopt-diff -h: lazy deopt record differs between before and after -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "lazyFn",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "lazyFn:",
+        "DIFF"
+      ],
+      [
+        "before=0 after=1",
+        "[lazyFn@",
+        "deopt-lazy ("
+      ]
+    ]
+  }
+}

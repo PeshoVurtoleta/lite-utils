@@ -1,0 +1,43 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apoab",
+  "class": "A/A identical boxing lanes with non-zero peak B/op (11.A A7)",
+  "kind": "aa",
+  "claim": "PROPOSAL 11.A A7: A/A twin compares two identical non-zero boxing lanes (never 0 | 0) -> SAME",
+  "files": {
+    "a": {
+      "src": "bench.mjs",
+      "dir": "a",
+      "name": "bench.mjs"
+    },
+    "b": {
+      "src": "bench.mjs",
+      "dir": "b",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--tol",
+    "4",
+    "{a}",
+    "{b}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "box",
+        "SAME"
+      ]
+    ],
+    "forbid": [
+      "0.0000      0.0000"
+    ]
+  }
+}

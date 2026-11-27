@@ -1,0 +1,32 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "normal monomorphic field add gated by --include-transitions (SD-C7 flag)",
+  "kind": "change",
+  "claim": "shape-diff -h: --include-transitions diffs normal monomorphic Transition/InitialMap sites (MAP_TRANSITION) -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--include-transitions",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "mk:",
+        "DIFF"
+      ],
+      [
+        "MAP_TRANSITION"
+      ]
+    ]
+  }
+}

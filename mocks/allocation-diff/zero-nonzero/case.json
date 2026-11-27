@@ -1,0 +1,25 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "--zero gate flags allocating window as NONZERO (AD-C2)",
+  "kind": "change",
+  "claim": "allocation-diff -h: --zero with young GC in the window in every run -> NONZERO",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NONZERO",
+    "text": [
+      [
+        "NONZERO --",
+        "young GC(s) in the window"
+      ]
+    ]
+  }
+}

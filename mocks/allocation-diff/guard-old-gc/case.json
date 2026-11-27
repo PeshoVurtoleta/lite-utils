@@ -1,0 +1,36 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "old-generation GC inside window fails closed (AD-G3)",
+  "kind": "guard",
+  "claim": "allocation-diff -h: old-generation GC in the window empties young space -> NO-VERDICT",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "NO-VERDICT",
+        "old-generation GC in the window"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "unknown GC kind 'Scavenge (interleaved)'"
+        ]
+      ]
+    }
+  }
+}

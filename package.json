@@ -28,7 +28,8 @@
   ],
   "scripts": {
     "test": "node --test --test-timeout=7200000 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/death-reporter.mjs --test-reporter-destination=stderr 'test/*.test.mjs'",
-    "build": "bash build.sh"
+    "build": "bash build.sh",
+    "mocks": "node mocks/run.mjs"
   },
   "engines": {
     "node": ">=22"

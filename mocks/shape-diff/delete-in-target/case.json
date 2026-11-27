@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "dictionary mode via delete of non-last property (SD-C2)",
+  "kind": "change",
+  "claim": "shape-diff -h: target map normalization (delete non-last prop -> MAP_NORMALIZE) -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "mk:",
+        "DIFF"
+      ],
+      [
+        "MAP_NORMALIZE"
+      ]
+    ]
+  }
+}

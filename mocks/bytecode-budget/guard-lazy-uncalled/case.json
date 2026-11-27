@@ -1,0 +1,30 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "lazy uncalled function never compiled (BB-G1)",
+  "kind": "guard",
+  "claim": "bytecode-budget -h: a function never compiled (lazy) reads NO-VERDICT",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "add:",
+        "NO-VERDICT",
+        "no function named 'add' in run 1"
+      ]
+    ]
+  }
+}

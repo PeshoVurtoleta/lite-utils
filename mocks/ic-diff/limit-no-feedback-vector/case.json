@@ -1,0 +1,49 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "too few calls without --no-lazy-feedback-allocation logs no LoadIC (IC-L2)",
+  "kind": "limit",
+  "claim": "ic-diff -h: a LoadIC site in a fn with no feedback vector logs no line -> NO-VERDICT",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "get:",
+        "NO-VERDICT",
+        "no IC site"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    }
+  }
+}

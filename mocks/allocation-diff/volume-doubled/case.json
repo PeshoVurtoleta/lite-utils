@@ -1,0 +1,30 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "diff",
+  "class": "young allocation volume doubled inside window (AD-C4)",
+  "kind": "change",
+  "claim": "allocation-diff -h: differing young-GC counts between before and after -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "DIFF --",
+        "young-GC multiset in the window differs"
+      ],
+      [
+        "before=",
+        "after="
+      ]
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "gate",
+  "class": "gate --max satisfied (BB-C5 / A1 wide limit)",
+  "kind": "change",
+  "claim": "bytecode-budget -h: every length <= max -> WITHIN (prerelease node refused with exit 2)",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--max",
+    "add=500",
+    "--node-version",
+    "{node_ver}",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "WITHIN",
+    "text": [
+      [
+        "add:",
+        "WITHIN",
+        "<= max 500"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "27": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        {
+          "stream": "stderr",
+          "all": [
+            "bytecode-budget:",
+            "prerelease"
+          ]
+        }
+      ]
+    }
+  }
+}

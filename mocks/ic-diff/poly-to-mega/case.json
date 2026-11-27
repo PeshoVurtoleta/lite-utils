@@ -1,0 +1,68 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "LoadIC polymorphic -> megamorphic (IC-C2)",
+  "kind": "change",
+  "claim": "ic-diff -h: polymorphic (P) -> megamorphic (N) is DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get",
+    "--v8-flags",
+    "--no-lazy-feedback-allocation",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "get:",
+        "DIFF"
+      ],
+      [
+        "before=1 after=0",
+        "get\tLoadIC\tx\tP"
+      ],
+      [
+        "before=0 after=1",
+        "get\tLoadIC\tx\tN"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "27": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "get:",
+          "NO-VERDICT",
+          "IC state outside X01P^NDG"
+        ]
+      ]
+    }
+  }
+}

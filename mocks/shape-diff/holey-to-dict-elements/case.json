@@ -1,0 +1,33 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "HOLEY -> DICTIONARY_ELEMENTS sparse index store (SD-C4)",
+  "kind": "change",
+  "claim": "shape-diff -h: transition to DICTIONARY_ELEMENTS (MAP_ELEM_DICT) differs -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "mk:",
+        "DIFF"
+      ],
+      [
+        "mk",
+        "MAP_ELEM_DICT",
+        "DICTIONARY_ELEMENTS"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apoab",
+  "class": "A/B identical zero-alloc benches read SAME (AP-C4)",
+  "kind": "same",
+  "claim": "alloc-per-op -h: identical benches within --tol -> SAME",
+  "files": {
+    "a": {
+      "src": "bench.mjs",
+      "dir": "a",
+      "name": "bench.mjs"
+    },
+    "b": {
+      "src": "bench.mjs",
+      "dir": "b",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "1000000",
+    "--windows",
+    "3",
+    "--warm",
+    "100000",
+    "--tol",
+    "2",
+    "{a}",
+    "{b}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "f64",
+        "SAME"
+      ]
+    ]
+  }
+}

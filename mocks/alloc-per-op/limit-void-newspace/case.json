@@ -1,0 +1,36 @@
+{
+  "tool": "alloc-per-op.mjs",
+  "mode": "apogate",
+  "class": "lane exceeding new space per sub-window triggers VOID NO-VERDICT (AP-L2)",
+  "kind": "limit",
+  "claim": "alloc-per-op -h: a GC inside a sub-window VOIDs it -> NO VERDICT, never FAIL",
+  "files": {
+    "bench": {
+      "src": "bench.mjs",
+      "name": "bench.mjs"
+    }
+  },
+  "argv": [
+    "--n",
+    "100000",
+    "--windows",
+    "3",
+    "--warm",
+    "10000",
+    "--sub",
+    "10000",
+    "--max",
+    "4",
+    "{bench}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "big",
+        "NO VERDICT",
+        "(VOID)"
+      ]
+    ]
+  }
+}

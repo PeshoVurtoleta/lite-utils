@@ -1,0 +1,58 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "LoadIC monomorphic -> polymorphic (IC-C1)",
+  "kind": "change",
+  "claim": "ic-diff -h: per-fn multiset of final IC states; 1 -> P is DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get",
+    "--v8-flags",
+    "--no-lazy-feedback-allocation",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "get:",
+        "DIFF"
+      ],
+      [
+        "before=1 after=0",
+        "get\tLoadIC\tx\t1"
+      ],
+      [
+        "before=0 after=1",
+        "get\tLoadIC\tx\tP"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    }
+  }
+}

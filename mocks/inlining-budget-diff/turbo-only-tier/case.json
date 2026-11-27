@@ -1,0 +1,37 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "--tiers turbo compares TurboFan inlining across Node 22-27",
+  "kind": "change",
+  "claim": "inlining-budget-diff -h: --tiers turbo diffs TurboFan inlining decisions on node >= 22 -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--tiers",
+    "turbo",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "guard ok:",
+        "m0"
+      ],
+      [
+        "before=",
+        "Inlining 0x",
+        "SharedFunctionInfo g>"
+      ]
+    ]
+  }
+}

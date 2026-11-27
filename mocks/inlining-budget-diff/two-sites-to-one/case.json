@@ -1,0 +1,56 @@
+{
+  "tool": "inlining-budget-diff.sh",
+  "mode": "diff",
+  "class": "callee inlined at 2 sites -> 1 site multiset diff (IB-C3)",
+  "kind": "change",
+  "claim": "inlining-budget-diff -h: compared as a multiset, inlined at 2 sites -> 1 site is DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "m0",
+    "--out",
+    "{out}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "guard ok:",
+        "m0"
+      ],
+      [
+        "before=",
+        "Inlining 0x",
+        "SharedFunctionInfo g>"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "guard ok:",
+          "m0"
+        ],
+        [
+          "before=",
+          "Inlining 0x",
+          "SharedFunctionInfo g>"
+        ],
+        [
+          "=== maglev: NO-VERDICT",
+          "no inlining decisions at all",
+          "does not run Maglev by default"
+        ]
+      ]
+    }
+  }
+}

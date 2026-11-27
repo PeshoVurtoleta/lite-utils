@@ -1,0 +1,29 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "target function never called (SD-G1)",
+  "kind": "guard",
+  "claim": "shape-diff -h: missing execution evidence for target function -> NO-VERDICT",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT",
+        "no execution evidence for 'mk'"
+      ]
+    ]
+  }
+}

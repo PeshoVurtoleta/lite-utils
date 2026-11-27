@@ -1,0 +1,63 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "A/A identical monomorphic driver with non-zero IC evidence",
+  "kind": "aa",
+  "claim": "ic-diff -h: byte-identical drivers read SAME with matching non-zero IC site count",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get",
+    "--v8-flags",
+    "--no-lazy-feedback-allocation",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "get:",
+        "SAME",
+        "site(s)"
+      ],
+      [
+        "(before 1 | after 1 site(s))"
+      ]
+    ],
+    "forbid": [
+      "before 0 | after 0"
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "elements kind PACKED_SMI -> HOLEY_SMI (11.A A8)",
+  "kind": "change",
+  "claim": "shape-diff -h: attributed elements-kind transition (PACKED_SMI -> HOLEY_SMI, ELEM) -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "mk:",
+        "DIFF"
+      ],
+      [
+        "ELEM"
+      ]
+    ]
+  }
+}

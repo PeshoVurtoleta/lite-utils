@@ -1,0 +1,53 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "comments and shifted line numbers normalized (IC-S1)",
+  "kind": "same",
+  "claim": "ic-diff -h: line:col is not part of the verdict key so shifted code reads SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "get",
+    "--v8-flags",
+    "--no-lazy-feedback-allocation",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "get:",
+        "SAME"
+      ],
+      [
+        "(before 1 | after 1 site(s))"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    }
+  }
+}

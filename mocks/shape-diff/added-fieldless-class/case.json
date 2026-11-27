@@ -1,0 +1,31 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "added non-target field-less class stays SAME (1.2.0 C-21 / R10)",
+  "kind": "same",
+  "claim": "shape-diff README (#146 / C-21): an added non-target field-less class reads SAME via the MapCreate single-hit rule",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ],
+    "forbid": [
+      "MAP_REPLACE"
+    ]
+  }
+}

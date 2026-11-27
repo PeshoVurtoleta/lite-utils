@@ -1,0 +1,49 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "frozen-file mode (--before/--after --driver) function grew (11.A A8)",
+  "kind": "change",
+  "claim": "bytecode-budget -h: file mode stages frozen --before and --after modules beside --driver -> DIFF",
+  "files": {
+    "before": {
+      "src": "mod-before.mjs",
+      "dir": "frz-b",
+      "name": "mod.mjs"
+    },
+    "after": {
+      "src": "mod-after.mjs",
+      "dir": "frz-a",
+      "name": "mod.mjs"
+    },
+    "driver": {
+      "src": "driver.mjs",
+      "dir": "drv",
+      "name": "run.mjs"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "--out",
+    "{out}",
+    "--driver",
+    "{driver}",
+    "--before",
+    "{before}",
+    "--after",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "add:",
+        "DIFF",
+        "length multiset differs"
+      ]
+    ]
+  }
+}

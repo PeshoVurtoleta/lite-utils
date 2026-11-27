@@ -1,0 +1,35 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "diff",
+  "class": "A/A identical allocating driver with non-zero Scavenges (AD-S1 + A7)",
+  "kind": "aa",
+  "claim": "allocation-diff -h: byte-identical allocating drivers read SAME with matching non-zero young GCs",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "SAME",
+        "identical young-GC multiset"
+      ]
+    ],
+    "forbid": [
+      "before 0 | after 0"
+    ]
+  }
+}

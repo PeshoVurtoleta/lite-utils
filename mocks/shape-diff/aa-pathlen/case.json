@@ -1,0 +1,38 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "A/A same bytes in short vs long directory (SD-S2)",
+  "kind": "aa",
+  "claim": "shape-diff ROADMAP: identical driver in short vs long path reads SAME with non-zero site evidence",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a-very-long-directory-name-for-path-length-invariance-control-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME",
+        "site(s)"
+      ]
+    ],
+    "forbid": [
+      "before 0 | after 0"
+    ]
+  }
+}

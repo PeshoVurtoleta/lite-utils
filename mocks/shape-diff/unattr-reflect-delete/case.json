@@ -1,0 +1,32 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "external instability via Reflect.deleteProperty upgrades SAME to NO-VERDICT (SD-L2)",
+  "kind": "limit",
+  "claim": "shape-diff -h: unattributed/external instability (Reflect.deleteProperty) changed while attributed sites SAME -> NO-VERDICT",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "mk:",
+        "NO-VERDICT"
+      ],
+      [
+        "UNATTR",
+        "MAP_NORMALIZE"
+      ]
+    ]
+  }
+}

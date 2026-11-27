@@ -1,0 +1,37 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "A/A identical deopting driver with non-zero deopt evidence (DD-S1)",
+  "kind": "aa",
+  "claim": "deopt-diff -h: identical deopting drivers read SAME with matching non-zero deopt count",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME",
+        "before 1 | after 1"
+      ]
+    ]
+  }
+}

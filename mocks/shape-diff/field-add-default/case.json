@@ -1,0 +1,28 @@
+{
+  "tool": "shape-diff.sh",
+  "mode": "diff",
+  "class": "normal monomorphic field add ignored in default mode (SD-C7 default)",
+  "kind": "same",
+  "claim": "shape-diff README: normal monomorphic Transition / InitialMap counts are REPORTED by default -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "mk",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "mk:",
+        "SAME"
+      ]
+    ]
+  }
+}

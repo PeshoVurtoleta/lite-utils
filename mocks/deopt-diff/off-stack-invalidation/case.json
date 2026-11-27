@@ -1,0 +1,31 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "dependency invalidation while function is off-stack is not a deopt record (DD-S3)",
+  "kind": "limit",
+  "claim": "deopt-diff -h: dependency invalidation off-stack ([marking dependent code], no bailout line) is not a deopt record -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "offFn",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "offFn:",
+        "SAME",
+        "before 0 | after 0"
+      ]
+    ]
+  }
+}

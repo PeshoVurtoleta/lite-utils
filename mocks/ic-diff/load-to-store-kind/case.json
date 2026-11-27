@@ -1,0 +1,53 @@
+{
+  "tool": "ic-diff.sh",
+  "mode": "diff",
+  "class": "IC kind changed from LoadIC to StoreIC (IC-C5)",
+  "kind": "change",
+  "claim": "ic-diff -h: IC kind (LoadIC vs StoreIC) is part of the verdict key -> DIFF",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "touch",
+    "--v8-flags",
+    "--no-lazy-feedback-allocation",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "touch:",
+        "DIFF"
+      ],
+      [
+        "StoreIC"
+      ]
+    ]
+  },
+  "expect_by_major": {
+    "22": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "NO-VERDICT",
+      "text": [
+        [
+          "NO-VERDICT",
+          "code kind outside the allowlist"
+        ]
+      ]
+    }
+  }
+}

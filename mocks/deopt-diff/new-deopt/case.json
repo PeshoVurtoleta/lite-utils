@@ -1,0 +1,35 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "new eager deopt introduced (DD-C1)",
+  "kind": "change",
+  "claim": "deopt-diff -h: a new deopt record in after only -> DIFF naming reason",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "DIFF",
+    "text": [
+      [
+        "add:",
+        "DIFF"
+      ],
+      [
+        "before=0 after=1",
+        "[add@",
+        "deopt-eager (not a Smi)"
+      ]
+    ]
+  }
+}

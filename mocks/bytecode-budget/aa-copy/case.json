@@ -1,0 +1,39 @@
+{
+  "tool": "bytecode-budget.sh",
+  "mode": "diff",
+  "class": "A/A identical bytes with non-zero bytecode length",
+  "kind": "aa",
+  "claim": "bytecode-budget -h: byte-identical drivers read SAME with identical non-zero length multiset",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--diff",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "add:",
+        "SAME",
+        "identical length multiset"
+      ]
+    ],
+    "forbid": [
+      "(0 | 0)"
+    ]
+  }
+}

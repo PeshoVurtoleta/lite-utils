@@ -1,0 +1,26 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "diff",
+  "class": "allocations below 1 MB semi-space stay invisible (AD-S2)",
+  "kind": "limit",
+  "claim": "allocation-diff -h: ZERO / 0 young GC means < 1 semi-space (1 MB), not zero bytes -> SAME",
+  "files": {
+    "before": "before.mjs",
+    "after": "after.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "SAME",
+        "before 0 | after 0"
+      ]
+    ]
+  }
+}

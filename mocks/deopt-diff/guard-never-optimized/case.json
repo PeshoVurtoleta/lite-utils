@@ -1,0 +1,36 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "target never optimized triggers guard (DD-G1)",
+  "kind": "guard",
+  "claim": "deopt-diff -h: function never compiled by Maglev or TurboFan -> NO-VERDICT",
+  "files": {
+    "before": "program.mjs",
+    "after": "program.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "add",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "add:",
+        "NO-VERDICT",
+        "before:",
+        "no optimized compile of 'add' in run 1"
+      ],
+      [
+        "add:",
+        "NO-VERDICT",
+        "after:",
+        "no optimized compile of 'add' in run 1"
+      ]
+    ]
+  }
+}

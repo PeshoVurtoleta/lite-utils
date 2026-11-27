@@ -1,0 +1,25 @@
+{
+  "tool": "allocation-diff.sh",
+  "mode": "zero",
+  "class": "end marker written before start marker refused",
+  "kind": "guard",
+  "claim": "allocation-diff -h: @@LITE-MARK end before @@LITE-MARK start -> NO-VERDICT",
+  "files": {
+    "drv": "driver.mjs"
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--zero",
+    "{drv}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "NO-VERDICT",
+        "before @@LITE-MARK start"
+      ]
+    ]
+  }
+}
