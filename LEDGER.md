@@ -2059,7 +2059,7 @@ cancel a lost line, (d)); F-H1's premise goes back to the maintainer before any 
 (hosted CI, one run, 3 runs per leg). Evidence (local, untracked): `.handoff/evidence/b103-ci/` (per-job logs
 `<job>-<leg>.log`, job list `jobs-45430316847.txt`).
 
-**#146 shape-diff known limits (1.2.0, b103 - b109).** Each is stated in the README and llms.txt; the CHANGELOG states (1), (3) and (5) and
+**#146 shape-diff known limits (1.2.0, b103 - b120).** Each is stated in the README and llms.txt; the CHANGELOG states (1), (3), (5), (6), (8) - (10), (12), (14) and (15) and
 points here.
 (1) Blind spot: a single cold `Array.prototype.push(1.5)` call emits 0 trace lines (darwin arm64, node v22.23.5,
 v24.22.3, v26.8.2, v27.0.0-alpha.0.1.0: "push 0:2 on all four", f9f671a), so two drivers that differ only by that
@@ -2079,9 +2079,47 @@ and the recorded limit: the A/B shows default-tier Sparkplug, as it behaves for 
 code in baseline frames are not covered. Rule: a limit is stated where the verdict is read, with its provenance.
 Evidence (local, untracked): `.handoff/research/post-1.0/RECHECK2-shape-diff.md` section 5, `.handoff/b103/SPEC-1.2.0.md`
 A8, `.handoff/evidence/b109-facts/`.
+Added b120 (b112 real-project pass, b117 RP pass #153; all fail closed; REPORTED): (6) F3: two same-name functions (e.g. a
+registry method plus a module wrapper) read "ambiguous target function" once both compile; an arrow assigned as
+`read.set = (value) => ...` gets the inferred name `read.set`, which `--fn` refuses, so such code is only ever
+unattributed. (7) F4 (display): UNATTR GEN counts are trace lines (one event = 2 lines); attributed sites dedupe; verdicts
+unaffected (`.handoff/b112/real-signal/HANDBACK.md`). (8) L-1: node v26.8.2 sometimes drops elements-transition lines
+(LiteSignal P1 null control NO-VERDICT in 3 of 10 runs). (9) L-2: a constructor field add, or a push that moves the elements
+kind, reads SAME / NO-VERDICT in default mode; check a field-added commit with `--include-transitions`. (10) L-3: a deopt
+loop with no shape event reads SAME (shape-diff sees shapes, not deopts: use deopt-diff). (11) L-4: a back-pointer-less
+attribute reconfigure normalizes (MAP_NORMALIZE, NO-VERDICT, fail-closed); the #147 path is UNVERIFIED. (12) O-2: the GEN key
+includes the `(+N maps)` count, so a changed count alone reads DIFF (defensible). (13) D-1: the verdict precedence is
+NO-VERDICT > DIFF > SAME over every function; the README states it, `-h` does not (Q-B120-D1 (a): no engine edit in 1.2.0).
+(14) T-1: `--fn <Class>` on a class with instance or static fields (incl. private fields and `static {}`) reads NO-VERDICT
+"ambiguous target function": V8 logs each field initializer under the class name at the field line; a class expression
+escapes (unnamed initializer); target the methods, not the class. (15) T-2: an added or removed NON-target class with
+fields reads NO-VERDICT (each field declaration adds a 1-hit top-level CopyAddDescriptor MAP_REPLACE line per run, counted
+as non-target instability); a field-less class reads SAME (C-21 MapCreate single-hit rule). T-1 / T-2: see #153 and
+Q-B119-T1 (a); no fix version is promised.
+Erratum (b120, M14): the default-tier A/B in (5) ran against the research prototype, not the shipped root.
 
 **#147 shape-diff LEAD D-F: an attribute-only reconfigure may be filtered as a no-op (UNVERIFIED, b103).** A `(+N maps)`
 generalization line whose from / to representations are identical is filtered as a no-op by the shape reader; a
 Deprecate map event probably still catches such a change, but no probe was run. LEAD only: no README / llms claim
 beyond "not probed". What would close it: a driver that reconfigures a property's attributes only, A/B-ed on node
 22 / 24 / 26 / 27. Evidence (local, untracked): `.handoff/research/post-1.0/RECHECK2-shape-diff.md` section 5 (D-F).
+Follow-up (b120, 1.2.0 docs; the text above is history and stays): the filter half of this LEAD is closed by M2a (C-22, cfccd11): a `(+N maps)` generalization is no longer a no-op, and a target `[reconfiguring]` line is a RECONF verdict record (M2b). A back-pointer-less attribute reconfigure still normalizes (MAP_NORMALIZE, NO-VERDICT, fail-closed; see #146 (11)); that path is UNVERIFIED.
+
+**#153 shape-diff RP 1.2.0 real-code pass (b117): canned tests and tiny drivers missed a refusal that every field-declared class hits.**
+The pre-release pass ran the frozen engine (4b9de94 / 2478f409) on 86 N1 rows over LiteSignal, LiteArena, LiteFastBit32, LiteLogLogN and
+LiteYggdrasil (expectations frozen from the diffs before any run; --runs 5; N1 v26.8.2, N2 v26.3.1): 68 MATCH, 10 MISMATCH, 8 unexpected
+NO-VERDICT; no wrong SAME / DIFF on any row. F1 (MapCreate cache fill) and F2 (map-move) held on real code (Signal P3 SAME, snapshot
+A/A x10 SAME with map-move in 6 of 10 invocations, --stress-compaction SAME). Caught: T-1 -- V8 logs a class-field initializer
+(instance, private, static, `static {}`) under the CLASS NAME at the field line, so `--fn <Class>` refuses as "ambiguous target
+function" (MAP_AWK FDEF / AMBIG); fails closed only, but it made two A/A rows NO-VERDICT and hid real ctor DIFFs; class expressions
+escape (unnamed initializer). T-2 -- any field declaration adds one top-level `CopyAddDescriptor` MAP_REPLACE per run (a private brand two
+prototype lines more), counted as non-target instability (SAME -> NO-VERDICT only). Rulings Q-B117-T1 (a) engine fix before docs, Q-B117-T2 (b) extend the single-hit exemption in that unit; both fixes were rejected in review twice (b118, b119) and deferred past 1.2.0 (Q-B119-T1 (a)): T-1 / T-2 ship as #146 known limits. Limits measured, not fixed: a ctor field add or a push elements move reads
+SAME / NO-VERDICT in default mode (use --include-transitions); a deopt loop with no shape event reads SAME; a back-pointer-less attribute
+reconfigure normalizes (MAP_NORMALIZE, fail-closed; #147 path still UNVERIFIED); v26.8.2 sometimes drops elements-transition lines
+(Signal P1 null control, 3 of 10 runs). Rule: a real-code pass picks at least one target per language construct the package uses
+(class with fields, static fields, class expression, closure) and an A/A row on each; a construct with no A/A row is untested, however
+green the suite. Evidence (local, untracked): `.handoff/evidence/realproj-1.2.0/SUMMARY.md`, per-package CASES / SCORE / TRIAGE, xcheck/.
+
+**#154 shape-diff b118: a planner RISK line "never a false SAME" was disproved in review.** R-CI (alias every class-field initializer location into the class) also aliased a genuinely different same-name function (a nested or parenthesized `function C` beside a class; reviewer drivers h1 / h2 / h5) and gave a false SAME; engine review r1 (DESIGN) caught it and the diff was parked as b118-U2. Rule: a planner's "never X" claim is a hypothesis until an adversarial driver tries X. Evidence (local, untracked): `.handoff/b118/handbacks/REVIEW-U2-r1.md`.
+
+**#155 shape-diff b119: evidence ties built from map lines any code can emit are fakeable.** The re-plan tied the alias to a static-member line (SL) and a class-fields line (IL) (ruling Q-B119-H1S (a), "Narrow, fail closed"). A parenthesized `function C` writing `K.t = 1` onto the class faked SL (x2stat, x6h5w), and a top-level `C[Symbol()] = 0` faked IL (x1sym): rc 0 SAME against rc 2 on HEAD (4b9de94 / 2478f409), on node v26.8.2 and v22.23.5, 12 / 12 cells (REPORTED). Engine review r1 REJECTED (second engine REJECT on U2; parked b119-U2). Rule: an evidence tie must come from something only the construct itself produces (position or window), never "a line on its map chain". Evidence (local, untracked): `.handoff/b119/handbacks/REVIEW-U2-r1.md`, `.handoff/evidence/b119-review/`.

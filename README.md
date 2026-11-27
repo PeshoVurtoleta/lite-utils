@@ -268,27 +268,42 @@ the function `mk` (name the functions to compare with `--fn`).
 
 - **Driver mode only, no `--stable` mode.** There is no ref or file mode (Q-SD-KEEP (a)); it is a standalone bash
   tool that diffs two runs of two drivers. `--fn LIST` (comma-separated short names; `--fn=LIST` also works) is
-  required and an empty value is refused. `--runs N` is 2..20 (default 3); run 1 vs runs 2..N of the same side is the
-  null control, as in the other diff tools.
+  required. An empty value for any value option (`--fn`, `--runs`, `--node`, `--v8-flags`, `--out`) is refused at its
+  argv position (`<opt> must not be empty`). `--runs N` is 1-2 decimal digits, 2..20 (default 3): `09` is 9 and `024`
+  is refused in your spelling. Run 1 vs runs 2..N of the same side is the null control, as in the other diff tools. An
+  unknown option gets a did-you-mean hint (`--outt` -> `(did you mean --out?)`; `--zz` gets none).
 - **A blind spot: a single cold call to `Array.prototype.push(1.5)` emits no trace line.** V8 prints nothing for it, so a
   driver whose only difference is one such call reads `SAME` (REPORTED: 0 trace lines on darwin arm64, node v22.23.5 /
   v24.22.3 / v26.8.2 / v27.0.0-alpha.0.1.0; `-h` states the same limit). Call the function enough times for V8 to
   generalize in a place it does print (see the warm-up bullet) before trusting a `SAME`.
 - **Exit.** 0 `SAME`, 1 `DIFF` (the attributed shape-instability multiset differs for at least one `--fn` function),
   2 `NO-VERDICT` (a refusal, a trace parse error, a null-control failure, missing execution evidence, a target
-  Transition whose map has no map-details line, or unattributed instability that changed while the attributed sites
-  looked SAME). Every run that reaches a verdict ends in a `VERDICT <v>` line, like the other bash tools.
+  Transition whose map has no map-details line, `tier-up differs (optimized-frame key set)` or `tier-up differs
+  (interpreted key set)` while the interpreted multisets are equal, or unattributed instability that changed while the
+  attributed sites looked `SAME`). Precedence over every function: `NO-VERDICT` > `DIFF` > `SAME`. Every run that
+  reaches a verdict ends in a `VERDICT <v>` line, like the other bash tools.
 - **Owner.** Each event is keyed to an owner: `user:<fn>`, `node:<fn>`, `Builtin:*`, `other:<fn>` or `NONE`. A delta
   that no `--fn` function owns (a node-internal frame, a non-target helper, `Reflect.deleteProperty`, `splice`) never
   produces a `DIFF`: if the attributed sites look `SAME` it turns the verdict into `NO-VERDICT` naming the owner
   (Q-SD-OWNER (a), Q-SD-UNATTR (a)).
+- **Classes.** A `ReplaceDescriptors` map line is `MAP_REPLACE` for every reason, target and non-target, except a
+  reason-`MapCreate` line whose (owner, source site) has exactly 1 hit in a run: it is not counted (the literal-map
+  cache fill; execution evidence is kept); >= 2 hits count (C-21, Q-B113-F1). A target `[reconfiguring]` line is a
+  `RECONF` verdict record, so a changed one reads `DIFF`; a non-target one is unattributed (C-22). `map-move` lines (GC
+  compaction) are followed, not refused: a map keeps its elements kind at its new address, a malformed one is
+  `NO-VERDICT` `map-move does not parse`, and `--stress-compaction` runs are readable (C-30, Q-B113-F2). A `--fn` name
+  defined at more than one location in a run (a same-named function at another path) reads `NO-VERDICT` `ambiguous
+  target function '<fn>' defined at >1 location in run 1` (M3). Optimized-frame hits fold into the first interpreted
+  site of the same function / kind / detail (C-23). A `DIFF` report also prints a differing unattributed delta
+  (REPORTED; the verdict stays `DIFF`).
 - **Transitions.** Normal monomorphic Transition / InitialMap counts are REPORTED by default; `--include-transitions`
-  puts them in the verdict (Q-SD-TRANS (a)).
+  puts them in the verdict (Q-SD-TRANS (a)). A constructor field add, or a `push` that moves the elements kind, can
+  read `SAME` or `NO-VERDICT` in default mode: check a field-added commit with `--include-transitions`.
 - **Guard and warm-up.** A function with no evidence (an optimizing compile of it, or an attributed map / shape event)
   reads `NO-VERDICT`, not `SAME`: a clean array or arithmetic function run too few times shows nothing. Warm it up,
   e.g. 20000 calls (nominal; one research run on v26.8.2, not reproduced here).
 - **The traced tier.** The tool runs the driver with `--no-sparkplug --no-node-snapshot` added to its trace flags (not
-  node's default tier config), and `--v8-flags` refuses any `*sparkplug*` flag. A default-tier A/B on node 24.22.3 /
+  node's default tier config), and `--v8-flags` refuses any `*sparkplug*` flag. A default-tier A/B of the research prototype (not the shipped root) on node 24.22.3 /
   26.8.2 (darwin arm64, 2026-11-24, QUIET host) gave the same verdicts (REPORTED); no user function ran in a Sparkplug frame in
   that default-tier arm, so verdicts with user code in baseline frames are not covered. The call count at which a helper
   gets inlined can still differ from a default run.
@@ -299,10 +314,15 @@ the function `mk` (name the functions to compare with `--fn`).
   root) ran 27 / 27 ok on ubuntu node 22 / 24 / 26 x default GNU Awk 5.3.2 / gawk / mawk 1.3.4 and on macOS node 26 x
   BSD awk / gawk (REPORTED, one dispatch, run 45521613713).
 - **Tier.** On a user driver the verdict is STATISTICAL (shape events follow warm-up and tier-up timing) and REPORTED
-  only, never gated here (S-5); `--self-test` is DETERMINISTIC: 44 rows with a fake node, the last four replaying real
+  only, never gated here (S-5); `--self-test` is DETERMINISTIC: 58 rows with a fake node. Rows 41-44 replay real
   captures of node 22, 24, 26 and 27 (the golden MAP and SHAPE records, the excerpt vs the excerpt minus its
-  `map,Normalize` line -> exit 1 DIFF naming the removed MAP_NORMALIZE record, `Point` SAME).
-- **`--out DIR`** keeps `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`. Refused with exit 2: a symlink `--out`
+  `map,Normalize` line -> exit 1 DIFF naming the removed MAP_NORMALIZE record, `Point` SAME). Rows 45-53 are the
+  audit-fix rows (M1 MAP_REPLACE, M2a, M2b RECONF, M3, M4 fold and tier-up, M7, M8, M12), row 54 the interpreted key
+  set, rows 55-58 the MapCreate single-hit rule and `map-move`.
+- **`--out DIR`** keeps `DIR/report.txt` and `DIR/raw/<side>/run.<k>.{log,out}`. A trailing `/` or `/.` is stripped
+  before the symlink check, so `lnk/` and `lnk/.` are refused like `lnk`; a deeper form such as `lnk/sub/..` is not
+  checked (`--out` is not a security boundary). A driver under a directory named `-` resolves as `./-/...` and never
+  runs `cd -`. Refused with exit 2: a symlink `--out`
   DIR, a symlink or hard-linked `DIR/report.txt`, a non-empty `DIR/raw`, a CR or LF in an option name (the label is
   `option name`; the other bash tools say
   `unknown option`), and a driver inside `--out D` that is `D/report.txt`.
@@ -575,8 +595,30 @@ tool's `--self-test` (with `--fixtures` where offered) and `npm test`.
   path-stripped, so two `del` helpers in different files share one key and an instability that moves between them reads
   `SAME` (not probed); a node whose log format renames or drops a trace prefix is not covered until captured; a function
   with no warm-up evidence ends `NO-VERDICT`; and the traced tier is not node's default (see the section).
-- `shape-diff` LEAD (LEDGER #147, UNVERIFIED): a reconfigure that adds maps but leaves the representations identical is
-  filtered as a no-op; a Deprecate map event probably still catches it. Not probed.
+- `shape-diff` real-code limits (LEDGER #146, #153; a pass over LiteSignal, LiteArena, LiteFastBit32, LiteLogLogN and
+  LiteYggdrasil on node v26.8.2 and v26.3.1, REPORTED; all fail closed or are named here):
+  - `--fn <Class>` on a class with instance or static fields (private fields and `static {}` included) reads
+    `NO-VERDICT` `ambiguous target function`: V8 logs each field initializer under the class name at the field line. A
+    class expression escapes (its initializer is unnamed). Target the methods, not the class.
+  - An added or removed NON-target class with fields reads `NO-VERDICT`: each field declaration adds a 1-hit top-level
+    `CopyAddDescriptor` `MAP_REPLACE` line per run, counted as non-target instability. A field-less class reads `SAME`
+    (the MapCreate single-hit rule).
+  - Two same-name functions (e.g. a registry method and a module wrapper) read `ambiguous target function` once both
+    compile. An arrow assigned as `read.set = (value) => ...` gets the inferred name `read.set`, which `--fn` refuses,
+    so such code is only ever unattributed. The `UNATTR GEN` counts are trace lines (one event is 2 lines); attributed
+    sites dedupe; verdicts are unaffected.
+  - node v26.8.2 sometimes drops elements-transition lines (a LiteSignal null control read `NO-VERDICT` in 3 of 10
+    runs; fail-closed).
+  - A constructor field add, or a `push` that moves the elements kind, reads `SAME` / `NO-VERDICT` in default mode:
+    use `--include-transitions`. A deopt loop with no shape event reads `SAME` (shape-diff sees shapes, not deopts: use
+    `deopt-diff`).
+  - The generalization key includes the `(+N maps)` count, so a changed count alone reads `DIFF`.
+  - A source directory whose name looks like a frame bracket (e.g. `a) [x+1 at y/`) can still be mis-split by the
+    frame reader (documented, not fixed).
+- `shape-diff` LEAD (LEDGER #147): the filter that dropped a `(+N maps)` generalization with identical representations
+  is closed by M2a (such a line is no longer a no-op) and a target `[reconfiguring]` line is a `RECONF` verdict record.
+  A back-pointer-less attribute reconfigure normalizes (`MAP_NORMALIZE`, `NO-VERDICT`, fail-closed); that path stays
+  UNVERIFIED.
 - These tools are not a security boundary: they run the driver you give them.
 
 ---

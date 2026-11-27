@@ -25,15 +25,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   read SAME. Documented, not fixed (LEDGER #146). Other limits: LEDGER #146 / #147.
 - shape-diff needs node >= 22: an unparsable `--version` or a major below 22 exits 2 after the one `--version` spawn,
   before `--v8-options` and before any write (Q-B103-SD-VERGATE (a)). It traces with `--no-sparkplug` and
-  `--no-node-snapshot` (not node's default tier config). Q-SD-NODE (a): TASK 0a read `TASK0A DECISION: SAME -- node >=
+  `--no-node-snapshot` (not node's default tier config). Q-SD-NODE (a): TASK 0a (the research prototype, not the shipped root) read `TASK0A DECISION: SAME -- node >=
   22 stands` (run 20261124T234614Z-full, QUIET host, 1019 s, darwin arm64, node 24.22.3 / 26.8.2; REPORTED, one run).
   Recorded limit (A8): the A/B shows default-tier Sparkplug, as it behaves for the run-probes drivers on 24.22.3 /
   26.8.2 darwin-arm64, changes no verdict; no user function ran in a Sparkplug frame in arm B, so verdicts with user
   code in baseline frames are not covered.
-- shape-diff `--self-test` is 44 rows (DETERMINISTIC: an embedded fake node, no real node; takes no other argument).
+- shape-diff `--self-test` is 58 rows (DETERMINISTIC: an embedded fake node, no real node; takes no other argument).
   Rows 41-44 replay real captures of node 22 (v22.23.5) / 24 (v24.22.3) / 26 (v26.8.2) / 27 (v27.0.0-alpha.0.1.0): the MAP
   and SHAPE records equal the golden, and the excerpt against the excerpt minus its `map,Normalize` line gives exit 1
-  DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME.
+  DIFF, work DIFF naming the removed MAP_NORMALIZE record, Point SAME. Rows 45-53 are the audit-fix rows (M1 MAP_REPLACE,
+  M2a, M2b RECONF, M3, M4 fold and tier-up, M7, M8, M12), row 54 the interpreted key set, rows 55-58 the MapCreate
+  single-hit rule and `map-move`.
+- shape-diff engine audit fixes, part of the first release (shipped behaviour; SPEC-1.2.0 C-21 .. C-24, C-27; cfccd11,
+  508b85a). A `ReplaceDescriptors` map line is `MAP_REPLACE` for every reason, so an added or removed non-target class
+  with fields reads NO-VERDICT (M1, C-21). A `(+N maps)` generalization with equal representations is not a no-op
+  (M2a); a target `[reconfiguring]` line is a RECONF verdict record, so a changed one reads DIFF, a non-target one is
+  unattributed (M2b, C-22). A `--fn` name defined at more than one location refuses `ambiguous target function ...
+  defined at >1 location` (M3). Optimized-frame hits fold into the first interpreted site, and a would-be SAME whose
+  optimized-frame or interpreted key set differs reads NO-VERDICT `tier-up differs (optimized-frame key set)` /
+  `tier-up differs (interpreted key set)` (M4, C-23, Q-B111-FOLDSAME). The elements line and `[generalizing]` frames
+  take the rightmost matching bracket; a directory name such as `a) [x+1 at y/` stays a known limit (M7, C-24).
+  `code-disable-optimization` is a known event and an empty code-creation marker needs a hex 8th field (M8). A DIFF
+  report also prints a differing unattributed delta, REPORTED, verdict unchanged (M12). The default-tier A/B
+  (research prototype, not the shipped root) is labelled so in the README and llms.txt (M14).
+- shape-diff CLI (C-25, C-26, 2893b00): an empty value for any value option is refused at its argv position;
+  `--runs` takes 1-2 decimal digits (`09` is 9, `024` is refused in the user's spelling); an unknown option gets a
+  did-you-mean hint; `--out` strips a trailing `/` and `/.` before the symlink check (a deeper `lnk/sub/..` is not
+  checked: not a security boundary); a driver under a directory named `-` resolves as `./-` and runs no `cd -`;
+  `-h` lists the trace flags, the `--v8-flags` allowlist, RECONF, the tier-up reasons and the MapCreate rule.
+- shape-diff MapCreate single-hit rule (Q-B113-F1, C-21, d1f2959): a reason-MapCreate `ReplaceDescriptors` map line (the
+  literal-map cache fill) is dropped when its (owner, source site) has exactly 1 hit in a run, target and non-target;
+  >= 2 hits count as before; execution evidence is kept. `map-move,<time>,<from>,<to>` lines (GC compaction) move a
+  map's elements kind to its new address; a move from an unknown map clears any stale kind there; a malformed line is
+  NO-VERDICT `map-move does not parse`. `--stress-compaction` runs are readable (Q-B113-F2, C-30).
+- shape-diff real-code limits (LEDGER #146, #153; a 5-package pass, node v26.8.2 / v26.3.1, REPORTED; all fail
+  closed): `--fn <Class>` on a class with fields reads NO-VERDICT `ambiguous target function`, and an added or removed
+  non-target class with fields reads NO-VERDICT (T-1, T-2; deferred past 1.2.0, Q-B119-T1 (a)); two same-name
+  functions and an arrow named `read.set` are ambiguous or unattributed; node v26.8.2 sometimes drops
+  elements-transition lines; a constructor field add or a `push` that moves the elements kind needs
+  `--include-transitions`; a deopt loop with no shape event reads SAME; a changed `(+N maps)` count alone reads DIFF.
 - shape-diff assigns OUT_NAMES="" at init (as bytecode-budget / deopt-diff / ic-diff do), so an OUT_NAMES inherited
   from the environment never joins the --out input refusal; a driver inside --out D is refused only when it is
   D/report.txt (Q-B107-SDOUTNAMES (a), b107 G-E B4).
@@ -47,11 +77,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Tests
 
-- test/shape-diff.test.mjs (new, 9770f78; 96 tests by 853c134): the C pin (`--self-test` prints 44 ok in label order, 0
+- test/shape-diff.test.mjs (new, 9770f78; 96 tests by 853c134; now 58 rows, see below): the C pin (`--self-test` prints 58 ok in label order, 0
   TMPDIR entries), golden parity of the e2e reports with the frozen prototype, the static TRACE_FLAGS row and the canned
   argv row (`--no-sparkplug` exactly once), each with an M6 teeth row; an identity row (src and the built root hold
-  exactly 8 SD_CAP heredocs, each byte-equal to its fixture); a 35-mutant table, one revert row each; the OUT_NAMES rows
+  exactly 8 SD_CAP heredocs, each byte-equal to its fixture); a mutant table, one revert row each (35 at 853c134; 60 after the lines below); the OUT_NAMES rows
   with an old-root twin and mutant (853c134).
+- test/shape-diff.test.mjs, engine audit fixes (508b85a): the C pin = 54, rows 45-54, 11 E mutants (census 46 = 35 + 11);
+  118 tests. d1f2959: the C pin = 58, rows 45 and 55-58, 9 E-B5 mutants (census 55 = 35 + 11 + 9; the C / ROW pins fail
+  on the 2893b00 root); touched set (13 files) 1506 tests, 1499 pass, 0 fail, 7 skipped. 4b9de94 (C-B2): CL1-CL6 gate
+  rows for the CLI refusals (empty value per option, refusal order, `--runs` 024 / 09, did-you-mean, `--out` trailing
+  `/` and `/.`, drivers under `-/`), each run against a logging node stub, plus 5 C mutants (M-EMPTY, M-RUNS10, M-HINT,
+  M-OUTDOT, M-DASH); mutant census per C-29: 35 + 11 + 9 + 5 = 60. Against the 1aafd17 root every CL row fails except the
+  8 controls.
+- test/nonpath-cr-refuse.test.mjs and test/shape-diff.test.mjs (2893b00): the A4 control "G1 unknown --nod x sd" expects
+  the did-you-mean hint on the live root (the old text asserted exactly once); A2 parity reads the 7 golden-proto
+  reports through goldenReport(), which swaps the old "see RESEARCH.md." NOTE pointer for "see README, Known limits.".
+- test/shape-diff-live.test.mjs, 4b9de94 (C-B3, M13 + F71): `assertVerdict` requires exactly one `VERDICT <want>` line;
+  `noVerdictCode` rejects a die or usage text; a must-differ exit 2 whose only detail is the UE `varied between run 1 and
+  run N` note is rejected as noise; 23 new spawn-free C1 rows (the CM13 start-anchor row among them).
+- test/shape-diff-audit-live.test.mjs (new, 4b9de94; 17 tests, E-B4): real-node A2 pairs on the shipped root (M1 class
+  per call, M2b RECONF, M3 ambiguous swap, M4 tier-up, M8 `.ts` A/A), a path-length A/A control, and the F1 / F2 live
+  fixtures (S1 and X1 SAME, X2cls DIFF, `--stress-compaction` A/A SAME); controls against `git show 1aafd17:shape-diff.sh`
+  and `git show 2893b00:shape-diff.sh`. Rows run on node 24 / 26 (27 for A2) and skip with a reason elsewhere.
+- test/audit-sig.test.mjs (7c6768e): A1o-sd accepts an OVERRUN after the exact interrupted entry (CI 45696658560, macOS
+  node 26.8.2: the SIGINT did not cut the wait short); p[0] stays exact.
+- test/env-strip.test.mjs (30b20ff, Q-B117-NL (a)): the E5sd compile-cache check is gated on a same-run probe (a node
+  that makes no `NODE_COMPILE_CACHE` dir, nightly 45833685584 on node v27.0.0-alpha.0.2.0, no longer fails the row);
+  new no-spawn row E5cc. Full `npm test` at 4b9de94 (private copy, bash 3.2.57, node v26.8.2): 4698 tests, 4682 pass,
+  0 fail, 16 skipped, 1790 s (REPORTED, one run).
 - test/shape-diff-live.test.mjs (new, 734748b; 17 tests: S1-S9, L1-L7, C1): real-node rows on node 22 / 24 / 26 / 27
   (exact lines and strict codes on the captured versions, the codes-only tier elsewhere). S1-S9 are the run-probes
   assertions; L1 / L2 pin the 7 TRACE_FLAGS; L3 (N1 at 20000 calls -> DIFF), L4 (an EventEmitter `setMaxListeners`
@@ -68,7 +121,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   MKSIG rows are regression pins and the re-delivery drop is the window witness) and audit-g0 B1 (+2 rows) (d0e38d6).
 - env-strip: the sd real runs (E3 sd, E5sd) have their own cap, SD_REAL_CAP 600 s, after nightly 45633599155 timed out at
   120 s on macOS node 27 alpha (E3 sd 120 s+, REPORTED); the N1 gate row checks the call site (51add49; LEDGER #151).
-- LEDGER #145-#152 record the shape-diff designs, limits and the test-process lessons of this cycle.
+- LEDGER #145-#155 record the shape-diff designs, limits and the test-process lessons of this cycle.
 
 ## [1.1.2] - 2026-11-24
 
