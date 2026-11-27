@@ -312,6 +312,10 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   catches inlining bloat that bytecode-budget cannot see; reuses ic-diff's code-creation parser.
 - L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
+  Research input (2026-11-27, untimed probe on v26.8.2, `--expose-gc` + one gc()): `--trace-gc-object-stats` prints
+  per-GC JSON on stdout (277 KB for a tiny script; per instance type, e.g. `"key": "live"`, `"type": "field_data"`),
+  the input of V8's Heap Stats tool. It counts V8 instance types, not JS constructors: the research burst decides
+  whether it can replace or back the constructor count. Reference: .handoff/research/post-1.0/REF-v8-tools.md.
 - L6 suite-wide runner: run the shipped bash tools over every package's drivers; store the
   REPORTED tables as a per-package baseline.
 - L7 Turbolev default-on readiness (maintainer 2026-11-27: "Yes, add"; a watch item, not a minor). Turbolev = the
