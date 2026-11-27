@@ -81,9 +81,13 @@ const SELF_TEST_ROWS = [
 
 const DEFAULT_CAP_SEC = 120;
 // Self-test internal caps (ms): rows NOT meant to time out get a generous cap (a cold fork under a
-// loaded host is not a verdict); only the hang sub-cases (S8, S9/S10 TIMEOUT) use the short one.
+// loaded host is not a verdict); only the hang sub-cases (S9/S10 TIMEOUT) use the short one; S8 uses its own
+// group cap below.
 const SELF_TEST_RUN_CAP_MS = 5000;
 const SELF_TEST_HANG_CAP_MS = 300;
+// S8 must see its grandchild pid file before the kill (a fork under a loaded host took > 300 ms in the 1.2.1
+// release gate, Q-REL121-S8 (a)): 2000 ms is far above fork time and far below the grandchild sleep 10.
+const SELF_TEST_GROUP_CAP_MS = 2000;
 const CLOSE_FALLBACK_MS = 500;
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
@@ -143,7 +147,7 @@ function usage() {
     '  --list            validate selected cases and print catalog table (0 spawns)',
     '  --explain ID      show claim, diff, standalone command, and run one case',
     '  -v, --verbose     print matched evidence line under each OK / LIMIT row',
-    '  --self-test [ROW] run deterministic fake-tool self-test (S1-S14, < 3 s)',
+    '  --self-test [ROW] run deterministic fake-tool self-test (S1-S14, < 5 s nominal)',
     '  -h, --help        this text (exit 2)',
     '',
     'Exit codes:',
@@ -1484,7 +1488,7 @@ async function runSelfTest(nodeInfo, onlyRow) {
           files: { a: 'driver.mjs' }, argv: ['hang_grandchild', gpidFile, '{a}'],
           expect: { verdict: 'SAME' },
         });
-        const r = await runCaseWithRepeat(c, makeCtx({ capMs: SELF_TEST_HANG_CAP_MS }));
+        const r = await runCaseWithRepeat(c, makeCtx({ capMs: SELF_TEST_GROUP_CAP_MS }));
         if (!r.judged.status.startsWith('TIMEOUT(') || !r.judged.fail) {
           throw new Error(`expected TIMEOUT, got ${r.judged.status}`);
         }

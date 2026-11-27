@@ -242,7 +242,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      1.2.1 drift patch (b123; no new surface): ic-diff accepts IC state `H` (HOMOMORPHIC, V8 15.6 / node 27;
      Q-B123-H (a)); allocation-diff counts `Scavenge (interleaved)` / `Minor Mark-Sweep (interleaved)` as young
      (V8 12.4 / 13.6; Q-B123-GCSET (a)). Found by the known-answer corpus (b122 F-B122-1 / F-B122-2; LEDGER #156,
-     #157). Ships when the maintainer runs /release 1.2.1.
+     #157). Release step prepared 2026-11-28 (gate 4741 tests, 4724 pass, 0 fail, 17 skip); tag / push / publish by
+     the maintainer.
      1.3.1 class-window (was "1.2.1": class identity for T-1 / T-2 from V8 source spans; intake
      .handoff/research/post-1.0/class-window/INTAKE-1.2.1.md): research drop + recheck before any planner; after
      1.3.0 (Q-CW-SLOT (a), renumbered by Q-REL-ORDER (a)).

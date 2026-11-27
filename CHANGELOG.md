@@ -5,8 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Patch: two engine-drift fixes found by the known-answer corpus (b122). Only `ic-diff` and `allocation-diff` change;
-the other tools are byte-identical.
+## [1.2.1] - 2026-11-28
+
+Patch release: two engine-drift fixes found by the known-answer corpus (b122). Only `ic-diff` and `allocation-diff`
+change; the other tools are byte-identical. Zero runtime dependencies; node >= 22, bash >= 3.2.
+npm test (the 1.2.1 release gate): 4741 tests, 4724 pass, 0 fail, 17 skip (2026-11-27 23:14-23:44Z, node v26.8.2,
+/bin/bash 3.2.57, macOS arm64, host QUIET at start: load1 1.55 vs baseline 2.34; 1782 s; private copy with .git,
+quiet-lock; one run; tree 7dabf05 + the 1.2.1 release-step files (sha-pinned in the run log), before this count line
+and the README Testing line were edited). The first gate run, before the repo-only mocks runner fix (self-test row S8
+now waits up to 2000 ms for its grandchild, Q-REL121-S8 (a)), read 4723 pass / 1 fail: S8 under host load.
 
 ### Fixed
 
@@ -17,11 +24,11 @@ the other tools are byte-identical.
   same-handler site that reads P -> N on node <= 26 reads P -> H. The allowlist is now X01P^HNDG and the refusal reads
   `IC state outside X01P^HNDG` (Q-B123-H (a)).
 - allocation-diff: a `--trace-gc` line `Scavenge (interleaved)` or `Minor Mark-Sweep (interleaved)` counts as that
-  young kind. V8 12.4 / 13.6 (node 22 / 24; `Scavenge (interleaved)` seen on v22.23.5, V8 12.4.254.21; `Minor
-  Mark-Sweep (interleaved)` from the source alone) print ` (interleaved)` for a young GC that ran while a full GC
-  cycle was running (src/heap/gc-tracer.cc). Such a window used to read NO-VERDICT (`unknown GC kind 'Scavenge
-  (interleaved)'`). At most one suffix is dropped; `(interleaved)` after any other kind or not at the end,
-  `Incremental Minor Mark-Sweep` and ` (reduce)` still read X (Q-B123-GCSET (a)).
+  young kind. V8 12.4 / 13.6 (node 22 / 24; `Scavenge (interleaved)` seen on v22.23.5, V8 12.4.254.21;
+  `Minor Mark-Sweep (interleaved)` from the source alone) print ` (interleaved)` for a young GC that ran while a full
+  GC cycle was running (src/heap/gc-tracer.cc). Such a window used to read NO-VERDICT
+  (`unknown GC kind 'Scavenge (interleaved)'`). At most one suffix is dropped; `(interleaved)` after any other
+  kind or not at the end, `Incremental Minor Mark-Sweep` and ` (reduce)` still read X (Q-B123-GCSET (a)).
 
 ### Tests
 

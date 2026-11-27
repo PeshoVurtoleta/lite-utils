@@ -27,7 +27,7 @@ node mocks/run.mjs --tool shape-diff,ic-diff --node /opt/homebrew/bin/node
 node mocks/run.mjs --kind change,aa --repeat 2 --node /opt/homebrew/bin/node
 node mocks/run.mjs --only file-mode --node /opt/homebrew/bin/node
 
-# Fast deterministic self-test of the runner itself (< 3 s, fake tool only, no V8 logging)
+# Fast deterministic self-test of the runner itself (< 5 s nominal, fake tool only, no V8 logging)
 node mocks/run.mjs --self-test
 ```
 
