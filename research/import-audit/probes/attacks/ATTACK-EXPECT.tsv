@@ -1,0 +1,19 @@
+# import-audit reviewer-attack cases (ia-1.4.0 U4). Columns TAB: case stdin_mode(null|file|pipe) expected_exits(set, |) required_record_regex(ERE, ;; = all, - = none)
+# Expected = the HONEST verdict, frozen before any run; source: REVIEW-U2 blockers B1-B4/B7 + orchestrator WV-1 follow-ups.
+binswap	null	1	^  G added __evil x1$
+exitrw	null	1	^  G added __evil2 x1$
+nulkey	null	1	^  G added __ia_evil x1$
+stdin	null	0	-
+stdin	file	0	-
+stdin	pipe	0	-
+attr	null	1	^  G changed btoa x1$
+fspatch	null	1	-
+unhandled	null	1|2	-
+setexit	null	1|2	-
+exitcode	null	1|2	-
+lazy1	null	0	-
+lazy2	null	0	-
+setproto-map-proto	null	1	-
+prevent-ext-globalthis	null	1	-
+fn-proto-add	null	1	^  G proto Function\.__ia_fn \[added\] x1$
+promise-finally	null	1	^  G proto Promise\.finally \[changed\] x1$

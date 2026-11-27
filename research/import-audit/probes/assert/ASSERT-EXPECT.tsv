@@ -1,0 +1,19 @@
+# import-audit assert cases: frozen expectations (rev 1), derived from the SPEC / RESEARCH.md B5, never from a run.
+# Columns (TAB separated): case, stdout_mode, expected_exit, expected_verdict, required_record_regex, premise
+# required_record_regex: ERE matched against the tool output lines (CR stripped); several regexes are joined by ;; and ALL must match; - = none.
+# premise: pass = positive premise must exit 0; fail-on-broken = positive exits 0 AND <case>.broken premise exits 1; n/a = none.
+# Records are printed by the tool indented two spaces, e.g. "  G changed parseInt x1".
+freeze-array-proto	file	1	DIRTY	^  G proto Array\.map \[changed\] x1$	fail-on-broken
+prevent-ext-object-proto	file	1	DIRTY	^  [GPH] .* x[0-9]+$	fail-on-broken
+setproto-array-proto	file	1	DIRTY	^  [GPH] .* x[0-9]+$	fail-on-broken
+same-value-new-attrs	file	1	DIRTY	^  G changed parseInt x1$	fail-on-broken
+species-protector	file	1	DIRTY	^  P ArraySpeciesLookupChain x1$	fail-on-broken
+promise-then-patch	file	1	DIRTY	^  G proto Promise\.then \[changed\] x1$;;^  P PromiseThenLookupChain x1$	fail-on-broken
+no-elements-protector	file	1	DIRTY	^  G proto Array\.0 \[added\] x1$;;^  P NoElements x1$	fail-on-broken
+lazy-globals-touch	file	0	CLEAN	-	pass
+add-then-remove	file	0	CLEAN	-	pass
+symbol-tostringtag-global	file	1	DIRTY	^  G (added|changed) Symbol\(Symbol\.toStringTag\) x1$	fail-on-broken
+worker-handles	file	1	DIRTY	^  H [A-Za-z]+ x[0-9]+$	fail-on-broken
+worker-handles	pipe	1	DIRTY	^  H [A-Za-z]+ x[0-9]+$	n/a
+worker-handles	pty	1	DIRTY	^  H [A-Za-z]+ x[0-9]+$	n/a
+concat-spreadable-protector	file	1	DIRTY	^  G proto Array\.Symbol\(Symbol\.isConcatSpreadable\) \[added\] x1$;;^  P IsConcatSpreadableLookupChain x1$	fail-on-broken
