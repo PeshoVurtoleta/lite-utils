@@ -12,8 +12,9 @@ minors item 2).
 1.1.2 RELEASED 2026-11-24 (17:09Z): commit 37efd97, tag v1.1.2, npm latest 1.1.2
 (b102; the 1.1.2 patch: G-A the allocation-diff --zero null control, Q-ADZ-NC (a); G-B alloc-per-op test rows;
 G-C the deopt-diff T11 SIGPIPE fix).
-1.2.0 shape-diff RELEASE PREPARED, NOT TAGGED (b121; b103 spec + plans, b104-b120 code / docs,
-b117 real-code pass). Then the post-1.0 minors (section 3,
+1.2.0 RELEASED 2026-11-27: commit 8ae0c6c, tag v1.2.0, npm latest 1.2.0 (shape-diff, minor 2; b103 spec + plans,
+b104-b120 code / docs, b117 real-code pass, b121 release; T-1 / T-2 deferred to 1.2.1 by Q-B119-T1 (a)).
+Next: the known-answer corpus `mocks/` (Q-MK-ORDER (a), .handoff/PLAN-mocks.md), then the post-1.0 minors (section 3,
 "Post-1.0 minors"; D-5) in the Q-M-ORDER2 (a) order: 1.3.0 code-size-diff next. The guard fix F-H1 is PARKED
 per Q-B103-FH1 (a) (2026-11-25): no F-H1 planner until a probe after 1.2.0 names the H3d mechanism (UNVERIFIED).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
@@ -234,7 +235,10 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      feb9210, docs 5173e8e.
      Items 3-7 follow Q-M-ORDER2 (a) (maintainer 2026-11-23); the 2026-11-12 order (import-audit first, shape-diff last)
      is history.
-  3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23; PREPARED (b121; status line 15).
+  3. 1.2.0 shape-diff (L2 below): research gate MET, Q-SD-* 9/9 RULED 2026-11-23;
+     RELEASED 2026-11-27 (commit 8ae0c6c, tag v1.2.0, npm 1.2.0).
+     1.2.1 (class identity for T-1 / T-2 from V8 source spans; intake .handoff/research/post-1.0/class-window/
+     INTAKE-1.2.1.md): research drop + recheck before any planner; its slot vs the mocks corpus is not ruled yet.
      Release blockers added 2026-11-26 (maintainer: "Yes, add to roadmap"), from the real-project pass on
      LiteSignal (b112, evidence .handoff/b112/real-signal/HANDBACK.md), fixed before 1.2.0 ships:
      - F1 (wrong verdict): it reports instability when one side builds an object literal with a property count
@@ -254,6 +258,8 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      (same path and different path lengths) and an injected must-fail per package. Gate: every A/A SAME, every
      must-fail DIFF, 0 open wrong-verdict findings; a wrong verdict means fix + full re-run before /release.
   4. 1.3.0 code-size-diff (L4 below).
+  Scope note (maintainer 2026-11-27): its research also covers L8 ir-diff (the final-IR multiset) and decides whether
+  the two are one tool with modes or two; brief .handoff/research/post-1.0/BRIEF-code-size-diff-v4.md section E.
   5. 1.4.0 import-audit (L1 below).
   6. 1.5.0 suite-run (L6 below).
   7. heap-count-diff (L5 below): KEPT (Q-HCD (a), maintainer 2026-11-22), after 1.5.0 suite-run.
@@ -331,6 +337,29 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   trace describes a Turbolev compile, what code-kind / tier marker its code objects carry, whether deopt reasons and
   `--log-code` records change), and state per tool what a Turbolev mode would need. First signal: the CI node-latest leg
   (a default flip there turns ibd's live rows NO-VERDICT).
+- L8 ir-diff (folded into the 1.3.0 code-size-diff research, maintainer 2026-11-27): the final Turboshaft IR of a target
+  fn (`--trace-turbo-graph --trace-turbo-filter=<fn>`, stdout, works on stock node 22 and 26) as a multiset of
+  Allocate, DeoptimizeIf[reason], Call[target] and write barriers, BEFORE vs AFTER. REPORTED (2026-11-27, untimed,
+  v26.8.2, one run): in the final phase (`V8.TFTurboshaftSpecialRPOScheduling`) a non-escaping temporary has 0
+  Allocate, an escaping one 2 (the whole trace has 20 / 69 hits: cut the final phase only); guards print as
+  `DeoptimizeIf(#41, #29)[negated, WrongMap, ...]`. Reopens the deferred escape-analysis item (section 5). Open: the
+  final-phase banner per V8 version (fail closed on an unknown one), node-id normalization, determinism (A/A), Call /
+  write-barrier shapes, x64 (UNVERIFIED). Routes (REF-v8-tools.md Part 2): `--log-code-disassemble` works on release
+  node (size / safepoint data in v8.log); `--trace-turbo` JSON gives source positions per IR node (which expression).
+  `stack slots = N` from `--print-opt-code --code-comments` is CPU-specific (register file): a
+  `--platform-arch` pin, as code-size-diff D1. The research decides one tool with modes or two.
+- L9 deopt-diff dependent-code invalidation: `[marking dependent code ...]` (no bailout line) is a documented "Not
+  detected" of deopt-diff. A deopt-diff minor / patch item after 1.2.1: probe its grammar on 22-27, attribute it to the
+  target, A/A, must-fail.
+- L10 feedback-diff (lead) and tier-diff (lead). feedback-diff: the FeedbackVector V8 prints at Maglev compile
+  (`--print-maglev-code`, node >= 24; prints nothing on 22): BinaryOp / CompareOp / Call feedback, `is in object`,
+  `is double`, Map[N] instance size -- blind spots of ic-diff and shape-diff. `--print-opt-code-filter` does NOT filter
+  it (v26.8.2 printed four functions, 281 KB): own name selection (the T-1 / N8 identity problem). Better input:
+  `--log-feedback-vector` (v8.log records with the SFI name, node 22 and 26; format trap: 6 fields where V8's reader
+  expects 9 -- REF-v8-tools.md Part 2). tier-diff: tier path, OSR and `[delaying optimization ...]` counts are
+  warm-up / concurrency dependent: STATISTICAL until research shows a
+  deterministic setup. Threshold flags (`--invocation-count-for-maglev=N`, `--no-turbofan`) are tuning flags every tool
+  already accepts in `--v8-flags`: a docs recipe, never a verdict on raw counts.
 
 ## 4. Known drift to fix
 
