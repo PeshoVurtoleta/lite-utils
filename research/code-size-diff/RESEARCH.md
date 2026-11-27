@@ -268,7 +268,13 @@ DRAFT: the cases are not built yet; rows marked "pending" depend on a ruling or 
 
 ---
 
-## 4. Maintainer Rulings Needed (`Q-CSD-*`, recommended option first, all UNRULED)
+## 4. Maintainer Rulings (`Q-CSD-*`, recommended option first)
+
+**RULED 2026-11-27 ~08:55Z** by the maintainer (in-session ruling sitting, csd-v4 session, after RECHECK3):
+every asked Q-id ruled **(a)**, the recommended option, as written below:
+INTAKE (a), MODES (a), KEY (a), NAME (a), TIERMISS (a), NCTL (a), XSCOPE (a), RPT (a), SPARK (a), TLLIB (a),
+CTX (a), OSR (a), REF (a), TL (a), IR-SHAPE (a), IR-ROUTE (a). Q-CSD-MAXQ is moot (MODES (a): no `--max`).
+Next step per INTAKE (a): the C6 real-code rung + one Ubuntu x64 capture, then the PROPOSAL quoting these rulings.
 
 - **`Q-CSD-INTAKE`:** how to proceed into 1.3.0.
   - **(a) (Recommended)** Before the PROPOSAL, run the C6 real-code rung (5 packages, expectations frozen
