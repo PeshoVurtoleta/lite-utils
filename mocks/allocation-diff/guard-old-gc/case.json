@@ -21,16 +21,5 @@
         "old-generation GC in the window"
       ]
     ]
-  },
-  "expect_by_major": {
-    "22": {
-      "verdict": "NO-VERDICT",
-      "text": [
-        [
-          "NO-VERDICT",
-          "unknown GC kind 'Scavenge (interleaved)'"
-        ]
-      ]
-    }
   }
 }

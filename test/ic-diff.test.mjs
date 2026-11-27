@@ -16,10 +16,11 @@ import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { capSync, armGroup, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ic-diff.sh');
-const C = 83;   // b70 NULLCTL: 81 -> 83 (rows 82 NC3, 83 NC4, appended last). Was 81: self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
+const C = 85;   // b123 Q-B123-H: 83 -> 85 (rows 84 HM1, 85 HM2, appended last). b70 NULLCTL: 81 -> 83 (rows 82 NC3, 83 NC4, appended last). Was 81: self-test ok lines at b64 G4 r1 fix ic (src f1568ac8 / root 50a6fc34, PLAN-b64-g4 TASK 7: rows 77-81 R13a, R13b, R14, R26, R6); a new check moves this literal
 const PAR = 6;  // mutant self-tests in flight at once
 const skip = process.platform === 'win32' ? 'bash script: POSIX hosts only' : false;
 // the host environment never reaches the script (NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE /
@@ -33,7 +34,7 @@ for (const k of ['NODE_OPTIONS', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE
 // the delete alone is undone at every spawn; an own key holding undefined is never passed on: the child sees none
 ENV.NODE_V8_COVERAGE = undefined;
 
-// The 83 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
+// The 85 self-test rows in print order: a prefix of each "ok <label>" that names exactly that one row.
 const ROW = [null,
     /*  1 */ 'A1 records: mono fn=get',
     /*  2 */ 'A1 records: the LAST',
@@ -118,6 +119,8 @@ const ROW = [null,
     /* 81 */ 'R6 ',
     /* 82 */ 'NC3 ',
     /* 83 */ 'NC4 ',
+    /* 84 */ 'HM1 ',
+    /* 85 */ 'HM2 ',
 ];
 
 function selfTest(path) {
@@ -228,8 +231,8 @@ const B2 = [
         [["if (cf[h] == \"\") next",
           "if (cf[h] == \"\" && $9 != FNS[1]) next"]]],
     ["M19", [11], "state class without X",
-        [["split(\"X 0 1 P ^ N D G\", t, \" \")",
-          "split(\"0 1 P ^ N D G\", t, \" \")"]]],
+        [["split(\"X 0 1 P ^ H N D G\", t, \" \")",   // b123 Q-B123-H: the anchor follows the allowlist (+ H)
+          "split(\"0 1 P ^ H N D G\", t, \" \")"]]],
     ["M4", [12], "unresolved pc dropped",
         [["if (!h) { x(\"unresolved pc (no code-creation holds it: compile cache or user snapshot code?)\"); next }",
           "if (!h) next"]]],
@@ -488,6 +491,9 @@ const NEW = [
     // r1 review: the before side judged on run 1 only (its null control never runs; survived NC3)
     ['M-nc-bef', [83], 'before side judged on run 1 only (before null control off)',
         [['JRC=("${RCB[@]}"); JLOG=("${LGB[@]}"); JREC=("${REB[@]}"); judge', 'JRC=("${RCB[0]}"); JLOG=("${LGB[0]}"); JREC=("${REB[0]}"); judge']]],
+    // b123 Q-B123-H (a): H dropped from the state allowlist (the HEAD 388d7c0 behaviour: a P->H line reads X)
+    ['M-H-st', [84, 85], 'IC state H removed from the allowlist ST',
+        [['split("X 0 1 P ^ H N D G", t, " ")', 'split("X 0 1 P ^ N D G", t, " ")']]],
 ];
 const MUTANTS = [...B2, ...NEW];
 assert.equal(B2.length, 61, 'the B2 table holds mutants.py\'s 62 rows minus M-sigwin');
@@ -576,7 +582,7 @@ MUTANTS.forEach(([name, rows, desc], i) => {
     });
 });
 
-test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 82 ok, the FAILED summary', { skip }, async () => {
+test('ic-diff --self-test exit wiring: one flipped canned expectation -> exit 1, exactly 1 FAIL (row 32), 84 ok, the FAILED summary', { skip }, async () => {
     assertWired(await wires()[0]);
 });
 test('ic-diff --self-test exit wiring: revert checks (unmutated copy, rc dropped, summary ignoring fails) each fail the assertion', { skip }, async () => {
@@ -618,7 +624,7 @@ const HELP_LINES = [
 const HELP_HAS = [
     'unresolved pc (no code-creation holds it: compile cache or user snapshot code?)',
     'IC pc in optimized code (Maglev / Turbofan, kind <12|13>)', 'code-move from an unknown start', 'code-move does not parse',
-    'IC line not 11 fields', 'IC line does not parse', 'IC state outside X01P^NDG', 'code-creation does not parse',
+    'IC line not 11 fields', 'IC line does not parse', 'IC state outside X01P^HNDG', 'code-creation does not parse',
     'code kind outside the allowlist: <type,kind>', 'unknown IC kind <$1>', 'unknown event <$1>',
     'driver exited <rc> in run <k>', 'no IC log (no isolate-0x*-*-run.log written) in run <k>',
     'another isolate or process logged (<n> isolate-0x*-*-run.log files) in run <k>',
@@ -924,6 +930,38 @@ function relNodeDie(script) {
     } finally { g.done(); }
 }
 
+// --- b123 Q-B123-H (a) (.handoff/b123/Q-B123.md, maintainer ruling 2026-11-27): IC state H = HOMOMORPHIC (V8 15.6.75.50
+// src/ic/ic.cc TransitionMarkFromState; src/common/globals.h InlineCacheState) is a state of its own, compared verbatim,
+// never folded into N. ORACLE: the ruling + the b123 u0 probe (get's same-handler LoadIC: node 27 0->1 1->P P->P P->P P->H,
+// node 22 / 24 / 26 ... P->N), never what the script printed. Canned logs through this file's OWN fake node (no V8 spawn):
+// poly (final P) vs the node 27 shape (final H) -> DIFF P / H; the node <= 26 shape (final N) vs the node 27 shape -> DIFF
+// N / H (a fold into N would read SAME); node 27 vs node 27 -> SAME.
+const LPP = 'LoadIC,0x3bcd762b6932,98570,3,12,P,P,0x29a78805c289,x,,';
+const H_N26 = [V8V, CC_GET, L01, L1P, LPP, LPP.replace(',P,P,', ',P,N,'), ''].join('\n');
+const H_N27 = [V8V, CC_GET, L01, L1P, LPP, LPP.replace(',P,P,', ',P,H,'), ''].join('\n');
+assert.ok(H_N26.includes(',P,N,') && H_N27.includes(',P,H,'), 'Q-B123-H fixtures: the state edit changed nothing');
+function hDrv(g, name, log) {
+    mkdirSync(join(g.d, 'dr', name)); writeFileSync(join(g.d, 'dr', name, 'driver.js'), ''); writeFileSync(join(g.d, 'dr', name, 'ic.log'), log);
+    return join(g.d, 'dr', name, 'driver.js');
+}
+function hRow(script) {
+    const g = rig();
+    try {
+        const n26 = hDrv(g, 'h-n26', H_N26), n27 = hDrv(g, 'h-n27', H_N27);
+        for (const [b, fb] of [[g.D.poly, 'P'], [n26, 'N']]) {
+            const r = g.run(script, ['--fn', 'get', b, n27]);
+            assert.equal(r.status, 1, r.out);
+            assert.deepEqual(verdicts(r.out), ['VERDICT DIFF'], r.out);
+            const L = r.out.split('\n');
+            assert.ok(L.includes(`  before=1 after=0  get${TB}LoadIC${TB}x${TB}${fb}`), r.out);
+            assert.ok(L.includes(`  before=0 after=1  get${TB}LoadIC${TB}x${TB}H`), r.out);
+        }
+        const r = g.run(script, ['--fn', 'get', n27, n27]);
+        assert.equal(r.status, 0, r.out);
+        assert.deepEqual(verdicts(r.out), ['VERDICT SAME'], r.out);
+    } finally { g.done(); }
+}
+
 const A4 = [
     ['A4 / K1: R=3 -> 9 spawns (the 3 probes first, --no-node-snapshot once per trace argv), mktemp -d once; R=2 -> 7; R=20 -> 43', a4Spawns,
         // teeth: a --version probe per trace run (B2 M21); the env strip dropped from the trace spawns (fake exits 7);
@@ -960,6 +998,10 @@ const A4 = [
     ['--node <relative> + the allowlist --v8-options read exits 1 -> exit 2, the die names the ABSOLUTE resolved path, 2 spawns, 0 mktemp', relNodeDie,
         // teeth: the allowlist read runs the caller's --node value, not the resolved path (b35 G4 B1 review NIT 2)
         [['M-v8fl-bin', [['\nv8fl_check "$NODE_RES"\n', '\nv8fl_check "$NODE_BIN"\n']]]]],
+    ['Q-B123-H homomorphic: P vs H and N vs H at get\'s site -> exit 1 DIFF (H verbatim, never N); H vs H -> SAME', hRow,
+        // teeth: H dropped from the allowlist (the HEAD 388d7c0 refusal); H folded into N
+        [['M-H-st', [['split("X 0 1 P ^ H N D G", t, " ")', 'split("X 0 1 P ^ N D G", t, " ")']]],
+         ['M-H-fold', [['FIN[k] = $7; MOD[k] = $10;', 'FIN[k] = ($7 == "H" ? "N" : $7); MOD[k] = $10;']]]]],
 ];
 for (const [label, fn, teeth] of A4) {
     test(`ic-diff ${label}`, { skip }, () => { fn(SCRIPT); });
@@ -1059,4 +1101,71 @@ test(`ic-diff NOCASE old twin: git show ${NC_OLD}:ic-diff.sh under BASHOPTS=noca
 test(`ic-diff NOCASE control: BASHOPTS unset -> exit 1, VERDICT DIFF on the live root and on ${NC_OLD}`, { skip: NC_OLDSKIP }, () => {
     const g = ncRig();
     try { ncDiff(ncRun(g, SCRIPT, null)); ncDiff(ncRun(g, ncOldRoot(g.d), null)); } finally { g.done(); }
+});
+
+// ---- b123 Q-B123-H HEAD twin + parity. History pin 388d7c0 (the HEAD before b123; ic-diff.sh sha256/8 2dfe6507):
+// skipped when unreachable, FAILS under CI_STRICT (CI=true). Red on old: the H site reads X 'IC state outside X01P^NDG'.
+// Parity: on inputs WITHOUT state H the live root and 388d7c0 print byte-identical stdout / stderr / exit / spawn argv,
+// the refusal text X01P^NDG -> X01P^HNDG excepted (cell q shows the rename is the ONLY change); the self-test ok labels
+// of rows 1-83 are the old 83 labels, the same rename excepted.
+const B123_OLD = '388d7c0';
+const B123_OLD8 = '2dfe6507';
+const b123Have = skip ? 'skip' : (capSync('git', ['cat-file', '-e', `${B123_OLD}^{commit}`], { cwd: NC_PKG, env: ENV, encoding: 'utf8' }, 30000, 'git cat-file ic b123').status === 0
+    ? true : `commit ${B123_OLD} not available (shallow clone?)`);
+const B123_SKIP = skip || (b123Have === true || NC_STRICT ? false : b123Have);
+const b123Map = (s) => s.split('X01P^NDG').join('X01P^HNDG');
+function b123OldRoot(dir) {
+    if (b123Have !== true) assert.fail(`${b123Have} (CI=true: a history row fails, never skips)`);
+    const r = capSync('git', ['show', `${B123_OLD}:ic-diff.sh`], { cwd: NC_PKG, env: ENV, encoding: 'buffer', maxBuffer: 1 << 26 }, 30000, 'git show ic b123 old');
+    assert.equal(r.status, 0, `git show ${B123_OLD}:ic-diff.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    assert.equal(createHash('sha256').update(r.stdout).digest('hex').slice(0, 8), B123_OLD8);
+    const p = join(dir, 'ic-diff.b123-old.sh'); writeFileSync(p, r.stdout); chmodSync(p, 0o755);
+    return p;
+}
+test(`ic-diff Q-B123-H HEAD twin: git show ${B123_OLD}:ic-diff.sh reads the H site X 'IC state outside X01P^NDG', exit 2 NO-VERDICT (red on old)`, { skip: B123_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'icd-b123-'));
+    try {
+        const old = b123OldRoot(dir);
+        assert.throws(() => hRow(old), (e) => { if (capErr(e)) throw e; return e instanceof assert.AssertionError; });
+        const g = rig();
+        try {
+            const r = g.run(old, ['--fn', 'get', g.D.poly, hDrv(g, 'h-n27', H_N27)]);
+            assert.equal(r.status, 2, r.out);
+            assert.deepEqual(verdicts(r.out), ['VERDICT NO-VERDICT'], r.out);
+            assert.match(r.out, /^  get: NO-VERDICT -- after: unreadable IC log in run 1: IC state outside X01P\^NDG at log line 6$/m, r.out);
+        } finally { g.done(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test(`ic-diff Q-B123-H parity: inputs without H -> byte-identical to ${B123_OLD} (stdout, stderr, exit, argv), the refusal text renamed only`, { skip: B123_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'icd-b123p-'));
+    const g = rig();
+    try {
+        const old = b123OldRoot(dir);
+        const q = hDrv(g, 'h-q', [V8V, CC_GET, L01.replace(',0,1,', ',0,Q,'), ''].join('\n'));
+        const D = g.D;
+        const cells = [[D.mono, D.mono], [D.mono, D.poly], [D.poly, D.mono], [D.ks0, D.ksg], [D.n22b, D.n22j], [D.mono, q], [D.rc3, D.mono], [D.dashb, D.dasha]];
+        let renamed = 0;
+        for (const [b, a] of cells) {
+            const rn = g.run(SCRIPT, ['--fn', 'get', b, a]);
+            const ro = g.run(old, ['--fn', 'get', b, a]);
+            assert.equal(rn.status, ro.status, `${b} ${a}\n${rn.out}\n${ro.out}`);
+            assert.equal(rn.stdout, b123Map(ro.stdout), `${b} ${a}`);
+            assert.equal(rn.stderr, b123Map(ro.stderr), `${b} ${a}`);
+            const tdir = (v) => v.map((x) => x.replace(/\/ic-diff\.[A-Za-z0-9]{6}\//, '/ic-diff.XXXXXX/'));   // the mktemp name is per run
+            assert.deepEqual(tdir(rn.argv), tdir(ro.argv));
+            if (b123Map(ro.out) !== ro.out) renamed++;
+        }
+        assert.equal(renamed, 1, 'exactly the state-Q cell carries the renamed refusal text');
+    } finally { g.done(); rmSync(dir, { recursive: true, force: true }); }
+});
+test(`ic-diff Q-B123-H parity: the ${B123_OLD} self-test ok labels = the live rows 1-83 (the refusal text renamed only); rows 84 / 85 = HM1 / HM2`, { skip: B123_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'icd-b123s-'));
+    try {
+        const ro = selfTest(b123OldRoot(dir));
+        assert.equal(ro.status, 0, ro.stdout + ro.stderr);
+        const lo = okLines(ro.stdout), ln = okLines(base().stdout);
+        assert.equal(lo.length, 83);
+        assert.deepEqual(ln.slice(0, 83), lo.map(b123Map));
+        assert.ok(ln[83].startsWith('ok ' + ROW[84]) && ln[84].startsWith('ok ' + ROW[85]), ln.slice(83).join('\n'));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
 });

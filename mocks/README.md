@@ -101,6 +101,6 @@ done
    - `change`, `guard`, `limit`, `aa`, and any `NO-VERDICT` expectation must include `expect.text`.
    - Each matcher checks that all listed substrings appear on **one** line. `stream: "stderr"` is allowed only on `NO-VERDICT` / `guard` cases.
    - Never put observed numbers (counts, bytecode lengths, B/op) in `expect` or comments.
-   - Use `expect_by_major` only for variance documented by the tool (`ic-diff` 22/24, `inlining-budget-diff` maglev 22, `bytecode-budget` prerelease gate), or a maintainer-ruled tool finding pinned on its refusal text (Q-B122-DRIFT (a): `ic-diff` poly-to-mega 27, `allocation-diff` guard-old-gc 22).
+   - Use `expect_by_major` only for variance documented by the tool (`ic-diff` 22/24, `ic-diff` 27 state H (Q-B123-H (a)), `inlining-budget-diff` maglev 22, `bytecode-budget` prerelease gate). The Q-B122-DRIFT refusal pins (`ic-diff` poly-to-mega 27, `allocation-diff` guard-old-gc 22) are gone: retired by the Q-B123-H (a) / Q-B123-GCSET (a) engine fixes.
 3. Validate with `node mocks/run.mjs --list --tool <tool>` and verify ASCII (`LC_ALL=C grep -rn '[^ -~]' mocks/<tool>/<name>` prints nothing).
 4. Run with `--repeat 2` (or `--repeat 3` for `allocation-diff` and `alloc-per-op`) across supported Node binaries and add a row to `mocks/<tool>/README.md`.

@@ -477,8 +477,8 @@ test('A6: 0 --out dirs created across the 109 live rows', { skip }, () => {
 
 
 // ---- A3 self-test counts (PLAN section 2: "Self-test counts do not change") ----
-const COUNT = { [AD]: 85, [BB]: 69, [DD]: 107, [IC]: 83, [IBD]: 92 };
-const OLD_COUNT = { ...COUNT, [AD]: 83 }; // 861f3d3 predates the Q-ADZ-NC (a) self-test rows 84 / 85
+const COUNT = { [AD]: 90, [BB]: 69, [DD]: 107, [IC]: 85, [IBD]: 92 }; // b123: + ad IL1-IL5 (86-90), + ic HM1 / HM2 (84 / 85)
+const OLD_COUNT = { ...COUNT, [AD]: 83, [IC]: 83 }; // 861f3d3 predates the Q-ADZ-NC (a) self-test rows 84 / 85 and the b123 rows
 function selfTest(root, what) {
     const d = mk('st'); const cwd = join(d, 'cwd'), tmp = join(d, 'tmp'); mkdirSync(cwd); mkdirSync(tmp);
     return spawn(BASH, [root, '--self-test'], { cwd, env: cleanEnv({ PWD: cwd, TMPDIR: tmp }) }, what, 900000);

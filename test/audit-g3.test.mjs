@@ -513,10 +513,10 @@ test('A10 -h: exit 2; each new phrase exactly once, the old workers phrase never
     assert.equal(count(o, 'allocation in workers or other isolates'), 0);
 });
 
-test('A10 --self-test: exit 0, last line "self-test: 85 check(s) ok", no FAIL line', { skip }, () => {
+test('A10 --self-test: exit 0, last line "self-test: 90 check(s) ok", no FAIL line (85 + b123 IL1-IL5)', { skip }, () => {
     const r = spawn(BASH, [TOOL, '--self-test'], { cwd: mk('st'), env: cleanEnv({ TMPDIR: mk('sttmp') }) }, 'allocation-diff --self-test', 600000);
     const ls = r.stdout.split('\n').filter((l) => l !== '');
     assert.equal(r.status, 0, msg(r).slice(-1500));
-    assert.equal(ls[ls.length - 1], 'self-test: 85 check(s) ok');
+    assert.equal(ls[ls.length - 1], 'self-test: 90 check(s) ok');
     assert.ok(!ls.some((l) => l.startsWith('FAIL ')), 'a FAIL line');
 });

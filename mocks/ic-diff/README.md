@@ -17,4 +17,4 @@ node mocks/run.mjs --node /opt/homebrew/bin/node --tool ic-diff
 | `load-to-store-kind` | `change` | IC kind changed from LoadIC to StoreIC (IC-C5) | ic-diff -h: IC kind (LoadIC vs StoreIC) is part of the verdict key -> DIFF | `DIFF (v22:NO-VERDICT, v24:NO-VERDICT)` |
 | `mono-to-poly` | `change` | LoadIC monomorphic -> polymorphic (IC-C1) | ic-diff -h: per-fn multiset of final IC states; 1 -> P is DIFF | `DIFF (v22:NO-VERDICT, v24:NO-VERDICT)` |
 | `new-ic-site` | `change` | additional LoadIC property access site added (IC-C3) | ic-diff -h: adding a new IC site changes the multiset -> DIFF | `DIFF (v22:NO-VERDICT, v24:NO-VERDICT)` |
-| `poly-to-mega` | `change` | LoadIC polymorphic -> megamorphic (IC-C2) | ic-diff -h: polymorphic (P) -> megamorphic (N) is DIFF | `DIFF (v22:NO-VERDICT, v24:NO-VERDICT, v27:NO-VERDICT)` |
+| `poly-to-mega` | `change` | LoadIC polymorphic -> megamorphic (IC-C2) | ic-diff -h: polymorphic (P) -> megamorphic (N) is DIFF (P -> H homomorphic on V8 15.6, Q-B123-H) | `DIFF (v22:NO-VERDICT, v24:NO-VERDICT, v27:DIFF)` |

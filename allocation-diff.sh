@@ -103,11 +103,17 @@
 #   `@@LITE-MARK gcn` (reserved: the guard's exit fence). Any other `@@LITE-MARK` line (e.g. `@@LITE-MARK op 7`) is
 #   ignored. The output after gcn is read to EOF, never parsed (a second gcn line excepted).
 # GC line: a line starting `[<digits>:0x` must match the whole --trace-gc line grammar (tail-anchored). Its kind =
-#   the text between ` ms: ` and the first numeric token, one trailing ` (during sweeping)` dropped. Young = exactly
-#   Scavenge, Minor Mark-Sweep, whose lines end `; ` (no collector text); old = exactly Mark-Compact, Incremental
-#   Mark-Compact, whose lines end `; GC in old space requested`. These collector texts are the ones recorded on node
-#   v26.8.2, not every text node can print: a GC line with any other reads X (NO-VERDICT), as does a line of one
-#   class with the other class's text. Any other kind inside the window reads X; outside it, it is only counted.
+#   the text between ` ms: ` and the first numeric token, at most ONE suffix dropped: one trailing ` (during sweeping)`
+#   (V8 14.6 / 15.6), else one trailing ` (interleaved)` only when the rest is exactly Scavenge or Minor Mark-Sweep
+#   (V8 12.4 / 13.6 src/heap/gc-tracer.cc Print: a young GC that ran while a full GC cycle was running; node 22 / 24).
+#   A kind with both suffixes, and Mark-Compact (interleaved) / Incremental Mark-Compact (interleaved), stay unknown
+#   kinds. Young = exactly Scavenge, Minor Mark-Sweep, whose lines end `; ` (no collector text); old = exactly
+#   Mark-Compact, Incremental Mark-Compact, whose lines end `; GC in old space requested`. These kind and collector
+#   texts are the ones recorded on node v26.8.2 and v22.23.5 (`Minor Mark-Sweep (interleaved)`: from the V8 12.4 /
+#   13.6 gc-tracer.cc source alone), not every text node can print: a GC line with any other reads X (NO-VERDICT), as
+#   does a line of one class with the other class's text. Any other kind inside the window reads X; outside it, it is
+#   only counted. Known-refused (printable per the gc-tracer.cc source, shown by no node log): the kind
+#   `Incremental Minor Mark-Sweep` (V8 14.x+) and the ` (reduce)` suffix (every V8) read X.
 # Records (pid, address, ms, MB, pause and reason never reach a record):
 #   Y <kind> / O <kind>   one per young / old GC line strictly inside the window (between start and end)
 #   X <why>               the output cannot be read: a GC line that fails the grammar or the kind / collector
@@ -225,7 +231,8 @@ $0 == "@@LITE-MARK gcn" { if (st != 2) x("@@LITE-MARK gcn before @@LITE-MARK end
   if ($0 !~ /^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: [A-Z][A-Za-z() -]* [0-9.]+ \([0-9.]+\) -> [0-9.]+ \([0-9.]+\) MB, pooled: [0-9.]+ MB, [0-9.]+ \/ [0-9.]+ ms +(\(\+ [^()]*\) +)?\(average mu = [0-9.]+, current mu = [0-9.]+\) [A-Za-z][A-Za-z ]*; (GC in old space requested)?$/) {
     x("GC line does not match the --trace-gc grammar"); next
   }
-  k = $0; sub(/^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: /, "", k); sub(/ [0-9].*$/, "", k); sub(/ \(during sweeping\)$/, "", k)
+  k = $0; sub(/^\[[0-9]+:0x[0-9a-f]+\] +[0-9]+ ms: /, "", k); sub(/ [0-9].*$/, "", k); k0 = k; sub(/ \(during sweeping\)$/, "", k)
+  if (k == k0) { kb = k; if (sub(/ \(interleaved\)$/, "", kb) && (kb == "Scavenge" || kb == "Minor Mark-Sweep")) k = kb }
   yg = (k == "Scavenge" || k == "Minor Mark-Sweep"); od = (k == "Mark-Compact" || k == "Incremental Mark-Compact")
   if ((yg && $0 !~ /; $/) || (od && $0 !~ /; GC in old space requested$/)) { x("gc-tail-kind: a " k " line with a collector text that kind is not seen with"); next }
   g++
@@ -1080,6 +1087,23 @@ FAKE_MKTEMP
   check "Q-ADZ-NC null control e2e: --zero young 0,0,1 -> exit 2 naming run 3; young 1,0,0 -> exit 2 naming run 2 (the first)" \
     "$(spawn -- "$NO" --runs 3 --zero "$dr/z001/driver.js")|$(has '  NO-VERDICT -- driver: null control: run 3 differs from run 1 (--zero: run 1 young 0 | run 3 young 1)')#$(spawn -- "$NO" --runs 3 --zero "$dr/z100/driver.js")|$(has '  NO-VERDICT -- driver: null control: run 2 differs from run 1 (--zero: run 1 young 1 | run 2 young 0)')" \
     "2|VERDICT NO-VERDICT|5|1#2|VERDICT NO-VERDICT|5|1"
+  # --- Q-B123-GCSET (a): one trailing ` (interleaved)` dropped only after Scavenge / Minor Mark-Sweep (V8 12.4 / 13.6;
+  # LIS = node v22.23.5 --trace-gc, .handoff/b123/u0/gc.v22.run1.out line 4, verbatim) ---
+  LIS='[17005:0x7a0980c000]       17 ms: Scavenge (interleaved) 3.8 (6.6) -> 3.8 (6.6) MB, pooled: 0 MB, 0.17 / 0.00 ms  (average mu = 1.000, current mu = 1.000) external memory pressure; '
+  LIMS=${LIS/ ms: Scavenge (interleaved) / ms: Minor Mark-Sweep (interleaved) }
+  check "IL1 records: v22 Scavenge (interleaved) x3 in the window, one before start -> 3x 'Y Scavenge' (the young base kind), counted in g" \
+    "$(rec "$LIS"$'\n'"$(win "$(rep "$LIS" 3)")")" "Y Scavenge;Y Scavenge;Y Scavenge;G 5 1;"
+  check "IL2 records: Minor Mark-Sweep (interleaved) in the window -> 'Y Minor Mark-Sweep'" \
+    "$(rec "$(win "$LIMS")")" "Y Minor Mark-Sweep;G 2 1;"
+  check "IL3 records: Mark-Compact (interleaved), Incremental Mark-Compact (interleaved) in the window -> X unknown GC kind (old kinds never drop it)" \
+    "$(rec "$(win "${LMC/ ms: Mark-Compact / ms: Mark-Compact (interleaved) }")")#$(rec "$(win "${L2/ ms: Incremental Mark-Compact / ms: Incremental Mark-Compact (interleaved) }")")" \
+    "X unknown GC kind 'Mark-Compact (interleaved)' in the window;G 2 1;#X unknown GC kind 'Incremental Mark-Compact (interleaved)' in the window;G 2 1;"
+  check "IL4 records: Scavenge (interleaved) (during sweeping), Scavenge (during sweeping) (interleaved) in the window -> X unknown GC kind, named after the one drop (at most one suffix)" \
+    "$(rec "$(win "${LIS/ (interleaved) / (interleaved) (during sweeping) }")")#$(rec "$(win "${LIS/ (interleaved) / (during sweeping) (interleaved) }")")" \
+    "X unknown GC kind 'Scavenge (interleaved)' in the window;G 2 1;#X unknown GC kind 'Scavenge (during sweeping) (interleaved)' in the window;G 2 1;"
+  check "IL5 records: Minor (interleaved) Mark-Sweep in the window -> X unknown GC kind (only a TRAILING ' (interleaved)' drops)" \
+    "$(rec "$(win "${LIS/ ms: Scavenge (interleaved) / ms: Minor (interleaved) Mark-Sweep }")")" \
+    "X unknown GC kind 'Minor (interleaved) Mark-Sweep' in the window;G 2 1;"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1

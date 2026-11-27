@@ -5,6 +5,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Patch: two engine-drift fixes found by the known-answer corpus (b122). Only `ic-diff` and `allocation-diff` change;
+the other tools are byte-identical.
+
+### Fixed
+
+- ic-diff: IC state `H` (HOMOMORPHIC) is accepted as a state of its own. V8 15.6 (node v27.0.0-alpha.0.1.0, V8
+  15.6.75.50) logs it for a LoadIC that has seen more than 4 maps sharing one field handler (`--homomorphic-ic`, on by
+  default there; src/ic/ic.cc `TransitionMarkFromState`, src/common/globals.h `InlineCacheState`). Such a site used to
+  read NO-VERDICT (`IC state outside X01P^NDG`). `H` is compared as printed, never folded into `N`: on node 27 a
+  same-handler site that reads P -> N on node <= 26 reads P -> H. The allowlist is now X01P^HNDG and the refusal reads
+  `IC state outside X01P^HNDG` (Q-B123-H (a)).
+- allocation-diff: a `--trace-gc` line `Scavenge (interleaved)` or `Minor Mark-Sweep (interleaved)` counts as that
+  young kind. V8 12.4 / 13.6 (node 22 / 24; `Scavenge (interleaved)` seen on v22.23.5, V8 12.4.254.21; `Minor
+  Mark-Sweep (interleaved)` from the source alone) print ` (interleaved)` for a young GC that ran while a full GC
+  cycle was running (src/heap/gc-tracer.cc). Such a window used to read NO-VERDICT (`unknown GC kind 'Scavenge
+  (interleaved)'`). At most one suffix is dropped; `(interleaved)` after any other kind or not at the end,
+  `Incremental Minor Mark-Sweep` and ` (reduce)` still read X (Q-B123-GCSET (a)).
+
+### Tests
+
+- Self-test rows: ic-diff 83 -> 85, allocation-diff 85 -> 90. HEAD-twin gates that fail on the 1.2.0 roots, parity
+  rows against them, and one mutant per new behavior. Corpus re-pins (R9): `mocks/ic-diff/poly-to-mega` reads DIFF
+  P -> H on node 27; `mocks/allocation-diff/guard-old-gc` drops its node 22 override.
+
 ## [1.2.0] - 2026-11-27
 
 Minor release. Adds a seventh tool, `shape-diff` (a bash root, `bin: shape-diff`); the five other bash tools and

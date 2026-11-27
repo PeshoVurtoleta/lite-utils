@@ -105,7 +105,7 @@
 #   code-move does not parse                      (NF not 3, or from / to not 0x-hex or too wide)
 #   IC line not 11 fields                         (a torn or glued line)
 #   IC line does not parse                        (pc not 0x-hex or too wide, line / col not decimal, or a TAB)
-#   IC state outside X01P^NDG
+#   IC state outside X01P^HNDG
 #   code-creation does not parse                  (NF not 7 / 9, start not 0x-hex or too wide, size not decimal)
 #   code kind outside the allowlist: <type,kind>  (NF 7: Builtin,3 BytecodeHandler,0 RegExp,4;
 #                                                  NF 9: Eval,10 JS,10 JS,11 JS,12 JS,13 Script,10)
@@ -147,6 +147,10 @@
 #   by the isolate-file count (NO-VERDICT).
 # Known limit: on node 22 and 24 this tool ends NO-VERDICT (the code-kind numbering table is V8 14.x only), by design until a node 22 / 24 numbering is adopted; a NO-VERDICT, never a wrong verdict.
 # V8 15.6 (node 27 alpha) uses the same V8 14.x numbering (CODE_KIND_LIST identical at 14.6.202.34 and 15.6.75.25, read from source), so the tool gives verdicts there.
+# IC state H = HOMOMORPHIC, V8 15.x (node 27 alpha; src/ic/ic.cc TransitionMarkFromState and src/common/globals.h
+#   InlineCacheState at 15.6.75.50): > 4 maps sharing one Smi field handler, LoadIC only, --homomorphic-ic (default
+#   on). Compared verbatim like every state, never folded into N: a same-handler site that logs P -> N on node <= 26
+#   logs P -> H there. V8 12.4 / 13.6 / 14.6 print the other eight states only.
 # Tier: on a user driver the verdict is STATISTICAL (IC states follow warm-up, GC and tier-up timing; run it under the
 #   host quiet lock); --self-test is DETERMINISTIC (canned log text and a fake node).
 # Any unexpected failure (a command that fails outside the checks above) exits 2 NO-VERDICT, never 1.
@@ -244,7 +248,7 @@ BEGIN {
   for (i in t) EV[t[i]] = 1
   split("KeyedLoadIC KeyedStoreIC LoadGlobalIC LoadIC StoreIC StoreInArrayLiteralIC StoreGlobalIC", t, " ")
   for (i in t) IC[t[i]] = 1
-  split("X 0 1 P ^ N D G", t, " ")
+  split("X 0 1 P ^ H N D G", t, " ")
   for (i in t) ST[t[i]] = 1
   split("Builtin,3 BytecodeHandler,0 RegExp,4", t, " ")
   for (i in t) C7[t[i]] = 1
@@ -254,7 +258,7 @@ BEGIN {
 $1 in IC {
   if (NF != 11) { x("IC line not 11 fields"); next }
   if ($2 !~ /^0x[0-9a-fA-F]+$/ || length($2) > 15 || $4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/ || index($0, "\t") > 0) { x("IC line does not parse"); next }
-  if (!($6 in ST) || !($7 in ST)) { x("IC state outside X01P^NDG"); next }
+  if (!($6 in ST) || !($7 in ST)) { x("IC state outside X01P^HNDG"); next }
   p = hex($2); h = 0
   for (i = n; i >= 1; i--) if (lv[i] && p >= cs[i] && p < ce[i]) { h = i; break }
   if (!h) { x("unresolved pc (no code-creation holds it: compile cache or user snapshot code?)"); next }
@@ -678,9 +682,9 @@ EOF
   check "A2 a 10-field IC line, and two IC lines glued into one (18 fields) -> X 'IC line not 11 fields'" \
     "$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,xLoadIC,0x3bcd762b6930,98552,3,12,1,P,0x29a78805c239,x,,')" \
     "X IC line not 11 fields at log line 12;#X IC line not 11 fields at log line 12;"
-  check "A2 an IC line with pc 0xZZ, with line 'a', or with a TAB -> X 'IC line does not parse'; state Q -> X 'IC state outside X01P^NDG'" \
+  check "A2 an IC line with pc 0xZZ, with line 'a', or with a TAB -> X 'IC line does not parse'; state Q -> X 'IC state outside X01P^HNDG'" \
     "$(rec get "$H"$'\n''LoadIC,0xZZ,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,a,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x'$'\t''y,,')#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6930,98551,3,12,0,Q,0x29a78805c239,x,,')" \
-    "X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC state outside X01P^NDG at log line 12;"
+    "X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC line does not parse at log line 12;#X IC state outside X01P^HNDG at log line 12;"
   check "A2 M15 a torn fragment whose \$1 does not end in IC ('x3bcd762b6930,...') -> X 'unknown event'; 'oadIC,...' -> X 'unknown IC kind'" \
     "$(rec get "$H"$'\n''x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')#$(rec get "$H"$'\n''oadIC,0x3bcd762b6930,98551,3,12,0,1,0x29a78805c239,x,,')" \
     "X unknown event x3bcd762b6930 at log line 12;#X unknown IC kind oadIC at log line 12;"
@@ -1001,6 +1005,14 @@ EOF
   check "NC4 e2e: run 2 of before differs (mono, then poly) -> 'before: null control: run 2 differs from run 1', after passes" \
     "$(spawn -- "$NO" --fn get "$dr/nc/driver.js" "$dr/mono/driver.js")|$(grep -c -e '^  get: NO-VERDICT -- before: null control: run 2 differs from run 1 (' "$d/sp.out" || true)|$(grep -c -e ' -- after: ' "$d/sp.out" || true)" \
     "2|VERDICT NO-VERDICT|9|1|1|0"
+  # Q-B123-H (a): IC state H (HOMOMORPHIC, V8 15.6.75.50) is a state of its own, compared verbatim, never folded into N
+  LPH='LoadIC,0x3bcd762b6932,98580,3,12,P,H,0x000000000000,x,,'
+  LHN='LoadIC,0x3bcd762b6932,98590,3,12,H,N,0x000000000000,x,,'
+  check "HM1 Q-B123-H: 0->1 1->P P->P P->H at get's site (V8 15.6 same-handler shape) -> final H; 0->1 then 1,H at key y -> final H" \
+    "$(rec get "$H"$'\n'"$L01"$'\n'"$L1P"$'\n'"$LPP"$'\n'"$LPH")#$(rec get "$H"$'\n''LoadIC,0x3bcd762b6931,98552,1,1,1,H,0x29a78805c239,y,,')" \
+    "S get|LoadIC|drv-mono.js:3:12|x|H||;#S get|LoadIC|drv-mono.js:1:1|y|H||;"
+  check "HM2 Q-B123-H: old state H, new N at get's site (P->H then H->N) -> final N, not H" \
+    "$(rec get "$H"$'\n'"$L01"$'\n'"$L1P"$'\n'"$LPH"$'\n'"$LHN")" "S get|LoadIC|drv-mono.js:3:12|x|N||;"
 
   if [[ $fails -eq 0 && $oks -gt 0 ]]; then echo "self-test: $oks check(s) ok"; return 0; fi
   echo "self-test: $((fails > 0 ? fails : 1)) check(s) FAILED"; return 1

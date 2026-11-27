@@ -23,7 +23,7 @@ import { probeAwk, buildNulCutAwk, nulTmpDir } from './nul-awk.mjs';
 import { capSync, armCap, noTimeout } from './spawn-cap.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'allocation-diff.sh');
-const C = 85;   // self-test ok lines at b100 GA-B1a (src 54d474c1 / root 4831c3ac, sha256; 76 at B2a 00ab0dac / 8e795263,
+const C = 90;   // 90 since b123 added checks 86-90 IL1-IL5 (Q-B123-GCSET). Self-test ok lines at b100 GA-B1a (src 54d474c1 / root 4831c3ac, sha256; 76 at B2a 00ab0dac / 8e795263,
                 // 78 since G5 B1 added checks 77 / 78, 79 since b43 G-ENV added check 79 Q-ENV, 83 since b63 g3 B1 added
                 // checks 80-83 R6 / PRETEN / R26 / R8, 85 since b100 GA-B1a added checks 84 / 85 Q-ADZ-NC); a new check
                 // moves this literal
@@ -164,7 +164,14 @@ const ROW = [null,
     /* 83 */ 'R8 e2e:',
     /* 84 */ 'Q-ADZ-NC NONZERO e2e:',
     /* 85 */ 'Q-ADZ-NC null control e2e:',
+    /* 86 */ 'IL1 records:',
+    /* 87 */ 'IL2 records:',
+    /* 88 */ 'IL3 records:',
+    /* 89 */ 'IL4 records:',
+    /* 90 */ 'IL5 records:',
 ];
+// b123 Q-B123-GCSET (a): the GC_AWK ` (interleaved)` drop line (the M-il-* / IL_TEETH anchor)
+const IL_LINE = '  if (k == k0) { kb = k; if (sub(/ \\(interleaved\\)$/, "", kb) && (kb == "Scavenge" || kb == "Minor Mark-Sweep")) k = kb }\n';
 
 function okLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ')); }
 function rowLines(out) { return out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL ')); }
@@ -619,6 +626,15 @@ const NEW = [
     ['M-zline-new', [19, 83], 'every NONZERO prints the new line', [['      if [[ $JEQ == 1 ]]; then\n', '      if [[ $JEQ == 2 ]]; then\n']]],
     ['M-order', [52], '--zero class loop above the guard-count loop', [[C0 + O0 + ZL, ZL + C0 + O0]]],
     ['M-jeq-noreset', [19, 72, 83], 'judge() does not reset JEQ = 1', [['  JV=NO-VERDICT; JWHY=""; JEQ=1\n', '  JV=NO-VERDICT; JWHY=""\n']]],
+    // b123 Q-B123-GCSET (a): one mutant per new behaviour (IL_LINE = the GC_AWK drop line, once in the root)
+    ['M-il-drop', [86, 87], 'the ` (interleaved)` drop removed (the HEAD 388d7c0 behaviour)', [[IL_LINE, '']]],
+    ['M-il-young', [88], 'the young-base check removed (an old kind drops ` (interleaved)` too)',
+        [[' && (kb == "Scavenge" || kb == "Minor Mark-Sweep")) k = kb }', ') k = kb }']]],
+    ['M-il-one', [89], 'the one-suffix guard removed (a ` (during sweeping)` line also drops ` (interleaved)`)',
+        [['  if (k == k0) { kb = k;', '  if (1) { kb = k;']]],
+    // b123 review r1 (reviewer mutant ad-noanch): the ` (interleaved)` drop not anchored at the end of the kind
+    ['ad-noanch', [90], 'the ` (interleaved)` drop unanchored (`$` removed)',
+        [['sub(/ \\(interleaved\\)$/, "", kb)', 'sub(/ \\(interleaved\\)/, "", kb)']]],
 ];
 // the b100 Q-ADZ-NC mutants: red on their designed rows AND on no other row (PLAN-GA TASK 4)
 const EXACT = new Set(['M-znc-ms', 'M-znc-off', 'M-znc-run2', 'M-znc-last', 'M-zline-old', 'M-zline-new', 'M-order', 'M-jeq-noreset']);
@@ -1885,6 +1901,23 @@ const ZN_HELP = [
     [znH(['#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ...";']),
      znH(['#   whose count differs "    before=<n> after=<m>  <kind>"; --zero: "  ZERO -- ..." or "  NONZERO -- ..." ("  NONZERO',
         '#   -- young GC(s) in the window in every run (young per run <y1>,<y2>,..)" when the runs\' young multisets differ);'])],
+    // b123 Q-B123-GCSET (a): the GC line paragraph (the ` (interleaved)` drop, v22.23.5, the known-refused texts)
+    [znH(["#   the text between ` ms: ` and the first numeric token, one trailing ` (during sweeping)` dropped. Young = exactly",
+        "#   Scavenge, Minor Mark-Sweep, whose lines end `; ` (no collector text); old = exactly Mark-Compact, Incremental",
+        "#   Mark-Compact, whose lines end `; GC in old space requested`. These collector texts are the ones recorded on node",
+        "#   v26.8.2, not every text node can print: a GC line with any other reads X (NO-VERDICT), as does a line of one",
+        "#   class with the other class's text. Any other kind inside the window reads X; outside it, it is only counted."]),
+     znH(["#   the text between ` ms: ` and the first numeric token, at most ONE suffix dropped: one trailing ` (during sweeping)`",
+        "#   (V8 14.6 / 15.6), else one trailing ` (interleaved)` only when the rest is exactly Scavenge or Minor Mark-Sweep",
+        "#   (V8 12.4 / 13.6 src/heap/gc-tracer.cc Print: a young GC that ran while a full GC cycle was running; node 22 / 24).",
+        "#   A kind with both suffixes, and Mark-Compact (interleaved) / Incremental Mark-Compact (interleaved), stay unknown",
+        "#   kinds. Young = exactly Scavenge, Minor Mark-Sweep, whose lines end `; ` (no collector text); old = exactly",
+        "#   Mark-Compact, Incremental Mark-Compact, whose lines end `; GC in old space requested`. These kind and collector",
+        "#   texts are the ones recorded on node v26.8.2 and v22.23.5 (`Minor Mark-Sweep (interleaved)`: from the V8 12.4 /",
+        "#   13.6 gc-tracer.cc source alone), not every text node can print: a GC line with any other reads X (NO-VERDICT), as",
+        "#   does a line of one class with the other class's text. Any other kind inside the window reads X; outside it, it is",
+        "#   only counted. Known-refused (printable per the gc-tracer.cc source, shown by no node log): the kind",
+        "#   `Incremental Minor Mark-Sweep` (V8 14.x+) and the ` (reduce)` suffix (every V8) read X."])],
 ];
 const znVerdict = (r) => r.L.filter((l) => l.startsWith('VERDICT ')).join('|');
 function znParity(oldP, newP) {
@@ -1962,4 +1995,105 @@ test('allocation-diff anchors: every mutant / wiring / Y7 / teeth anchor matches
             assert.equal(n, 1, `${name}: anchor matched ${n} times: ${JSON.stringify(from).slice(0, 120)}`);
         }
     }
+});
+
+// ---- b123 Q-B123-GCSET (a) (.handoff/b123/Q-B123.md, maintainer ruling 2026-11-27): one trailing ` (interleaved)` is
+// dropped ONLY after Scavenge / Minor Mark-Sweep (V8 12.4 / 13.6 src/heap/gc-tracer.cc: a young GC that ran while a full
+// GC cycle was running), at most one suffix per line; any other (interleaved) kind stays unknown (X). ORACLE: the ruling
+// + the b123 u0 probe (v22.23.5 guard-old-gc: young total 10 every run, Scavenge / Scavenge (interleaved) split 2/8 .. 6/4),
+// never what the script printed. This file's OWN a1 fake node (no V8 spawn). IL_S22 = gc.v22.run1.out line 4, IL_P22 =
+// line 2, verbatim. HEAD twin + parity: history pin 388d7c0 (allocation-diff.sh sha256/8 4831c3ac), skipped when
+// unreachable, FAILS under CI_STRICT.
+const IL_S22 = '[17005:0x7a0980c000]       17 ms: Scavenge (interleaved) 3.8 (6.6) -> 3.8 (6.6) MB, pooled: 0 MB, 0.17 / 0.00 ms  (average mu = 1.000, current mu = 1.000) external memory pressure; ';
+const IL_P22 = '[17005:0x7a0980c000]       16 ms: Scavenge 4.0 (5.1) -> 3.8 (6.1) MB, pooled: 0 MB, 0.21 / 0.00 ms  (average mu = 1.000, current mu = 1.000) external memory pressure; ';
+const ilSub = (l, a, b) => { assert.equal(count(l, a), 1); return l.split(a).join(b); };
+const IL_MMS = ilSub(IL_S22, ' ms: Scavenge (interleaved) ', ' ms: Minor Mark-Sweep (interleaved) ');
+const IL_MC = ilSub(A1_M22, ' ms: Mark-Compact ', ' ms: Mark-Compact (interleaved) ');
+const IL_DS = ilSub(IL_S22, ' (interleaved) ', ' (interleaved) (during sweeping) ');
+const ilRep = (l, n) => Array(n).fill(l);
+const ilNV = (why) => `  NO-VERDICT -- driver: unparseable --trace-gc output in run 1: unknown GC kind '${why}' in the window`;
+function ilRow(script) {
+    withA1((g) => {
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Y3(IL_S22))]), 1, 'NONZERO', A1_N3);
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Y3(IL_MMS))]), 1, 'NONZERO', A1_N3);
+        // the probe's interleaved share moves, the young total does not: 2/8 vs 5/5 -> SAME (Scavenge x10 both sides)
+        a1Verdict(g.run(script, ['--runs', '3', g.drv(a1Trace([...ilRep(IL_P22, 2), ...ilRep(IL_S22, 8)])), g.drv(a1Trace([...ilRep(IL_P22, 5), ...ilRep(IL_S22, 5)]))]),
+            0, 'SAME', '  SAME -- identical young-GC multiset in the window (before 10 | after 10)');
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Trace([IL_MC]))]), 2, 'NO-VERDICT', ilNV('Mark-Compact (interleaved)'));
+        a1Verdict(g.run(script, ['--runs', '3', '--zero', g.drv(a1Trace([IL_DS]))]), 2, 'NO-VERDICT', ilNV('Scavenge (interleaved)'));
+    });
+}
+const IL_TEETH = [
+    ['M-il-drop', [[IL_LINE, '']]],
+    ['M-il-young', [[' && (kb == "Scavenge" || kb == "Minor Mark-Sweep")) k = kb }', ') k = kb }']]],
+    ['M-il-one', [['  if (k == k0) { kb = k;', '  if (1) { kb = k;']]],
+];
+test('allocation-diff Q-B123-GCSET: v22 Scavenge (interleaved) / Minor Mark-Sweep (interleaved) read young; share 2/8 vs 5/5 SAME; Mark-Compact (interleaved) and a two-suffix line NO-VERDICT', { skip }, () => {
+    ilRow(SCRIPT);
+});
+test(`allocation-diff Q-B123-GCSET: revert checks (${IL_TEETH.map((x) => x[0]).join(', ')}) fail the row`, { skip }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-ilt-'));
+    try {
+        for (const [n, edits] of IL_TEETH) {
+            const p = variant(dir, n, edits);   // outside throws: a bad anchor is a row error, never a kill
+            assert.throws(() => ilRow(p), (e) => { if (capErr(e)) throw e; t.diagnostic(`teeth ${n}: ${e.message.split('\n')[0]}`); return e instanceof assert.AssertionError; }, n);
+        }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+const B123_OLD = '388d7c0';
+const B123_OLD8 = '4831c3ac';
+const b123Have = skip ? 'POSIX hosts only' : (capSync('git', ['cat-file', '-e', `${B123_OLD}^{commit}`], { cwd: PKG, env: GITENV }, 30000, 'git cat-file b123').status === 0 ? true : `commit ${B123_OLD} not available (shallow clone?)`);
+const B123_SKIP = skip || (b123Have === true || CI_STRICT ? false : b123Have);
+function b123OldRoot(dir) {
+    if (b123Have !== true) assert.fail(`${b123Have} (CI=true: a history row fails, never skips)`);
+    const g = capSync('git', ['show', `${B123_OLD}:allocation-diff.sh`], { cwd: PKG, env: GITENV, encoding: 'buffer' }, 30000, 'git show allocation-diff.sh b123');
+    assert.equal(g.status, 0, `git show ${B123_OLD}:allocation-diff.sh failed (CI_STRICT: an unreachable pin is a failure)`);
+    assert.equal(createHash('sha256').update(g.stdout).digest('hex').slice(0, 8), B123_OLD8);
+    const p = join(dir, 'b123-old-allocation-diff.sh'); writeFileSync(p, g.stdout); chmodSync(p, 0o755);
+    return p;
+}
+test(`allocation-diff Q-B123-GCSET HEAD twin: git show ${B123_OLD}:allocation-diff.sh reads Scavenge (interleaved) X 'unknown GC kind', exit 2 (red on old)`, { skip: B123_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-b123-'));
+    try {
+        const old = b123OldRoot(dir);
+        assert.throws(() => ilRow(old), (e) => { if (capErr(e)) throw e; return e instanceof assert.AssertionError; });
+        withA1((g) => a1Verdict(g.run(old, ['--runs', '3', '--zero', g.drv(a1Y3(IL_S22))]), 2, 'NO-VERDICT', ilNV('Scavenge (interleaved)')));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test(`allocation-diff Q-B123-GCSET parity: traces without (interleaved) -> byte-identical to ${B123_OLD} (stdout, stderr, exit)`, { skip: B123_SKIP }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-b123p-'));
+    try {
+        const old = b123OldRoot(dir);
+        withA1((g) => {
+            const k = (l, a, b) => ilSub(l, a, b);
+            const y3 = g.drv(a1Y3(A1_S22)), y1 = g.drv(a1Trace([A1_S22])), z = g.drv(a1Trace([]));
+            const cells = [['--zero', y3], ['--zero', z], ['--zero', g.drv(a1Trace([A1_M22]))], ['--zero', g.drv(a1Y3(IL_P22))],
+                ['--zero', g.drv(a1Trace([k(A1_S22, ' ms: Scavenge ', ' ms: Foo ')]))],
+                ['--zero', g.drv(a1Trace([k(A1_S22, ' ms: Scavenge ', ' ms: Incremental Minor Mark-Sweep ')]))],
+                ['--zero', g.drv(a1Trace([k(A1_M22, ' ms: Mark-Compact ', ' ms: Mark-Compact (reduce) ')]))],
+                ['--zero', g.drv(a1Y3(k(A1_S22, ' ms: Scavenge ', ' ms: Scavenge (during sweeping) ')))],
+                ['--zero', g.drv(a1Y3(k(A1_S22, ' ms: Scavenge ', ' ms: Minor Mark-Sweep (during sweeping) ')))],
+                [y3, y3], [y3, y1], [y1, z]];
+            for (const c of cells) {
+                const rn = g.run(SCRIPT, ['--runs', '3', ...c]);
+                const ro = g.run(old, ['--runs', '3', ...c]);
+                assert.equal(rn.status, ro.status, `${c}\n${rn.out}\n${ro.out}`);
+                assert.equal(rn.stdout, ro.stdout, String(c));
+                assert.equal(rn.stderr, ro.stderr, String(c));
+            }
+        });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test(`allocation-diff Q-B123-GCSET parity: the ${B123_OLD} self-test ok labels = the live rows 1-85; rows 86-90 = IL1-IL5`, { skip: B123_SKIP }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-b123s-'));
+    try {
+        const tmp = join(dir, 'tmp'); mkdirSync(tmp);
+        const ro = await runSelfTest(b123OldRoot(dir), tmp);
+        noTimeout(ro);
+        assert.equal(ro.status, 0, ro.stdout + ro.stderr);
+        const lo = okLines(ro.stdout), ln = okLines((await base()).stdout);
+        assert.equal(lo.length, 85);
+        assert.deepEqual(ln.slice(0, 85), lo);
+        for (let i = 86; i <= 90; i++) assert.ok(ln[i - 1].startsWith('ok ' + ROW[i]), ln[i - 1]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
 });
