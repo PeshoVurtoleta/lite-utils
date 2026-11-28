@@ -339,6 +339,14 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   C6 real-code rung input (LiteSignal, research/signal/README.md, UNVERIFIED claim of a 2026-11-26 audit):
   `refreshComputed` TurboFan code 2,700 B with one registry vs 3,832 B once a second `createRegistry()` runs, same
   commit: a 1-vs-2-registries driver pair, expectation written before the run.
+  Status (c6, 2026-11-28): C6 real-code rung DONE on the frozen prototype (8f6d0b4 / 45375555; 5 packages, 37 frozen
+  rows: 29 MATCH, 3 MISMATCH = expectation errors, 5 NO-VERDICT = F-C6-1 Maglev size drift; 0 wrong SAME / DIFF; R6
+  not hit; LEDGER #159, #160). The registries pair is 2 vs 3 as briefed (module-level `defaultRegistry`); the true
+  1 vs 2 moves `refreshComputed` TurboFan 2828 -> 3752 B (REPORTED, v26.8.2, --runs 5, darwin-arm64, 2026-11-28
+  01:27Z; .handoff/research/post-1.0/csd-c6/LiteSignal/SCORE.tsv). The 4 new Q-ids of
+  .handoff/PROPOSAL-code-size-diff.md (Q-C6-TIERMISS, Q-C6-OFFTIER, Q-C6-PIN, Q-C6-DRIFT) are ruled (a) (maintainer,
+  2026-11-28); next: the planner on the ruled PROPOSAL. Research item (Q-C6-DRIFT (a)): the F-C6-1 cause (ASLR /
+  heap layout; `--no-maglev-build-code-on-background` not yet probed).
 - L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
   Research input (2026-11-27, untimed probe on v26.8.2, `--expose-gc` + one gc()): `--trace-gc-object-stats` prints
