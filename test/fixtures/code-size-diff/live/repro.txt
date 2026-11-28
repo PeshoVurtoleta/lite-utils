@@ -1,0 +1,24 @@
+# code-size-diff S-8 live lanes: 20-run reproducibility (csd-130 G4 TASK 0 + PLAN A6 / A10, 2026-11-28, darwin-arm64).
+# One line per lane x node. same = runs whose target signature (name:$9:$6 of every target record) equals
+# the modal one; marker = runs holding the lane marker for the target ($9 with ' stripped: TF *, MG +, SP ^);
+# void = runs without exit 0 + a final `done` line (never counted).
+# Rule (frozen before the data): same=20 with marker=20 -> EXACT (DETERMINISTIC); else STATISTICAL k/20.
+# MG on v22.23.5: marker=0 (Maglev is not enabled) -> STATISTICAL; the expected form there is NO-VERDICT naming maglev.
+lane=TF node=v22.23.5 runs=20 same=20 marker=20 void=0
+lane=TF node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=TF node=v26.8.2 runs=20 same=20 marker=20 void=0
+lane=TF-DIFF node=v22.23.5 runs=20 same=20 marker=20 void=0
+lane=TF-DIFF node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=TF-DIFF node=v26.8.2 runs=20 same=20 marker=20 void=0
+lane=MG node=v22.23.5 runs=20 same=20 marker=0 void=0
+lane=MG node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=MG node=v26.8.2 runs=20 same=20 marker=20 void=0
+lane=MG-DIFF node=v22.23.5 runs=20 same=20 marker=0 void=0
+lane=MG-DIFF node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=MG-DIFF node=v26.8.2 runs=20 same=20 marker=20 void=0
+lane=SP node=v22.23.5 runs=20 same=20 marker=20 void=0
+lane=SP node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=SP node=v26.8.2 runs=20 same=20 marker=20 void=0
+lane=SP-DIFF node=v22.23.5 runs=20 same=20 marker=20 void=0
+lane=SP-DIFF node=v24.22.3 runs=20 same=20 marker=20 void=0
+lane=SP-DIFF node=v26.8.2 runs=20 same=20 marker=20 void=0

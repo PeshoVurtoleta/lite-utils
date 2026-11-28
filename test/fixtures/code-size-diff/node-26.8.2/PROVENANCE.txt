@@ -1,0 +1,36 @@
+# code-size-diff S-9 real-trace fixtures: provenance (csd-130 G4 TASK 2; sp-* recaptured per PLAN A6). key=value.
+# Two capture dirs: tf-* / mg-* were captured in capdir, sp-* in capdir.sp; each file line names its own capdir.
+node=v26.8.2
+v8=14.6.202.34-node.28
+platform-arch=darwin-arm64
+bin=/opt/homebrew/bin/node
+date=2026-11-28T02:46:48Z
+date.sp=2026-11-28T03:32:51Z
+load=1.52 1.52 1.57
+load.sp=1.62 1.32 1.28
+capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+capdir.sp=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+flags=--log-code --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot
+lane-flags.tf=--allow-natives-syntax
+lane-flags.mg=--allow-natives-syntax
+lane-flags.sp=--allow-natives-syntax --no-baseline-batch-compilation
+command=cd <capdir> && cp test/fixtures/code-size-diff/live/<drv>.mjs ./drv.mjs && env -u NODE -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_REDIRECT_WARNINGS -u GIT_EDITOR -u GIT_SEQUENCE_EDITOR -u EDITOR -u VISUAL -u NODE_V8_COVERAGE /opt/homebrew/bin/node <lane-flags> --log-code --no-concurrent-recompilation --no-concurrent-sparkplug --no-node-snapshot --logfile=<capdir>/run.log ./drv.mjs
+excerpt=every file: the v8-version line plus every code-creation line of the full log, in order (grep -a -E '^(v8-version|code-creation),'); full logs 2176240..2182800 bytes > 512 KB; each excerpt replays through the frozen prototype 8f6d0b4 / 45375555 to output byte-equal to its full log (PLAN A7)
+file=mg-ctrl.run1.log lines=2946 sha256=31e072be8f4f5f99694f2a2fa7bcc0cb85878e54fc2ef4ef61e9425bcf76bead capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=mg-ctrl.run2.log lines=2946 sha256=735df3b5907e958278bdff08ae3eaa0eb3a50da7ce13e5f304cf0edd29eb5a05 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=mg-ctrl.run3.log lines=2946 sha256=ce6aa5b1230e1a420656f8cd726a09f6482841636cb6986bb612214d46f9d654 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=mg-diff.run1.log lines=2946 sha256=100ea423902de5f24469cf818d6d94424426e73510b7fb8a09f56714faf0b2c3 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=mg-diff.run2.log lines=2946 sha256=1af6d1dae97ebaa3e9c9e934087b8475ea6e45b48f3d98d8856b67166f824e16 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=mg-diff.run3.log lines=2946 sha256=2c3debc637146b9e0d237a9ffbb6190c296c94c4a61127e8781376bfcec06451 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=sp-ctrl.run1.log lines=2965 sha256=11b1a328ec8e76640565bc9966378e3e9c69f854b35ffe8d2f24b604665a6563 capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=sp-ctrl.run2.log lines=2965 sha256=b9b20d364e1f34ccc03c3ef923ea343c243f1dab1ada5babd230f798d78e0988 capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=sp-ctrl.run3.log lines=2965 sha256=72292ff80bfa284800f7de227b22a8b2c91a78c3f3e662496896a3e995fb072a capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=sp-diff.run1.log lines=2965 sha256=c3a9fe0433e946858b329fdf1c7a11df4b44607139326d2d869cb8888377c5b2 capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=sp-diff.run2.log lines=2965 sha256=d438231e101422902873d3e225c934300149bb4138912f455f7d7b6a4d294501 capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=sp-diff.run3.log lines=2965 sha256=0052401ef3e6f75609794d361603fc9e1a2b9b1f9a7f31e82b4234c837d852f5 capdir=/private/tmp/csd-fx-node-26.8.2.rtlu0roK/
+file=tf-ctrl.run1.log lines=2945 sha256=a0a1528634b07f4fe5914c8151fe9dda463ea89aac53e3dc491e8b64f774f03c capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=tf-ctrl.run2.log lines=2945 sha256=cf76a7929e29e4d603bbdd6fea9de7900d8b56a6fcbfbc8bef9dcd08764c021f capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=tf-ctrl.run3.log lines=2945 sha256=20ed9178ff6f439540f194adee8a2a5412a9ebdf0839a5735ce3bbf890c931ba capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=tf-diff.run1.log lines=2945 sha256=877a540f09bc952e4b5698675e8f10a34250e555c059be9b7f254115d559712f capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=tf-diff.run2.log lines=2945 sha256=c8a8be124174be0f32525193e9e549a90dbb7664b7a2f4ff034cdc0f93b0c65e capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
+file=tf-diff.run3.log lines=2945 sha256=c1cab979c6c6766260d41d3e96b4db5364fd46b44414ce1870d7bed4ffb9f366 capdir=/private/tmp/csd-fx-node-26.8.2.cPDpk2AQ/
