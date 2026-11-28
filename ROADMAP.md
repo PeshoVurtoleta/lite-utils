@@ -297,6 +297,11 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   `npm run mocks`; case.json per case (hand-written; one expected verdict + reason, per-node overrides only where a tool
   documents the variance); `mocks/run.mjs` runner (node, zero deps); limits and guards included; one node per run;
   run by hand and once per /release (a MISMATCH stops the release); each later minor ships its own mocks/<tool>/ cases.
+  Path-length A/A control for every tool (b125, LEDGER #158): a byte-identical driver in a short and a long directory
+  must read SAME. Corpus cases: shape-diff and inlining-budget-diff `aa-pathlen` (b122), deopt-diff and ic-diff
+  `aa-pathlen` + `guard-missing-import` (b125). bytecode-budget, allocation-diff and alloc-per-op read SAME at 37 vs
+  136 chars in b125 (REPORTED, one tool call each, v26.8.2) but have no corpus case yet (NEXT.md FILLER); code-size-diff
+  and every later tool ship one with their first mocks/<tool>/ set.
 - Audit before each minor ships (Q-M-AUDIT (a)): alloc-per-op gets the full two-model audit (Opus +
   Fable, reproduced-only, then a cross-check), because another package's releases gate on it; every
   other minor gets one reviewer + a cross-check.
@@ -331,6 +336,9 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   escape-analysis item. Probe that the `--no-` forms are accepted.
 - L4 optimized-code size diff: machine-code size per function per tier from `--log-code` records;
   catches inlining bloat that bytecode-budget cannot see; reuses ic-diff's code-creation parser.
+  C6 real-code rung input (LiteSignal, research/signal/README.md, UNVERIFIED claim of a 2026-11-26 audit):
+  `refreshComputed` TurboFan code 2,700 B with one registry vs 3,832 B once a second `createRegistry()` runs, same
+  commit: a 1-vs-2-registries driver pair, expectation written before the run.
 - L5 heap object counts by constructor, before vs after: the bytes / retention gap allocation-diff
   leaves (S-7: counts, not bytes). Check overlap with lite-leak first.
   Research input (2026-11-27, untimed probe on v26.8.2, `--expose-gc` + one gc()): `--trace-gc-object-stats` prints
@@ -362,6 +370,10 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   node (size / safepoint data in v8.log); `--trace-turbo` JSON gives source positions per IR node (which expression).
   `stack slots = N` from `--print-opt-code --code-comments` is CPU-specific (register file): a
   `--platform-arch` pin, as code-size-diff D1. The research decides one tool with modes or two.
+  csd-v4 (research/code-size-diff/RESEARCH.md G1): the final IR carries 0 `Allocate` ops on every node tried; an
+  allocation is a `Call [Code:Allocate]`, so ir-diff counts that call form, never a bare Allocate op. First customer:
+  LiteSignal (research/signal/README.md section 5): a per-function allocation count to back or replace its
+  heap-bracket allocation gates (flake classes 13, 14, 17), e.g. the `watch` effect body before / after WATCH-F.
 - L9 deopt-diff dependent-code invalidation: `[marking dependent code ...]` (no bailout line) is a documented "Not
   detected" of deopt-diff. A deopt-diff minor / patch item after 1.2.1: probe its grammar on 22-27, attribute it to the
   target, A/A, must-fail.
@@ -374,6 +386,13 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   warm-up / concurrency dependent: STATISTICAL until research shows a
   deterministic setup. Threshold flags (`--invocation-count-for-maglev=N`, `--no-turbofan`) are tuning flags every tool
   already accepts in `--v8-flags`: a docs recipe, never a verdict on raw counts.
+- L11 pointer-compressed lane (lead, b125 from LiteSignal research/signal/README.md section 2): stock node runs
+  without pointer compression (32-bit Smi payloads; a pointer-compressed build has 31-bit Smis), so a cost that exists
+  only on Chrome / Electron (e.g. LiteSignal LEDGER #34: 12 B per int32 counter write outside the 31-bit Smi range) is
+  invisible to allocation-diff and alloc-per-op (and to ir-diff later). Lead: a `--d8 <path>` runner mode (a
+  jsvu-built d8 with pointer compression), its own A/A and must-fail rows. Maintainer 2026-11-28 (relayed by the
+  LiteSignal session): "Add L11, research later" -- a lead after 1.3.0 code-size-diff; a research burst comes first;
+  every jsvu download needs the maintainer's OK each time, none is pre-approved. No current verdict is wrong.
 
 ## 4. Known drift to fix
 

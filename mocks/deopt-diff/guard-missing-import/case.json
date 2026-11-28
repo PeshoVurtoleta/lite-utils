@@ -1,0 +1,46 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "after side cannot load its module graph (sibling ./dep.mjs not staged) (b125 U0)",
+  "kind": "guard",
+  "claim": "deopt-diff -h: a driver that exits non-zero is NO-VERDICT (driver exited <rc> in run <k>), never a 0-deopt side",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "before_dep": {
+      "src": "dep.mjs",
+      "dir": "b",
+      "name": "dep.mjs"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "scan",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "NO-VERDICT",
+    "text": [
+      [
+        "scan:",
+        "NO-VERDICT",
+        "after:",
+        "driver exited 1 in run 1"
+      ]
+    ],
+    "forbid": [
+      "NO-VERDICT -- before:"
+    ]
+  }
+}

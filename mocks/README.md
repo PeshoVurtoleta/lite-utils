@@ -1,7 +1,7 @@
 # Known-Answer Corpus (`mocks/`) for `@zakkster/lite-utils`
 
 Repository-only known-answer test corpus for all seven `@zakkster/lite-utils` tools.
-This directory is NOT published to npm (`package.json` `files[]` excludes `mocks/`) and the 93 real-V8 cases do NOT run inside `npm test`.
+This directory is NOT published to npm (`package.json` `files[]` excludes `mocks/`) and the 97 real-V8 cases do NOT run inside `npm test`.
 Only the deterministic runner self-test (`node mocks/run.mjs --self-test`, fake tool only) runs inside `npm test` via `test/mocks-runner.test.mjs`.
 
 Each subdirectory `mocks/<tool>/<case>/` holds one small, readable program pair (or single bench) plus a hand-written `case.json` written from the tool's documented claim before it is ever run.
@@ -89,8 +89,8 @@ done
 - [shape-diff](shape-diff/README.md) (27 cases)
 - [bytecode-budget](bytecode-budget/README.md) (14 cases)
 - [inlining-budget-diff](inlining-budget-diff/README.md) (10 cases)
-- [deopt-diff](deopt-diff/README.md) (12 cases)
-- [ic-diff](ic-diff/README.md) (10 cases)
+- [deopt-diff](deopt-diff/README.md) (14 cases)
+- [ic-diff](ic-diff/README.md) (12 cases)
 - [allocation-diff](allocation-diff/README.md) (10 cases)
 - [alloc-per-op](alloc-per-op/README.md) (10 cases)
 

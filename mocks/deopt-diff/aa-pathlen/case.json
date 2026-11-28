@@ -1,0 +1,40 @@
+{
+  "tool": "deopt-diff.sh",
+  "mode": "diff",
+  "class": "A/A identical deopting driver in short vs long directory (b125 U0)",
+  "kind": "aa",
+  "claim": "deopt-diff -h: byte-identical drivers read SAME with matching non-zero deopt count; the driver's path length is not part of a record",
+  "files": {
+    "before": {
+      "src": "program.mjs",
+      "dir": "b"
+    },
+    "after": {
+      "src": "program.mjs",
+      "dir": "a-much-longer-directory-name-for-path-length-invariance-control-xxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  },
+  "argv": [
+    "--node",
+    "{node}",
+    "--fn",
+    "scan",
+    "--v8-flags",
+    "--allow-natives-syntax",
+    "{before}",
+    "{after}"
+  ],
+  "expect": {
+    "verdict": "SAME",
+    "text": [
+      [
+        "scan:",
+        "SAME",
+        "before 1 | after 1"
+      ]
+    ],
+    "forbid": [
+      "NO-VERDICT"
+    ]
+  }
+}
