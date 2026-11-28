@@ -14,8 +14,10 @@ minors item 2).
 G-C the deopt-diff T11 SIGPIPE fix).
 1.2.0 RELEASED 2026-11-27: commit 8ae0c6c, tag v1.2.0, npm latest 1.2.0 (shape-diff, minor 2; b103 spec + plans,
 b104-b120 code / docs, b117 real-code pass, b121 release; T-1 / T-2 deferred to the class-window patch by Q-B119-T1 (a), now 1.3.1 by Q-REL-ORDER (a)).
-Next: the known-answer corpus `mocks/` (Q-MK-ORDER (a), .handoff/PLAN-mocks.md), then the post-1.0 minors (section 3,
-"Post-1.0 minors"; D-5) in the Q-M-ORDER2 (a) order: 1.3.0 code-size-diff next. The guard fix F-H1 is PARKED
+1.2.1 RELEASED 2026-11-28: commit 4ba780b, tag v1.2.1, npm latest 1.2.1 (the drift patch, Q-REL-ORDER (a); b123 code
+7dabf05: ic-diff IC state `H`, allocation-diff `(interleaved)` young GCs).
+Next: the post-1.0 minors (section 3, "Post-1.0 minors"; D-5) in the Q-REL-ORDER (a) order: 1.3.0 code-size-diff
+next, its Linux x64 capture first (`.github/workflows/research-capture.yml`, Q-REL-CI (a)). The guard fix F-H1 is PARKED
 per Q-B103-FH1 (a) (2026-11-25): no F-H1 planner until a probe after 1.2.0 names the H3d mechanism (UNVERIFIED).
 Baseline: `7f0ba7b initial commit` (one file, `inlining-budget-diff.sh`).
 
@@ -242,13 +244,15 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
      1.2.1 drift patch (b123; no new surface): ic-diff accepts IC state `H` (HOMOMORPHIC, V8 15.6 / node 27;
      Q-B123-H (a)); allocation-diff counts `Scavenge (interleaved)` / `Minor Mark-Sweep (interleaved)` as young
      (V8 12.4 / 13.6; Q-B123-GCSET (a)). Found by the known-answer corpus (b122 F-B122-1 / F-B122-2; LEDGER #156,
-     #157). Release step prepared 2026-11-28 (gate 4741 tests, 4724 pass, 0 fail, 17 skip); tag / push / publish by
-     the maintainer.
+     #157). RELEASED 2026-11-28 (commit 4ba780b, tag v1.2.1, npm 1.2.1; gate 4741 tests, 4724 pass, 0 fail,
+     17 skip).
      1.3.1 class-window (was "1.2.1": class identity for T-1 / T-2 from V8 source spans; intake
      .handoff/research/post-1.0/class-window/INTAKE-1.2.1.md): research drop + recheck before any planner; after
      1.3.0 (Q-CW-SLOT (a), renumbered by Q-REL-ORDER (a)).
      Research capture (Q-REL-CI (a)): one workflow_dispatch-only GitHub workflow runs the research drops'
-     self-tests + probes on ubuntu-latest, node 22 / 24 / 26; `npm test` does not change.
+     self-tests + probes on ubuntu-latest, node 22 / 24 / 26; `npm test` does not change. Written in b124:
+     `.github/workflows/research-capture.yml` (code-size-diff + import-audit; class-window joins once cw-r2 moves
+     its drop to a tracked `research/class-window/`); the maintainer triggers it once after the push.
      Release blockers added 2026-11-26 (maintainer: "Yes, add to roadmap"), from the real-project pass on
      LiteSignal (b112, evidence .handoff/b112/real-signal/HANDBACK.md), fixed before 1.2.0 ships:
      - F1 (wrong verdict): it reports instability when one side builds an object literal with a property count

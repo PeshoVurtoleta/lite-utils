@@ -1,0 +1,198 @@
+# research-capture.yml -- DISPATCH-ONLY research workflow (ruling Q-REL-CI (a), main session 2026-11-27; burst b124;
+# precedents alloc-probe.yml Q-B82-LINUX (a), shape-probe.yml Q-B103-LINUX (a)). NOT part of CI: no push /
+# pull_request / schedule trigger, nothing in `npm test` reads it, it gates no release by itself. It CAPTURES (tier
+# REPORTED, hosted CI) the Linux x64 runs the research drops could not make on darwin-arm64:
+#   - code-size-diff  Q-CSD-INTAKE (a) / rung R5: research/code-size-diff/code-size-diff.prototype.sh --self-test and
+#                     research/code-size-diff/probes/run-probes.sh
+#   - import-audit    Q-IA-NODEFLOOR (a) / rung R7: research/import-audit/import-audit.prototype.sh --self-test and
+#                     research/import-audit/probes/run-probes.sh (it runs probes/check-premises.mjs itself, once per
+#                     case); plus probes/attacks/run-attacks.sh for the GNU grep NUL-key row (B4, attacks/nulkey.mjs)
+#   - class-window    joins once cw-r2 moves its drop to a tracked research/class-window/ (today under .handoff/)
+# Legs: ubuntu-latest x node 22 / 24 / 26 (setup-node resolves the latest of each major; the log records which).
+# Every runner gets: NODE_OPTIONS / NODE_V8_COVERAGE / NODE_COMPILE_CACHE / NODE_REDIRECT_WARNINGS / CDPATH unset,
+# NODE = the absolute path of the setup-node `node`, stdin </dev/null, cwd and TMPDIR in a private mktemp dir under
+# $RUNNER_TEMP. Each log starts with a provenance block (date, uname -a, load, /bin/bash and PATH bash, awk path +
+# identity, grep, coreutils flavor of ls / cmp / seq / tail / sort / mktemp / sha256sum / shasum, node path + version +
+# V8 + platform-arch, the env-strip state); the runner's own output follows, so a log's LAST line is the runner's
+# summary line. research/ is never edited.
+# Verdict (last step; fails the leg): for each GATING runner of the selected drop(s), exit 0 AND the last log line is
+# its own summary line:
+#   csd-self-test  ^self-test: <n> check(s) ok$
+#   csd-probes     ^code-size-diff probes (v<matrix node>.x.y): <n> assertion(s) ok$
+#   ia-self-test   ^self-test: <n> check(s) ok$
+#   ia-probes      ^OVERALL PASS$
+# ia-attacks is REPORTED only (never fails the leg; continue-on-error, so not even its timeout does): its frozen
+# ATTACK-EXPECT.tsv holds the HONEST verdicts of the ia-1.4.0 reviewer attacks, several of which the v1 prototype is
+# known to MISS (U2 REJECTED (DESIGN)); the row the capture is for is `ROW nulkey ...` in ia-attacks.rows.log
+# (BSD grep: NO-VERDICT; GNU grep >= 3.5: unverified).
+# A step killed by its timeout leaves `started ...` in its .rc file, which the verdict reads as a failure: each
+# runner step `exec`s cap.sh, so the runner signal reaches the process that writes the .rc file. Runner steps use
+# !cancelled() (a cancelled run stops them); upload and verdict use always().
+# Artifact per leg: research-capture-ubuntu-latest-node-<node> (retention 30 days), uploaded even when a step failed.
+# Dispatch (the file must be on the default branch first; input drop = all | code-size-diff | import-audit):
+#   gh workflow run research-capture.yml --ref main
+#   gh run list --workflow research-capture.yml --limit 1     # note the run id
+#   gh run watch <run-id>
+# Download (every artifact lands in <dir>/<artifact-name>/):
+#   gh run download <run-id> --dir <dir> --pattern 'research-capture-*'
+# Pins: reused verbatim from alloc-probe.yml (resolved there read-only on 2026-11-15 with
+# `gh api repos/<action>/git/ref/tags/<tag>`); not re-resolved here. ci.yml uses the same majors by tag
+# (actions/checkout@v7, actions/setup-node@v7).
+
+name: research-capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      drop:
+        description: 'research drop(s) to capture'
+        type: choice
+        options:
+          - all
+          - code-size-diff
+          - import-audit
+        default: all
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  capture:
+    name: capture (ubuntu-latest, node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    # nominal: each runner is minutes locally (b124 macOS dry run); every runner step has its own 20 min cap, so a
+    # hung runner fails its step and the upload + verdict steps still run inside this job cap
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    steps:
+      - name: out dir
+        run: echo "OUT=$RUNNER_TEMP/research-capture-out" >> "$GITHUB_ENV"
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (= tag v7)
+        with:
+          persist-credentials: false
+      - name: setup node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (= tag v7)
+        with:
+          node-version: ${{ matrix.node }}
+      - name: capture helpers
+        run: |
+          mkdir -p "$OUT"
+          cat > "$RUNNER_TEMP/prov.sh" <<'EOS'
+          # usage: prov.sh -> provenance block on stdout (REPORTED; names of env vars only, never values)
+          echo "== provenance (research-capture.yml; REPORTED, untimed)"
+          echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "github run=${GITHUB_RUN_ID:-local} attempt=${GITHUB_RUN_ATTEMPT:-local} sha=${GITHUB_SHA:-local} runner=${RUNNER_OS:-local}/${RUNNER_ARCH:-local} image=${ImageOS:-local}/${ImageVersion:-local}"
+          echo "== uname -a"; uname -a 2>&1 || true
+          echo "== load"; cat /proc/loadavg 2>/dev/null || uptime 2>&1 || true
+          echo "== cpus"; nproc 2>/dev/null || sysctl -n hw.ncpu 2>&1 || true
+          echo "== /bin/bash"; /bin/bash --version 2>&1 | head -n 1 || true
+          echo "== bash on PATH: $(command -v bash)"; bash --version 2>&1 | head -n 1 || true
+          echo "== awk: $(command -v awk) -> $(readlink -f "$(command -v awk)" 2>&1)"
+          for a in "--version" "-W version" "-V"; do
+            l="$(awk $a </dev/null 2>&1 | head -n 1)"
+            case "$l" in "mawk "*|"GNU Awk "*|"awk version "*) echo "awk identity: $l"; break ;; esac
+            echo "awk $a: $l"
+          done
+          echo "== /usr/bin/grep: $(/usr/bin/grep --version 2>&1 | head -n 1)"
+          echo "== grep on PATH: $(command -v grep): $(grep --version 2>&1 | head -n 1)"
+          for t in ls cmp seq tail sort mktemp sha256sum shasum; do
+            p="$(command -v "$t" || echo absent)"
+            v="$("$t" --version </dev/null 2>&1 | head -n 1)"
+            vrc=0; "$t" --version </dev/null >/dev/null 2>&1 || vrc=$?
+            echo "== $t: $p: $v (exit of --version: $vrc)"
+          done
+          echo "== node: $(command -v node || echo absent)"
+          node -p 'process.version + " v8=" + process.versions.v8 + " " + process.platform + "-" + process.arch' </dev/null 2>&1 || true
+          for v in NODE NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS CDPATH OLDPWD TMPDIR; do
+            if [ -n "${!v+x}" ]; then echo "env $v: set"; else echo "env $v: unset"; fi
+          done
+          EOS
+          cat > "$RUNNER_TEMP/cap.sh" <<'EOS'
+          # usage: cap.sh <name> <cmd> [args...] -> $OUT/<name>.log (provenance + output) and $OUT/<name>.rc
+          set -u
+          name="$1"; shift
+          log="$OUT/$name.log"; rcf="$OUT/$name.rc"
+          echo "started (no exit recorded: the step was killed or timed out)" > "$rcf"
+          work="$(mktemp -d "$RUNNER_TEMP/rc-$name.XXXXXX")"
+          mkdir "$work/tmp"
+          unset NODE_OPTIONS NODE_V8_COVERAGE NODE_COMPILE_CACHE NODE_REDIRECT_WARNINGS CDPATH
+          NODE="$(command -v node)"; export NODE
+          TMPDIR="$work/tmp"; export TMPDIR
+          { bash "$RUNNER_TEMP/prov.sh"; echo "== command: $*"; echo "== cwd: $work"; echo "== begin output"; } > "$log" 2>&1
+          rc=0
+          ( cd "$work" && if printenv OLDPWD >/dev/null; then echo "== OLDPWD in the runner env (after cd): set"; else echo "== OLDPWD in the runner env (after cd): unset"; fi && "$@" ) >> "$log" 2>&1 </dev/null || rc=$?
+          echo "$rc" > "$rcf"
+          cat "$log"
+          echo "exit code: $rc"
+          EOS
+      - name: record provenance (before the env strip)
+        run: bash "$RUNNER_TEMP/prov.sh" 2>&1 | tee "$OUT/provenance.txt"
+      - name: code-size-diff --self-test
+        if: ${{ !cancelled() && inputs.drop != 'import-audit' }}
+        timeout-minutes: 20
+        run: exec bash "$RUNNER_TEMP/cap.sh" csd-self-test /bin/bash "$GITHUB_WORKSPACE/research/code-size-diff/code-size-diff.prototype.sh" --self-test
+      - name: code-size-diff run-probes
+        if: ${{ !cancelled() && inputs.drop != 'import-audit' }}
+        timeout-minutes: 20
+        run: exec bash "$RUNNER_TEMP/cap.sh" csd-probes /bin/bash "$GITHUB_WORKSPACE/research/code-size-diff/probes/run-probes.sh"
+      - name: import-audit --self-test
+        if: ${{ !cancelled() && inputs.drop != 'code-size-diff' }}
+        timeout-minutes: 20
+        run: exec bash "$RUNNER_TEMP/cap.sh" ia-self-test /bin/bash "$GITHUB_WORKSPACE/research/import-audit/import-audit.prototype.sh" --self-test
+      - name: import-audit run-probes
+        if: ${{ !cancelled() && inputs.drop != 'code-size-diff' }}
+        timeout-minutes: 20
+        run: exec bash "$RUNNER_TEMP/cap.sh" ia-probes /bin/bash "$GITHUB_WORKSPACE/research/import-audit/probes/run-probes.sh"
+      - name: import-audit run-attacks (REPORTED only, NUL-key row)
+        if: ${{ !cancelled() && inputs.drop != 'code-size-diff' }}
+        timeout-minutes: 20
+        continue-on-error: true
+        run: exec bash "$RUNNER_TEMP/cap.sh" ia-attacks /bin/bash "$GITHUB_WORKSPACE/research/import-audit/probes/attacks/run-attacks.sh" "$(command -v node)" "$OUT/ia-attacks.rows.log"
+      - name: upload
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (= tag v7)
+        with:
+          name: research-capture-ubuntu-latest-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/research-capture-out/
+          if-no-files-found: error
+          retention-days: 30
+      - name: verdict (gating runners exit 0 + own summary line)
+        if: always()
+        env:
+          LEG_NODE: ${{ matrix.node }}
+          DROP: ${{ inputs.drop }}
+        run: |
+          case "$DROP" in
+            all) runs="csd-self-test csd-probes ia-self-test ia-probes" ;;
+            code-size-diff) runs="csd-self-test csd-probes" ;;
+            import-audit) runs="ia-self-test ia-probes" ;;
+            *) echo "FAIL: unknown drop input [$DROP]"; exit 1 ;;
+          esac
+          bad=0
+          for r in $runs; do
+            case "$r" in
+              csd-probes) re="^code-size-diff probes \(v${LEG_NODE}\.[0-9]+\.[0-9]+\): [0-9]+ assertion\(s\) ok\$" ;;
+              ia-probes) re='^OVERALL PASS$' ;;
+              *) re='^self-test: [0-9]+ check\(s\) ok$' ;;
+            esac
+            rc="$(head -n 1 "$OUT/$r.rc" 2>/dev/null || echo missing)"
+            last="$(tail -n 1 "$OUT/$r.log" 2>/dev/null || echo missing)"
+            if [ "$rc" = "0" ] && printf '%s\n' "$last" | grep -Eq "$re"; then
+              echo "PASS $r: exit 0, last line: $last"
+            else
+              echo "FAIL $r: exit=[$rc], last line: [$last] (want $re)"; bad=1
+            fi
+          done
+          if [ "$DROP" != "code-size-diff" ]; then
+            echo "REPORTED ia-attacks: exit=[$(head -n 1 "$OUT/ia-attacks.rc" 2>/dev/null || echo missing)], $(tail -n 1 "$OUT/ia-attacks.rows.log" 2>/dev/null || echo 'no rows log')"
+            grep '^ROW nulkey ' "$OUT/ia-attacks.rows.log" 2>/dev/null || echo "REPORTED ia-attacks: no nulkey row"
+          fi
+          exit "$bad"
