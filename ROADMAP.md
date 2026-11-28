@@ -353,6 +353,9 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   per-GC JSON on stdout (277 KB for a tiny script; per instance type, e.g. `"key": "live"`, `"type": "field_data"`),
   the input of V8's Heap Stats tool. It counts V8 instance types, not JS constructors: the research burst decides
   whether it can replace or back the constructor count. Reference: .handoff/research/post-1.0/REF-v8-tools.md.
+  Note (2026-11-28, LiteSignal Law 7 / #27): `--trace-gc-nvp` prints per-GC records with `promoted`,
+  `new_space_survived` and `promotion_ratio` (LiteSignal's report, v26.8.2; not re-run here), which separate die-young
+  allocation from survival / promotion. GC-timing dependent: REPORTED only, never a verdict (S-5).
 - L6 suite-wide runner: run the shipped bash tools over every package's drivers; store the
   REPORTED tables as a per-package baseline.
 - L7 Turbolev default-on readiness (maintainer 2026-11-27: "Yes, add"; a watch item, not a minor). Turbolev = the
@@ -401,6 +404,15 @@ Each phase = planner pass -> coder batch(es) + helper tests -> reviewer -> qa, p
   jsvu-built d8 with pointer compression), its own A/A and must-fail rows. Maintainer 2026-11-28 (relayed by the
   LiteSignal session): "Add L11, research later" -- a lead after 1.3.0 code-size-diff; a research burst comes first;
   every jsvu download needs the maintainer's OK each time, none is pre-approved. No current verdict is wrong.
+- L12 bytecode context report (lead, 2026-11-28, from LiteSignal LEDGER #70 / #81 / #34; maintainer "yes, record";
+  triage .handoff/research/post-1.0/REVIEW-signal-inputs-2.md): a `bytecode-budget.sh` mode reporting, per function,
+  the context size (`CreateFunctionContext`), the count of `*ContextSlotNoCell` stores (a context slot without a cell;
+  a double write there may box) and `Register count`, from the `--print-bytecode` stream the tool already reads.
+  DETERMINISTIC (S-6). It sees #70 (a cold closure grew a function context by 2 slots and shifted slot indices in 63
+  functions, byte lengths unchanged), which the length verdict cannot. Counts, not slot operands (one added context
+  variable shifts every index). UNVERIFIED here: the `NoCell` opcode family was seen on v26.8.2 only (LiteSignal's
+  report); where a node lacks it the column reads "-" / NO-VERDICT, never 0. A minor: a research burst first; after
+  1.4.0 in the Release plan unless the maintainer reorders.
 
 ## 4. Known drift to fix
 
